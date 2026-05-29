@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.sse</groupId>
+    <artifactId>sse-backend-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+    <name>Smart School Ecosystem — Parent</name>
+
+    <modules>
+        <module>common</module>
+
+        <module>services/api-gateway</module>
+        <module>services/identity-service</module>
+        <module>services/academic-service</module>
+        <module>services/finance-service</module>
+        <module>services/notification-service</module>
+        <module>services/file-service</module>
+    </modules>
+
+    <properties>
+        <java.version>17</java.version>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+        <spring-boot.version>3.2.5</spring-boot.version>
+        <spring-cloud.version>2023.0.1</spring-cloud.version>
+        <mapstruct.version>1.5.5.Final</mapstruct.version>
+        <lombok.version>1.18.32</lombok.version>
+        <flyway.version>10.10.0</flyway.version>
+        <jjwt.version>0.12.5</jjwt.version>
+    </properties>
+
+    <!-- TODO (P1 - S1): điền dependencyManagement (Spring Boot BOM + Cloud BOM) -->
+</project>

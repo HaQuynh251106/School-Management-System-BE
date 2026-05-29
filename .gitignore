@@ -1,0 +1,46 @@
+# Build
+target/
+build/
+out/
+*.jar
+*.war
+*.class
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.project
+.classpath
+.settings/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Env
+.env
+.env.local
+*.local.yml
+
+# Docker volumes
+infrastructure/docker/**/data/
+
+# Maven
+.mvn/wrapper/maven-wrapper.jar
+dependency-reduced-pom.xml
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Secrets / keys (không bao giờ commit)
+*.pem
+*.key
+*.p12
+secrets/
