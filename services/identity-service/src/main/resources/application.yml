@@ -1,0 +1,29 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: identity-service
+
+  # Kết nối tới PostgreSQL container "sse-pg-identity" (docker-compose.dev.yml)
+  datasource:
+    url: jdbc:postgresql://localhost:5441/identity_db
+    username: sse
+    password: sse_dev
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate   # KHÔNG để Hibernate tự tạo bảng — Flyway lo việc đó
+    properties:
+      hibernate:
+        format_sql: true
+    show-sql: true          # tạm bật khi dev để xem SQL, tắt khi prod
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration   # nơi đặt các file V1__*.sql
+
+logging:
+  level:
+    com.sse.identity: DEBUG

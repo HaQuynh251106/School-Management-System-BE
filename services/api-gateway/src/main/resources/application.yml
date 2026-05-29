@@ -1,0 +1,8 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+
+# TODO (P1, sprint S2): cấu hình spring.cloud.gateway.routes
