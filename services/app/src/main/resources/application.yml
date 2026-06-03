@@ -1,0 +1,49 @@
+# ============================================================
+# SSE Modular Monolith — môi trường DEV LOCAL
+# Chạy:  mvn -pl services/app spring-boot:run    (hoặc java -jar target/sse-app.jar)
+# Phục vụ cả Web FE và Mobile FE — drop-in thay thế mock-server (cùng cổng 4000).
+# ============================================================
+server:
+  port: 4000
+
+spring:
+  application:
+    name: sse-app
+
+  # PostgreSQL local (Homebrew). Override bằng biến môi trường khi cần.
+  datasource:
+    url: ${SSE_DB_URL:jdbc:postgresql://localhost:5432/sse_db}
+    username: ${SSE_DB_USER:a1234}
+    password: ${SSE_DB_PASSWORD:}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      # Hibernate tự tạo/cập nhật schema từ entity (DEV). Production nên chuyển sang Flyway.
+      ddl-auto: update
+    open-in-view: false
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+        jdbc:
+          time_zone: UTC
+
+  jackson:
+    default-property-inclusion: always
+    serialization:
+      write-dates-as-timestamps: false
+
+sse:
+  jwt:
+    # Đổi secret khi deploy. Tối thiểu 32 bytes cho HS256.
+    secret: ${SSE_JWT_SECRET:dev-secret-do-not-use-in-prod-change-me-please-0123456789}
+    access-ttl-seconds: 3600
+    refresh-ttl-seconds: 604800
+  seed:
+    enabled: true   # seed dữ liệu mẫu (khớp mock-server) nếu DB rỗng
+
+logging:
+  level:
+    com.sse.app: INFO
+    org.hibernate.SQL: WARN
