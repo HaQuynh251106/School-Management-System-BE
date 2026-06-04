@@ -109,6 +109,11 @@ public class StructureService {
                 .date(r.date()).name(r.name()).description(r.description()).build());
     }
 
+    public void deleteHoliday(String id) {
+        if (!holidays.existsById(id)) throw ApiException.notFound("Ngày nghỉ");
+        holidays.deleteById(id);
+    }
+
     public boolean isHoliday(java.time.LocalDate date) {
         return holidays.findAll().stream().anyMatch(h -> date.equals(h.getDate()));
     }

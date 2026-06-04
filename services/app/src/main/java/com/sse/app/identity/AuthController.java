@@ -1,5 +1,6 @@
 package com.sse.app.identity;
 
+import com.sse.app.audit.AuditService;
 import com.sse.app.common.ApiException;
 import com.sse.app.identity.IdentityDtos.*;
 import com.sse.app.security.JwtService;
@@ -18,15 +19,19 @@ public class AuthController {
 
     private final UserService users;
     private final JwtService jwt;
+    private final AuditService audit;
 
-    public AuthController(UserService users, JwtService jwt) {
+    public AuthController(UserService users, JwtService jwt, AuditService audit) {
         this.users = users;
         this.jwt = jwt;
+        this.audit = audit;
     }
 
     @PostMapping("/login")
     public Map<String, Object> login(@Valid @RequestBody LoginRequest req) {
         User u = users.authenticate(req.username(), req.password());
+        audit.record(u.getId(), u.getFullName(), u.getRole(), "LOGIN", "identity",
+                "user", u.getId(), "Đăng nhập thành công");
         return tokenResponse(u, true);
     }
 

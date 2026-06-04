@@ -93,6 +93,9 @@ public class AttendanceService {
         records.saveAll(list);
     }
 
+    /** A8: toàn bộ bản ghi điểm danh cho báo cáo chuyên cần. */
+    public List<AttendanceRecord> allRecords() { return records.findAll(); }
+
     private boolean isAbsentOrLate(String status) {
         return status != null && (status.startsWith("ABSENT") || "LATE".equals(status));
     }

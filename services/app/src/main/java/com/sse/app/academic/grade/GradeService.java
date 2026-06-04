@@ -119,6 +119,9 @@ public class GradeService {
         grades.saveAll(gradeList);
     }
 
+    /** A8: toàn bộ điểm cho báo cáo phổ điểm. */
+    public List<Grade> allGrades() { return grades.findAll(); }
+
     private boolean equalsScore(Double a, Double b) {
         return a != null && b != null && Math.abs(a - b) < 1e-9;
     }

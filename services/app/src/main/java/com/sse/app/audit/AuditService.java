@@ -1,0 +1,54 @@
+package com.sse.app.audit;
+
+import com.sse.app.common.Ids;
+import org.springframework.stereotype.Service;
+
+import java.time.Instant;
+import java.util.*;
+
+/** A6: ghi & truy vấn audit log. record() được gọi từ các luồng quan trọng (đăng nhập...). */
+@Service
+public class AuditService {
+
+    private final AuditLogRepository repo;
+
+    public AuditService(AuditLogRepository repo) {
+        this.repo = repo;
+    }
+
+    public void record(String actorId, String actorName, String role, String action,
+                       String module, String entityType, String entityId, String detail) {
+        try {
+            repo.save(AuditLog.builder()
+                    .id(Ids.gen("evt")).actorId(actorId).actorName(actorName).role(role)
+                    .action(action).module(module).entityType(entityType).entityId(entityId)
+                    .detail(detail).createdAt(Instant.now()).build());
+        } catch (Exception ignore) {
+            // audit không được làm hỏng luồng nghiệp vụ chính
+        }
+    }
+
+    public List<AuditLog> list(String module, String action) {
+        if (module != null && !module.isBlank()) return repo.findByModuleOrderByCreatedAtDesc(module);
+        if (action != null && !action.isBlank()) return repo.findByActionOrderByCreatedAtDesc(action);
+        return repo.findTop200ByOrderByCreatedAtDesc();
+    }
+
+    public Map<String, Object> stats() {
+        Map<String, Integer> byModule = new LinkedHashMap<>();
+        Map<String, Integer> byAction = new LinkedHashMap<>();
+        for (AuditLog l : repo.findAll()) {
+            byModule.merge(l.getModule() == null ? "-" : l.getModule(), 1, Integer::sum);
+            byAction.merge(l.getAction() == null ? "-" : l.getAction(), 1, Integer::sum);
+        }
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("byModule", byModule);
+        m.put("byAction", byAction);
+        m.put("total", repo.count());
+        return m;
+    }
+
+    public void seed(List<AuditLog> list) {
+        repo.saveAll(list);
+    }
+}

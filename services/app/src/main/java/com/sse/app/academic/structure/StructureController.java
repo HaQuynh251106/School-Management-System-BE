@@ -111,4 +111,10 @@ public class StructureController {
         CurrentUserHolder.requireRole("ADMIN");
         return structure.createHoliday(r);
     }
+
+    @DeleteMapping("/school-holidays/{id}")
+    public void deleteHoliday(@PathVariable String id) {
+        CurrentUserHolder.requireRole("ADMIN");
+        structure.deleteHoliday(id);
+    }
 }

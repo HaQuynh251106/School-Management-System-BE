@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.*;
 
 /** A7: Tài chính nội bộ — đợt thu, sinh hóa đơn (2.8), thanh toán (2.9, sandbox). */
@@ -171,4 +172,33 @@ public class FinanceService {
     }
 
     public List<Payment> paymentsOf(String invoiceId) { return payments.findByInvoiceId(invoiceId); }
+
+    /** Seed: 1 đợt thu mẫu + sinh hóa đơn cho mọi HS (để demo có dữ liệu ngay). Idempotent. */
+    @Transactional
+    public void seedDefaultPeriodAndInvoices() {
+        if (!periods.findAll().isEmpty()) return;
+        FeePeriod p = periods.save(FeePeriod.builder()
+                .id("fp-hk1").code("HK1-2025").name("Học phí HK1 2025-2026").status("OPEN")
+                .dueDate(LocalDate.parse("2026-01-15")).createdAt(Instant.now()).build());
+        periodItems.save(FeePeriodItem.builder().id("fpi-1").feePeriodId(p.getId())
+                .name("Học phí").amount(1500000).build());
+        periodItems.save(FeePeriodItem.builder().id("fpi-2").feePeriodId(p.getId())
+                .name("Bảo hiểm y tế").amount(300000).build());
+        generateInvoices(p.getId());
+    }
+
+    /** A8: tổng hợp doanh thu (Invoice là package-private nên gói gọn trong service). */
+    public Map<String, Object> revenueReport() {
+        List<Invoice> all = invoices.findAll();
+        long total = all.stream().mapToLong(Invoice::getTotalAmount).sum();
+        long paid = all.stream().mapToLong(Invoice::getPaidAmount).sum();
+        long paidCount = all.stream().filter(i -> "PAID".equals(i.getStatus())).count();
+        Map<String, Object> m = new HashMap<>();
+        m.put("invoiceCount", all.size());
+        m.put("paidCount", paidCount);
+        m.put("totalAmount", total);
+        m.put("paidAmount", paid);
+        m.put("outstanding", total - paid);
+        return m;
+    }
 }

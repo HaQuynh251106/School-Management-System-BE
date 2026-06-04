@@ -138,6 +138,11 @@ public class UserService {
             throw ApiException.conflict("Tên đăng nhập đã tồn tại");
         }
         String id = (r.id() == null || r.id().isBlank()) ? Ids.gen("u") : r.id();
+        // Học sinh không nhập mã thủ công — hệ thống tự sinh mã HS.
+        String studentCode = r.studentCode();
+        if ("STUDENT".equals(r.role()) && (studentCode == null || studentCode.isBlank())) {
+            studentCode = "HS2025" + String.format("%03d", users.findByRole("STUDENT").size() + 1);
+        }
         User u = User.builder()
                 .id(id)
                 .username(r.username())
@@ -150,7 +155,7 @@ public class UserService {
                 .status("ACTIVE")
                 .teacherCode(r.teacherCode())
                 .mainSubject(r.mainSubject())
-                .studentCode(r.studentCode())
+                .studentCode(studentCode)
                 .classId(r.classId())
                 .className(r.className())
                 .createdAt(Instant.now())

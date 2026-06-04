@@ -12,6 +12,11 @@ import com.sse.app.identity.ParentStudent;
 import com.sse.app.identity.ParentStudentRepository;
 import com.sse.app.identity.User;
 import com.sse.app.identity.UserRepository;
+import com.sse.app.audit.AuditLog;
+import com.sse.app.audit.AuditService;
+import com.sse.app.chat.ChatMessage;
+import com.sse.app.chat.ChatService;
+import com.sse.app.finance.FinanceService;
 import com.sse.app.notification.Announcement;
 import com.sse.app.notification.NotificationService;
 import com.sse.app.notification.NotificationTemplate;
@@ -39,7 +44,8 @@ public class DataSeeder {
     ApplicationRunner seedRunner(UserRepository users, ParentStudentRepository relations,
                                  PasswordEncoder enc, StructureService structure,
                                  TimetableService timetable, GradeService grades,
-                                 AttendanceService attendance, NotificationService notifications) {
+                                 AttendanceService attendance, NotificationService notifications,
+                                 AuditService audit, ChatService chat, FinanceService finance) {
         return args -> {
             if (users.count() > 0) {
                 log.info("[seed] DB đã có dữ liệu — bỏ qua seed.");
@@ -53,6 +59,9 @@ public class DataSeeder {
             seedGrades(grades);
             seedAttendance(attendance);
             seedNotifications(notifications);
+            seedAudit(audit);
+            seedChat(chat);
+            finance.seedDefaultPeriodAndInvoices();
 
             log.info("[seed] xong: {} users.", users.count());
         };
@@ -181,6 +190,42 @@ public class DataSeeder {
                         "Thông báo học phí", "Quý phụ huynh có hóa đơn {{invoiceCode}} số tiền {{amount}}"));
 
         notifications.seed(anns, tpls);
+    }
+
+    // ---------- Audit (A6) ----------
+    private void seedAudit(AuditService audit) {
+        Instant now = Instant.now();
+        audit.seed(List.of(
+                AuditLog.builder().id("evt-1").actorId("u-admin-1").actorName("Nguyễn Văn Quản").role("ADMIN")
+                        .action("CREATE").module("identity").entityType("user").entityId("u-teacher-2")
+                        .detail("Tạo tài khoản GV Lê Văn Minh").createdAt(now.minusSeconds(86400)).build(),
+                AuditLog.builder().id("evt-2").actorId("u-teacher-1").actorName("Trần Thị Hoa").role("TEACHER")
+                        .action("UPDATE").module("academic").entityType("grade").entityId("g-3")
+                        .detail("Sửa điểm GK Toán 7.5 → 8.0").createdAt(now.minusSeconds(7200)).build(),
+                AuditLog.builder().id("evt-3").actorId("system").actorName("Hệ thống").role("SYSTEM")
+                        .action("PAYMENT").module("finance").entityType("invoice").entityId("INV-HK1-2025")
+                        .detail("VNPAY thành công 1.800.000₫").createdAt(now.minusSeconds(3600)).build(),
+                AuditLog.builder().id("evt-4").actorId("u-admin-1").actorName("Nguyễn Văn Quản").role("ADMIN")
+                        .action("EXPORT").module("reports").entityType("report").entityId("grade-dist")
+                        .detail("Xuất phổ điểm HK1").createdAt(now.minusSeconds(1800)).build()));
+    }
+
+    // ---------- Chat (B6/D3) ----------
+    private void seedChat(ChatService chat) {
+        Instant now = Instant.now();
+        chat.seed(List.of(
+                ChatMessage.builder().id("msg-1").senderId("u-parent-1").senderName("Phạm Văn Quân")
+                        .recipientId("u-teacher-1").recipientName("Trần Thị Hoa")
+                        .body("Chào cô, em là phụ huynh bé An ạ.").readFlag(true)
+                        .createdAt(now.minusSeconds(7200)).build(),
+                ChatMessage.builder().id("msg-2").senderId("u-teacher-1").senderName("Trần Thị Hoa")
+                        .recipientId("u-parent-1").recipientName("Phạm Văn Quân")
+                        .body("Chào anh, bé An học tốt môn Toán ạ. Anh yên tâm nhé.").readFlag(false)
+                        .createdAt(now.minusSeconds(3600)).build(),
+                ChatMessage.builder().id("msg-3").senderId("u-student-1").senderName("Phạm Hoài An")
+                        .recipientId("u-teacher-1").recipientName("Trần Thị Hoa")
+                        .body("Cô ơi em chưa hiểu bài 3 ạ.").readFlag(false)
+                        .createdAt(now.minusSeconds(1800)).build()));
     }
 
     // ---------- Builders ----------
