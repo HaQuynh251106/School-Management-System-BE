@@ -8,6 +8,7 @@ import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 /** A2: Cơ cấu đào tạo. Route đặt tên khớp json-server (academicYears, semesters, classes, subjects...). */
 @RestController
@@ -22,33 +23,33 @@ public class StructureController {
     }
 
     // ----- Năm học -----
-    @GetMapping("/academicYears")
+    @GetMapping({"/academicYears", "/academic-years"})
     public List<AcademicYear> years() {
         CurrentUserHolder.require();
         return structure.listYears();
     }
 
-    @PostMapping("/academicYears")
+    @PostMapping({"/academicYears", "/academic-years"})
     public AcademicYear createYear(@Valid @RequestBody CreateAcademicYearRequest r) {
         CurrentUserHolder.requireRole("ADMIN");
         return structure.createYear(r);
     }
 
     // ----- Học kỳ -----
-    @GetMapping("/semesters")
+    @GetMapping({"/semesters", "/academic/semesters"})
     public List<Semester> semesters(@RequestParam(required = false) String academicYearId) {
         CurrentUserHolder.require();
         return structure.listSemesters(academicYearId);
     }
 
-    @PostMapping("/semesters")
+    @PostMapping({"/semesters", "/academic/semesters"})
     public Semester createSemester(@Valid @RequestBody CreateSemesterRequest r) {
         CurrentUserHolder.requireRole("ADMIN");
         return structure.createSemester(r);
     }
 
     // ----- Lớp -----
-    @GetMapping("/classes")
+    @GetMapping({"/classes", "/academic/classes"})
     public List<SchoolClass> classes(@RequestParam(required = false) String academicYearId,
                                      @RequestParam(required = false) String gradeLevel) {
         CurrentUserHolder.require();
@@ -67,33 +68,40 @@ public class StructureController {
         return users.list("STUDENT", null, id);
     }
 
-    @PostMapping("/classes")
+    @PostMapping({"/classes", "/academic/classes"})
     public SchoolClass createClass(@Valid @RequestBody CreateClassRequest r) {
         CurrentUserHolder.requireRole("ADMIN");
         return structure.createClass(r);
     }
 
+    @PostMapping("/academic/high-school-defaults/ensure")
+    public Map<String, Object> ensureHighSchoolDefaults() {
+        CurrentUserHolder.requireRole("ADMIN");
+        int created = structure.ensureHighSchoolDefaults();
+        return Map.of("ok", true, "createdClasses", created);
+    }
+
     // ----- Môn -----
-    @GetMapping("/subjects")
+    @GetMapping({"/subjects", "/academic/subjects"})
     public List<Subject> subjects() {
         CurrentUserHolder.require();
         return structure.listSubjects();
     }
 
-    @PostMapping("/subjects")
+    @PostMapping({"/subjects", "/academic/subjects"})
     public Subject createSubject(@Valid @RequestBody CreateSubjectRequest r) {
         CurrentUserHolder.requireRole("ADMIN");
         return structure.createSubject(r);
     }
 
     // ----- Phòng -----
-    @GetMapping("/rooms")
+    @GetMapping({"/rooms", "/academic/rooms"})
     public List<Room> rooms() {
         CurrentUserHolder.require();
         return structure.listRooms();
     }
 
-    @PostMapping("/rooms")
+    @PostMapping({"/rooms", "/academic/rooms"})
     public Room createRoom(@Valid @RequestBody CreateRoomRequest r) {
         CurrentUserHolder.requireRole("ADMIN");
         return structure.createRoom(r);

@@ -14,11 +14,17 @@ public class Notification {
     private String id;
     private String recipientId;
     private String type;        // ATTENDANCE_ALERT | GRADE | INVOICE | ANNOUNCEMENT | ASSIGNMENT
+    private String channel;     // IN_APP | EMAIL | PUSH
     private String title;
     @Column(length = 2000)
     private String body;
     private boolean read;
     private String refType;
     private String refId;
+    private String status;      // QUEUED | SENT | FAILED | RETRYING
+    private Integer attemptCount;
+    private Instant sentAt;
+    @Column(length = 1000)
+    private String errorMessage;
     private Instant createdAt;
 }

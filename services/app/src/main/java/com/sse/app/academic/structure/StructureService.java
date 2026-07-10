@@ -4,7 +4,9 @@ import com.sse.app.common.ApiException;
 import com.sse.app.common.Ids;
 import com.sse.app.academic.structure.StructureDtos.*;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.util.List;
 
 /** A2: Quản trị cơ cấu đào tạo. Là điểm truy cập chéo-domain cho academic.structure. */
@@ -71,6 +73,56 @@ public class StructureService {
                 .homeroomTeacherId(r.homeroomTeacherId()).studentCount(0).build());
     }
 
+    public SchoolClass getClassByCode(String code) {
+        return classes.findByCode(normalizeClassCode(code))
+                .orElseThrow(() -> ApiException.notFound("Lá»›p"));
+    }
+
+    @Transactional
+    public SchoolClass ensureClassByCode(String code) {
+        String normalized = normalizeClassCode(code);
+        if (!isHighSchoolClassCode(normalized)) {
+            throw ApiException.badRequest("Class code must be from 10A1 to 12A10");
+        }
+        ensureHighSchoolDefaults();
+        return classes.findByCode(normalized)
+                .orElseThrow(() -> ApiException.notFound("Lá»›p"));
+    }
+
+    @Transactional
+    public int ensureHighSchoolDefaults() {
+        AcademicYear year = activeOrCreateDefaultYear();
+        ensureTwoSemesters(year);
+
+        int created = 0;
+        for (int grade = 10; grade <= 12; grade++) {
+            for (int no = 1; no <= 10; no++) {
+                String code = grade + "A" + no;
+                if (classes.findByCode(code).isEmpty()) {
+                    classes.save(SchoolClass.builder()
+                            .id("c-" + code.toLowerCase())
+                            .code(code)
+                            .name("Lop " + code)
+                            .gradeLevel("K" + grade)
+                            .academicYearId(year.getId())
+                            .studentCount(0)
+                            .build());
+                    created++;
+                }
+            }
+        }
+        return created;
+    }
+
+    @Transactional
+    public void updateClassStudentCount(String classId, int count) {
+        if (classId == null || classId.isBlank()) return;
+        classes.findById(classId).ifPresent(c -> {
+            c.setStudentCount(count);
+            classes.save(c);
+        });
+    }
+
     public List<SchoolClass> classesOfHomeroom(String teacherId) {
         return classes.findByHomeroomTeacherId(teacherId);
     }
@@ -128,5 +180,64 @@ public class StructureService {
     // ---------- Helper ----------
     private String orGen(String id, String prefix) {
         return (id == null || id.isBlank()) ? Ids.gen(prefix) : id;
+    }
+
+    private AcademicYear activeOrCreateDefaultYear() {
+        return years.findAll().stream()
+                .filter(y -> "ACTIVE".equalsIgnoreCase(y.getStatus()))
+                .findFirst()
+                .orElseGet(() -> {
+                    int startYear = LocalDate.now().getMonthValue() >= 6
+                            ? LocalDate.now().getYear()
+                            : LocalDate.now().getYear() - 1;
+                    String code = startYear + "-" + (startYear + 1);
+                    return years.save(AcademicYear.builder()
+                            .id("ay-" + startYear)
+                            .code(code)
+                            .name("Nam hoc " + code)
+                            .startDate(LocalDate.of(startYear, 9, 5))
+                            .endDate(LocalDate.of(startYear + 1, 5, 31))
+                            .status("ACTIVE")
+                            .build());
+                });
+    }
+
+    private void ensureTwoSemesters(AcademicYear year) {
+        List<Semester> existing = semesters.findByAcademicYearId(year.getId());
+        boolean hasHk1 = existing.stream().anyMatch(s -> "HK1".equalsIgnoreCase(s.getCode()));
+        boolean hasHk2 = existing.stream().anyMatch(s -> "HK2".equalsIgnoreCase(s.getCode()));
+        int startYear = year.getStartDate() != null ? year.getStartDate().getYear() : LocalDate.now().getYear();
+        if (!hasHk1) {
+            semesters.save(Semester.builder()
+                    .id("sm-" + startYear + "-1")
+                    .academicYearId(year.getId())
+                    .code("HK1")
+                    .name("Hoc ky 1")
+                    .sequence(1)
+                    .startDate(LocalDate.of(startYear, 9, 5))
+                    .endDate(LocalDate.of(startYear + 1, 1, 15))
+                    .status("ACTIVE")
+                    .build());
+        }
+        if (!hasHk2) {
+            semesters.save(Semester.builder()
+                    .id("sm-" + startYear + "-2")
+                    .academicYearId(year.getId())
+                    .code("HK2")
+                    .name("Hoc ky 2")
+                    .sequence(2)
+                    .startDate(LocalDate.of(startYear + 1, 1, 20))
+                    .endDate(LocalDate.of(startYear + 1, 5, 31))
+                    .status("PLANNED")
+                    .build());
+        }
+    }
+
+    private boolean isHighSchoolClassCode(String code) {
+        return code != null && code.matches("(10|11|12)A([1-9]|10)");
+    }
+
+    private String normalizeClassCode(String code) {
+        return code == null ? null : code.trim().replace(" ", "").toUpperCase();
     }
 }

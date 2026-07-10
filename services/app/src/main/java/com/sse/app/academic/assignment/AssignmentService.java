@@ -4,17 +4,17 @@ import com.sse.app.academic.assignment.AssignmentDtos.*;
 import com.sse.app.academic.structure.StructureService;
 import com.sse.app.common.ApiException;
 import com.sse.app.common.Ids;
-import com.sse.app.identity.User;
-import com.sse.app.identity.UserDto;
+import com.sse.app.event.DomainEventPublisher;
 import com.sse.app.identity.UserService;
-import com.sse.app.notification.NotificationService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
-/** B5 + C4: Vòng đời bài tập (flowchart 2.7). */
+/** B5 + C4: vòng đời bài tập (flowchart 2.7). */
 @Service
 public class AssignmentService {
 
@@ -22,15 +22,15 @@ public class AssignmentService {
     private final AssignmentSubmissionRepository submissions;
     private final StructureService structure;
     private final UserService users;
-    private final NotificationService notifications;
+    private final DomainEventPublisher events;
 
     public AssignmentService(AssignmentRepository assignments, AssignmentSubmissionRepository submissions,
-                             StructureService structure, UserService users, NotificationService notifications) {
+                             StructureService structure, UserService users, DomainEventPublisher events) {
         this.assignments = assignments;
         this.submissions = submissions;
         this.structure = structure;
         this.users = users;
-        this.notifications = notifications;
+        this.events = events;
     }
 
     public List<Assignment> list(String classId, String teacherId, String status, boolean onlyPublished) {
@@ -60,7 +60,7 @@ public class AssignmentService {
                 .status(publish ? "PUBLISHED" : "DRAFT")
                 .deadline(r.deadline()).allowLate(Boolean.TRUE.equals(r.allowLate()))
                 .attachmentName(r.attachmentName()).createdAt(Instant.now()).build());
-        if (publish) notifyClass(a);
+        if (publish) publishAssignmentEvent(a);
         return a;
     }
 
@@ -69,15 +69,19 @@ public class AssignmentService {
         Assignment a = get(id);
         a.setStatus("PUBLISHED");
         assignments.save(a);
-        notifyClass(a);
+        publishAssignmentEvent(a);
         return a;
     }
 
-    private void notifyClass(Assignment a) {
-        List<String> studentIds = users.list("STUDENT", null, a.getClassId()).stream().map(UserDto::id).toList();
-        notifications.notifyUsers(studentIds, "ASSIGNMENT", "Bài tập mới: " + a.getTitle(),
-                "Môn " + a.getSubjectName() + (a.getDeadline() != null ? " — hạn " + a.getDeadline() : ""),
-                "ASSIGNMENT", a.getId());
+    private void publishAssignmentEvent(Assignment a) {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("classId", a.getClassId());
+        payload.put("subjectName", a.getSubjectName());
+        payload.put("title", a.getTitle());
+        payload.put("deadline", a.getDeadline() == null ? "" : String.valueOf(a.getDeadline()));
+        payload.put("message", "Môn " + a.getSubjectName()
+                + (a.getDeadline() != null ? " - hạn " + a.getDeadline() : ""));
+        events.publish("academic.assignment.published", a.getTeacherId(), "assignment", a.getId(), payload);
     }
 
     @Transactional
@@ -115,8 +119,13 @@ public class AssignmentService {
         s.setGradedBy(gradedBy);
         s.setGradedAt(Instant.now());
         submissions.save(s);
-        notifications.notifyUser(s.getStudentId(), "ASSIGNMENT", "Bài tập đã được chấm",
-                "Điểm: " + (r.score() == null ? "-" : r.score()), "SUBMISSION", s.getId());
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("studentId", s.getStudentId());
+        payload.put("assignmentId", s.getAssignmentId());
+        payload.put("score", r.score() == null ? "" : r.score());
+        payload.put("message", "Điểm: " + (r.score() == null ? "-" : r.score()));
+        events.publish("academic.submission.graded", gradedBy, "submission", s.getId(), payload);
         return s;
     }
 

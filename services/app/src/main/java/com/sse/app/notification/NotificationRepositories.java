@@ -13,6 +13,9 @@ interface NotificationRepository extends JpaRepository<Notification, String> {
 interface NotificationTemplateRepository extends JpaRepository<NotificationTemplate, String> {
 }
 
+interface NotificationDeliveryLogRepository extends JpaRepository<NotificationDeliveryLog, String> {
+}
+
 interface AnnouncementRepository extends JpaRepository<Announcement, String> {
     List<Announcement> findAllByOrderByCreatedAtDesc();
 }

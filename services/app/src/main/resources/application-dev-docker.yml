@@ -1,0 +1,9 @@
+spring:
+  datasource:
+    url: ${SSE_DB_URL:jdbc:postgresql://localhost:5441/identity_db}
+    username: ${SSE_DB_USER:sse}
+    password: ${SSE_DB_PASSWORD:sse_dev}
+
+sse:
+  seed:
+    enabled: true

@@ -5,6 +5,7 @@ import com.sse.app.common.ApiException;
 import com.sse.app.identity.IdentityDtos.*;
 import com.sse.app.security.JwtService;
 import io.jsonwebtoken.Claims;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
@@ -28,15 +29,15 @@ public class AuthController {
     }
 
     @PostMapping("/login")
-    public Map<String, Object> login(@Valid @RequestBody LoginRequest req) {
-        User u = users.authenticate(req.username(), req.password());
+    public Map<String, Object> login(@Valid @RequestBody LoginRequest req, HttpServletRequest http) {
+        User u = users.authenticate(req.username(), req.password(), clientIp(http), http.getHeader("User-Agent"));
         audit.record(u.getId(), u.getFullName(), u.getRole(), "LOGIN", "identity",
                 "user", u.getId(), "Đăng nhập thành công");
-        return tokenResponse(u, true);
+        return tokenResponse(u, true, clientIp(http), http.getHeader("User-Agent"));
     }
 
     @PostMapping("/refresh")
-    public Map<String, Object> refresh(@Valid @RequestBody RefreshRequest req) {
+    public Map<String, Object> refresh(@Valid @RequestBody RefreshRequest req, HttpServletRequest http) {
         Claims c;
         try {
             c = jwt.parse(req.refreshToken());
@@ -46,26 +47,29 @@ public class AuthController {
         if (!"refresh".equals(c.get("type", String.class))) {
             throw new ApiException(HttpStatus.UNAUTHORIZED, "Invalid refresh token");
         }
-        User u = users.getById(c.getSubject());
-        if (!"ACTIVE".equals(u.getStatus())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Tài khoản bị khóa");
-        }
-        return tokenResponse(u, false);
+        User u = users.verifyAndRotateRefreshToken(req.refreshToken(), jwt.refreshTtlSeconds(),
+                clientIp(http), http.getHeader("User-Agent"));
+        if (!u.getId().equals(c.getSubject())) throw new ApiException(HttpStatus.UNAUTHORIZED, "Invalid refresh token");
+        return tokenResponse(u, false, clientIp(http), http.getHeader("User-Agent"));
     }
 
     @PostMapping("/logout")
-    public Map<String, Object> logout() {
+    public Map<String, Object> logout(@RequestBody(required = false) LogoutRequest req,
+                                      @RequestHeader(value = "Authorization", required = false) String authorization) {
+        String refreshToken = req == null ? null : req.refreshToken();
+        if (refreshToken == null && authorization != null && authorization.startsWith("Bearer ")) {
+            refreshToken = authorization.substring("Bearer ".length());
+        }
+        users.revokeRefreshToken(refreshToken);
         return Map.of("ok", true);
     }
 
     @PostMapping("/forgot-password")
     public Map<String, Object> forgotPassword(@RequestBody ForgotPasswordRequest req) {
-        String devToken = users.requestPasswordReset(req.email(), req.username());
+        users.requestPasswordReset(req.email(), req.username());
         Map<String, Object> body = new HashMap<>();
         body.put("ok", true);
         body.put("message", "Nếu email tồn tại, link reset đã được gửi.");
-        // DEV: không có email server nên trả token trực tiếp để test luồng reset.
-        if (devToken != null) body.put("devResetToken", devToken);
         return body;
     }
 
@@ -75,12 +79,21 @@ public class AuthController {
         return Map.of("ok", true);
     }
 
-    private Map<String, Object> tokenResponse(User u, boolean includeUser) {
+    private Map<String, Object> tokenResponse(User u, boolean includeUser, String ipAddress, String userAgent) {
         Map<String, Object> body = new HashMap<>();
         if (includeUser) body.put("user", users.toDto(u));
-        body.put("accessToken", jwt.createAccessToken(u.getId(), u.getUsername(), u.getRole()));
-        body.put("refreshToken", jwt.createRefreshToken(u.getId()));
+        String accessToken = jwt.createAccessToken(u.getId(), u.getUsername(), u.getRole());
+        String refreshToken = jwt.createRefreshToken(u.getId());
+        users.storeRefreshToken(u.getId(), refreshToken, jwt.refreshTtlSeconds(), ipAddress, userAgent);
+        body.put("accessToken", accessToken);
+        body.put("refreshToken", refreshToken);
         body.put("expiresIn", jwt.accessTtlSeconds());
         return body;
+    }
+
+    private String clientIp(HttpServletRequest req) {
+        String forwarded = req.getHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) return forwarded.split(",")[0].trim();
+        return req.getRemoteAddr();
     }
 }

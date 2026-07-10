@@ -2,32 +2,34 @@ package com.sse.app.notification;
 
 import com.sse.app.common.ApiException;
 import com.sse.app.common.Ids;
-import com.sse.app.notification.NotificationDtos.*;
+import com.sse.app.event.DomainEvent;
 import com.sse.app.identity.UserDto;
 import com.sse.app.identity.UserService;
+import com.sse.app.notification.NotificationDtos.*;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
-/**
- * E2: Điều phối thông báo (bản đồng bộ, in-app). Trong kiến trúc đầy đủ, các service
- * khác phát event lên RabbitMQ và service này consume; ở monolith ta gọi trực tiếp.
- */
+/** E2: điều phối thông báo in-app; worker consume DomainEvent từ RabbitMQ. */
 @Service
 public class NotificationService {
 
     private final NotificationRepository notifications;
     private final NotificationTemplateRepository templates;
+    private final NotificationDeliveryLogRepository deliveryLogs;
     private final AnnouncementRepository announcements;
     private final UserService users;
 
     public NotificationService(NotificationRepository notifications,
                                NotificationTemplateRepository templates,
+                               NotificationDeliveryLogRepository deliveryLogs,
                                AnnouncementRepository announcements,
                                UserService users) {
         this.notifications = notifications;
         this.templates = templates;
+        this.deliveryLogs = deliveryLogs;
         this.announcements = announcements;
         this.users = users;
     }
@@ -36,10 +38,22 @@ public class NotificationService {
 
     public Notification notifyUser(String recipientId, String type, String title, String body,
                                    String refType, String refId) {
-        return notifications.save(Notification.builder()
+        Notification n = notifications.save(Notification.builder()
                 .id(Ids.gen("noti")).recipientId(recipientId).type(type)
+                .channel("IN_APP")
                 .title(title).body(body).read(false)
-                .refType(refType).refId(refId).createdAt(Instant.now()).build());
+                .refType(refType).refId(refId)
+                .status("SENT").attemptCount(1).sentAt(Instant.now())
+                .createdAt(Instant.now()).build());
+        deliveryLogs.save(NotificationDeliveryLog.builder()
+                .id(Ids.gen("ndl"))
+                .notificationId(n.getId())
+                .attemptNo(1)
+                .status("SENT")
+                .providerResponse("IN_APP persisted")
+                .attemptedAt(Instant.now())
+                .build());
+        return n;
     }
 
     public void notifyUsers(List<String> recipientIds, String type, String title, String body,
@@ -47,10 +61,81 @@ public class NotificationService {
         for (String id : recipientIds) notifyUser(id, type, title, body, refType, refId);
     }
 
-    /** 2.5/2.6: bắn cho tất cả phụ huynh của một học sinh. */
+    /** D2/C5: gửi cho tất cả phụ huynh đang liên kết với một học sinh. */
     public void notifyParentsOfStudent(String studentId, String type, String title, String body,
                                        String refType, String refId) {
         notifyUsers(users.parentIdsOf(studentId), type, title, body, refType, refId);
+    }
+
+    public void handleDomainEvent(DomainEvent event) {
+        Map<String, Object> p = event.payload();
+        switch (event.name()) {
+            case "identity.user.login" -> notifyUser(
+                    event.entityId(), "SYSTEM", "Đăng nhập mới",
+                    "Tài khoản của bạn vừa đăng nhập thành công.",
+                    "USER", event.entityId());
+            case "identity.password.reset_requested" -> notifyUser(
+                    event.entityId(), "SYSTEM", "Yêu cầu đặt lại mật khẩu",
+                    "Hệ thống đã nhận yêu cầu đặt lại mật khẩu cho tài khoản của bạn.",
+                    "USER", event.entityId());
+            case "identity.password.reset_completed" -> notifyUser(
+                    event.entityId(), "SYSTEM", "Mật khẩu đã được cập nhật",
+                    "Mật khẩu của bạn đã được đặt lại, mọi refresh token cũ đã bị thu hồi.",
+                    "USER", event.entityId());
+            case "academic.timetable.changed" -> notifyClassStudentsAndParents(
+                    asString(p.get("classId")), "TIMETABLE", "Thời khóa biểu được cập nhật",
+                    "Thời khóa biểu lớp đã có thay đổi.", "TIMETABLE", event.entityId());
+            case "academic.attendance.absent" -> notifyParentsOfStudent(
+                    asString(p.get("studentId")),
+                    "ATTENDANCE_ALERT",
+                    "Cảnh báo chuyên cần",
+                    asString(p.get("message")),
+                    "ATTENDANCE",
+                    event.entityId());
+            case "academic.grade.published", "academic.grade.changed" -> {
+                String studentId = asString(p.get("studentId"));
+                String title = "academic.grade.changed".equals(event.name())
+                        ? "Điểm được cập nhật" : "Có điểm mới";
+                String body = asString(p.get("message"));
+                notifyUser(studentId, "GRADE", title, body, "GRADE", event.entityId());
+                notifyParentsOfStudent(studentId, "GRADE", title, body, "GRADE", event.entityId());
+            }
+            case "academic.assignment.published" -> {
+                String classId = asString(p.get("classId"));
+                String title = "Bài tập mới: " + asString(p.get("title"));
+                String body = asString(p.get("message"));
+                notifyClassStudentsAndParents(classId, "ASSIGNMENT", title, body, "ASSIGNMENT", event.entityId());
+            }
+            case "academic.submission.graded" -> {
+                String studentId = asString(p.get("studentId"));
+                String body = asString(p.get("message"));
+                notifyUser(studentId, "ASSIGNMENT", "Bài tập đã được chấm", body, "SUBMISSION", event.entityId());
+                notifyParentsOfStudent(studentId, "ASSIGNMENT", "Bài tập đã được chấm", body, "SUBMISSION", event.entityId());
+            }
+            case "finance.invoice.issued" -> notifyParentsOfStudent(
+                    asString(p.get("studentId")), "INVOICE", "Có hóa đơn mới",
+                    asString(p.get("message")), "INVOICE", event.entityId());
+            case "finance.invoice.paid" -> notifyUser(
+                    asString(p.get("parentId")), "PAYMENT", "Thanh toán thành công",
+                    asString(p.get("message")), "INVOICE", event.entityId());
+            default -> {
+                // Keep unknown events observable later without failing core flows.
+            }
+        }
+    }
+
+    private void notifyClassStudentsAndParents(String classId, String type, String title, String body,
+                                               String refType, String refId) {
+        if (classId == null || classId.isBlank()) return;
+        List<UserDto> students = users.list("STUDENT", null, classId);
+        for (UserDto student : students) {
+            notifyUser(student.id(), type, title, body, refType, refId);
+            notifyParentsOfStudent(student.id(), type, title, body, refType, refId);
+        }
+    }
+
+    private String asString(Object value) {
+        return value == null ? "" : String.valueOf(value);
     }
 
     // ---------- Hộp thư in-app ----------
@@ -95,7 +180,6 @@ public class NotificationService {
                 .title(r.title()).body(r.body()).audience(audience)
                 .createdBy(createdBy).createdAt(Instant.now()).build());
 
-        // Fan-out in-app cho đối tượng nhận (đồng bộ — bản RabbitMQ sẽ async hoá).
         List<String> recipients = resolveAudience(audience);
         notifyUsers(recipients, "ANNOUNCEMENT", a.getTitle(), a.getBody(), "ANNOUNCEMENT", a.getId());
         return a;
@@ -112,7 +196,7 @@ public class NotificationService {
         };
     }
 
-    /** Seed raw (không fan-out) — dùng bởi DataSeeder. */
+    /** Seed raw, không fan-out. */
     public void seed(List<Announcement> anns, List<NotificationTemplate> tpls) {
         announcements.saveAll(anns);
         templates.saveAll(tpls);
@@ -120,7 +204,9 @@ public class NotificationService {
 
     // ---------- Templates (E2/S12) ----------
 
-    public List<NotificationTemplate> listTemplates() { return templates.findAll(); }
+    public List<NotificationTemplate> listTemplates() {
+        return templates.findAll();
+    }
 
     public NotificationTemplate createTemplate(CreateTemplateRequest r) {
         return templates.save(NotificationTemplate.builder()

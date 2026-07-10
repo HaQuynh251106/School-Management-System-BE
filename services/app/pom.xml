@@ -49,6 +49,23 @@
             <artifactId>spring-security-crypto</artifactId>
         </dependency>
 
+        <!-- RabbitMQ event bus for async notifications -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.retry</groupId>
+            <artifactId>spring-retry</artifactId>
+        </dependency>
+
+        <!-- Excel import/export for admin bulk student onboarding -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>5.2.5</version>
+        </dependency>
+
         <!-- JWT (HS256) -->
         <dependency>
             <groupId>io.jsonwebtoken</groupId>

@@ -8,4 +8,5 @@ public interface ParentStudentRepository extends JpaRepository<ParentStudent, St
     List<ParentStudent> findByParentId(String parentId);
     List<ParentStudent> findByStudentId(String studentId);
     boolean existsByParentIdAndStudentId(String parentId, String studentId);
+    boolean existsByStudentId(String studentId);
 }

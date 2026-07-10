@@ -3,10 +3,10 @@ package com.sse.app.finance;
 import com.sse.app.academic.structure.StructureService;
 import com.sse.app.common.ApiException;
 import com.sse.app.common.Ids;
+import com.sse.app.event.DomainEventPublisher;
 import com.sse.app.finance.FinanceDtos.*;
 import com.sse.app.identity.UserDto;
 import com.sse.app.identity.UserService;
-import com.sse.app.notification.NotificationService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,12 +25,12 @@ public class FinanceService {
     private final PaymentRepository payments;
     private final StructureService structure;
     private final UserService users;
-    private final NotificationService notifications;
+    private final DomainEventPublisher events;
 
     public FinanceService(FeePeriodRepository periods, FeePeriodItemRepository periodItems,
                           InvoiceRepository invoices, InvoiceItemRepository invoiceItems,
                           PaymentRepository payments, StructureService structure,
-                          UserService users, NotificationService notifications) {
+                          UserService users, DomainEventPublisher events) {
         this.periods = periods;
         this.periodItems = periodItems;
         this.invoices = invoices;
@@ -38,7 +38,7 @@ public class FinanceService {
         this.payments = payments;
         this.structure = structure;
         this.users = users;
-        this.notifications = notifications;
+        this.events = events;
     }
 
     // ---------- Đợt thu ----------
@@ -106,9 +106,10 @@ public class FinanceService {
             created.add(inv);
 
             if (parentId != null) {
-                notifications.notifyUser(parentId, "INVOICE", "Hóa đơn học phí mới",
-                        String.format("%s — %s: %,d₫", s.fullName(), inv.getCode(), total),
-                        "INVOICE", inv.getId());
+                events.publish("finance.invoice.issued", parentId, "invoice", inv.getId(),
+                        Map.of("studentId", s.id(),
+                                "parentId", parentId,
+                                "message", String.format("%s — %s: %,d₫", s.fullName(), inv.getCode(), total)));
             }
         }
         return created;
@@ -161,9 +162,11 @@ public class FinanceService {
         invoices.save(inv);
 
         if (inv.getParentId() != null) {
-            notifications.notifyUser(inv.getParentId(), "INVOICE", "Thanh toán thành công",
-                    String.format("Biên nhận %s: %,d₫ (%s)", inv.getCode(), remaining, method),
-                    "PAYMENT", pay.getId());
+            events.publish("finance.invoice.paid", inv.getParentId(), "invoice", inv.getId(),
+                    Map.of("studentId", inv.getStudentId(),
+                            "parentId", inv.getParentId(),
+                            "paymentId", pay.getId(),
+                            "message", String.format("Biên nhận %s: %,d₫ (%s)", inv.getCode(), remaining, method)));
         }
         Map<String, Object> m = new HashMap<>();
         m.put("payment", pay);

@@ -75,6 +75,15 @@ public class FinanceController {
         return finance.listInvoices(studentId, parentId, status);
     }
 
+    @GetMapping("/students/{studentId}/invoices")
+    public List<Invoice> studentInvoices(@PathVariable String studentId,
+                                         @RequestParam(required = false) String status) {
+        CurrentUser me = CurrentUserHolder.require();
+        if (me.isParent()) users.assertParentOf(me.id(), studentId);
+        else if (me.isStudent() && !me.id().equals(studentId)) throw ApiException.forbidden("Không phải hóa đơn của bạn");
+        return finance.listInvoices(studentId, null, status);
+    }
+
     @GetMapping("/invoices/{id}")
     public Map<String, Object> invoiceDetail(@PathVariable String id) {
         CurrentUser me = CurrentUserHolder.require();

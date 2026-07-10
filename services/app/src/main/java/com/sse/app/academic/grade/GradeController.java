@@ -46,11 +46,22 @@ public class GradeController {
         return grades.list(studentId, subjectId, semesterId, category, studentIds);
     }
 
+    @GetMapping("/students/{studentId}/grades")
+    public List<Grade> studentGrades(@PathVariable String studentId,
+                                     @RequestParam(required = false) String subjectId,
+                                     @RequestParam(required = false) String semesterId,
+                                     @RequestParam(required = false) String category) {
+        CurrentUser me = CurrentUserHolder.require();
+        if (me.isStudent() && !me.id().equals(studentId)) throw ApiException.forbidden("Không đủ quyền");
+        if (me.isParent()) users.assertParentOf(me.id(), studentId);
+        return grades.list(studentId, subjectId, semesterId, category, null);
+    }
+
     @PostMapping("/grades/bulk")
     public List<Grade> bulk(@Valid @RequestBody BulkGradeRequest req) {
         CurrentUser me = CurrentUserHolder.require();
         CurrentUserHolder.requireRole("TEACHER", "ADMIN");
-        return grades.bulkUpsert(req, me.id());
+        return grades.bulkUpsert(req, me.id(), me.isTeacher());
     }
 
     @GetMapping("/grades/{id}/change-logs")

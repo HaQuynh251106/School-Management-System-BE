@@ -10,11 +10,11 @@ spring:
   application:
     name: sse-app
 
-  # PostgreSQL local (Homebrew). Override bằng biến môi trường khi cần.
+  # PostgreSQL dev Docker by default. Override bằng biến môi trường khi cần.
   datasource:
-    url: ${SSE_DB_URL:jdbc:postgresql://localhost:5432/sse_db}
-    username: ${SSE_DB_USER:a1234}
-    password: ${SSE_DB_PASSWORD:}
+    url: ${SSE_DB_URL:jdbc:postgresql://localhost:5441/identity_db}
+    username: ${SSE_DB_USER:sse}
+    password: ${SSE_DB_PASSWORD:sse_dev}
     driver-class-name: org.postgresql.Driver
 
   jpa:
@@ -34,14 +34,43 @@ spring:
     serialization:
       write-dates-as-timestamps: false
 
+  rabbitmq:
+    host: ${SSE_RABBITMQ_HOST:localhost}
+    port: ${SSE_RABBITMQ_PORT:5672}
+    username: ${SSE_RABBITMQ_USER:sse}
+    password: ${SSE_RABBITMQ_PASSWORD:sse_dev}
+    listener:
+      simple:
+        retry:
+          enabled: true
+          max-attempts: 3
+          initial-interval: 1000
+          multiplier: 2.0
+          max-interval: 5000
+        default-requeue-rejected: false
+
 sse:
   jwt:
     # Đổi secret khi deploy. Tối thiểu 32 bytes cho HS256.
     secret: ${SSE_JWT_SECRET:dev-secret-do-not-use-in-prod-change-me-please-0123456789}
-    access-ttl-seconds: 3600
+    access-ttl-seconds: 900
     refresh-ttl-seconds: 604800
   seed:
     enabled: true   # seed dữ liệu mẫu (khớp mock-server) nếu DB rỗng
+  events:
+    rabbitmq:
+      enabled: ${SSE_EVENTS_RABBITMQ_ENABLED:true}
+    local-listener:
+      enabled: ${SSE_EVENTS_LOCAL_LISTENER_ENABLED:false}
+  rabbitmq:
+    exchange: ${SSE_RABBITMQ_EXCHANGE:sse.events}
+    dead-letter-exchange: ${SSE_RABBITMQ_DLX:sse.events.dlx}
+    notification-queue: ${SSE_RABBITMQ_NOTIFICATION_QUEUE:sse.notification.events}
+    notification-dead-letter-queue: ${SSE_RABBITMQ_NOTIFICATION_DLQ:sse.notification.events.dlq}
+    notification-dead-letter-routing-key: ${SSE_RABBITMQ_NOTIFICATION_DLX_KEY:notification.failed}
+  notifications:
+    worker:
+      enabled: ${SSE_NOTIFICATION_WORKER_ENABLED:true}
 
 logging:
   level:

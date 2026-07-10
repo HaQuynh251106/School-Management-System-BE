@@ -1,17 +1,19 @@
 package com.sse.app.academic.attendance;
 
 import com.sse.app.academic.attendance.AttendanceDtos.*;
+import com.sse.app.academic.teaching.TeachingAssignmentService;
 import com.sse.app.academic.timetable.TimetableService;
 import com.sse.app.academic.timetable.TimetableSlot;
 import com.sse.app.common.Ids;
+import com.sse.app.event.DomainEventPublisher;
 import com.sse.app.identity.UserService;
-import com.sse.app.notification.NotificationService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /** B3: Sổ điểm danh + D2: cảnh báo vắng tức thời (flowchart 2.5). */
 @Service
@@ -19,15 +21,18 @@ public class AttendanceService {
 
     private final AttendanceRepository records;
     private final TimetableService timetable;
+    private final TeachingAssignmentService teachingAssignments;
     private final UserService users;
-    private final NotificationService notifications;
+    private final DomainEventPublisher events;
 
     public AttendanceService(AttendanceRepository records, TimetableService timetable,
-                             UserService users, NotificationService notifications) {
+                             TeachingAssignmentService teachingAssignments,
+                             UserService users, DomainEventPublisher events) {
         this.records = records;
         this.timetable = timetable;
+        this.teachingAssignments = teachingAssignments;
         this.users = users;
-        this.notifications = notifications;
+        this.events = events;
     }
 
     public List<AttendanceRecord> list(String studentId, String classId, String slotId, LocalDate date) {
@@ -46,7 +51,15 @@ public class AttendanceService {
 
     @Transactional
     public List<AttendanceRecord> bulkMark(BulkAttendanceRequest req) {
+        return bulkMark(req, null, false);
+    }
+
+    @Transactional
+    public List<AttendanceRecord> bulkMark(BulkAttendanceRequest req, String actorId, boolean enforceTeacherAssignment) {
         TimetableSlot slot = timetable.findSlot(req.slotId());
+        if (enforceTeacherAssignment && !canTeacherMark(actorId, slot)) {
+            throw com.sse.app.common.ApiException.forbidden("Teacher can only mark attendance for assigned class/subject");
+        }
         String subjectName = req.subjectName() != null ? req.subjectName()
                 : (slot != null ? slot.getSubjectName() : null);
         Integer periodNo = req.periodNo() != null ? req.periodNo()
@@ -76,6 +89,13 @@ public class AttendanceService {
         return saved;
     }
 
+    private boolean canTeacherMark(String teacherId, TimetableSlot slot) {
+        if (teacherId == null || slot == null) return false;
+        if (teacherId.equals(slot.getTeacherId())) return true;
+        return teachingAssignments.teacherAssigned(
+                teacherId, slot.getClassId(), slot.getSubjectId(), slot.getSemesterId());
+    }
+
     private void alertParents(AttendanceRecord rec) {
         String studentName = users.fullNameOf(rec.getStudentId());
         String title = "Cảnh báo chuyên cần";
@@ -84,8 +104,12 @@ public class AttendanceService {
                 statusLabel(rec.getStatus()),
                 rec.getSubjectName() == null ? "" : rec.getSubjectName(),
                 rec.getDate());
-        notifications.notifyParentsOfStudent(rec.getStudentId(), "ATTENDANCE_ALERT",
-                title, body.trim(), "ATTENDANCE", rec.getId());
+        events.publish("academic.attendance.absent", rec.getStudentId(), "attendance", rec.getId(),
+                Map.of("studentId", rec.getStudentId(),
+                        "status", rec.getStatus(),
+                        "date", String.valueOf(rec.getDate()),
+                        "periodNo", rec.getPeriodNo() == null ? "" : rec.getPeriodNo(),
+                        "message", body.trim()));
     }
 
     /** Seed raw (không bắn cảnh báo) — dùng bởi DataSeeder. */

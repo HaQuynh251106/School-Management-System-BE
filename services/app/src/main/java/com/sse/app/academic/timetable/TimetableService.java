@@ -4,11 +4,13 @@ import com.sse.app.academic.structure.StructureService;
 import com.sse.app.common.ApiException;
 import com.sse.app.common.Ids;
 import com.sse.app.academic.timetable.TimetableDtos.CreateSlotRequest;
+import com.sse.app.event.DomainEventPublisher;
 import com.sse.app.identity.User;
 import com.sse.app.identity.UserService;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Map;
 
 /** A3: Xếp TKB + Conflict Resolution (flowchart 2.4). */
 @Service
@@ -17,11 +19,14 @@ public class TimetableService {
     private final TimetableRepository slots;
     private final StructureService structure;
     private final UserService users;
+    private final DomainEventPublisher events;
 
-    public TimetableService(TimetableRepository slots, StructureService structure, UserService users) {
+    public TimetableService(TimetableRepository slots, StructureService structure,
+                            UserService users, DomainEventPublisher events) {
         this.slots = slots;
         this.structure = structure;
         this.users = users;
+        this.events = events;
     }
 
     public List<TimetableSlot> list(String classId, String teacherId, String semesterId, String dayOfWeek) {
@@ -46,7 +51,7 @@ public class TimetableService {
         User teacher = users.getById(r.teacherId());
         String subjectName = structure.subjectName(r.subjectId());
 
-        return slots.save(TimetableSlot.builder()
+        TimetableSlot saved = slots.save(TimetableSlot.builder()
                 .id(r.id() == null || r.id().isBlank() ? Ids.gen("tt") : r.id())
                 .classId(r.classId())
                 .subjectId(r.subjectId())
@@ -60,6 +65,10 @@ public class TimetableService {
                 .endTime(r.endTime())
                 .semesterId(r.semesterId())
                 .build());
+        events.publish("academic.timetable.changed", r.teacherId(), "timetable_slot", saved.getId(),
+                Map.of("classId", safe(saved.getClassId()), "teacherId", safe(saved.getTeacherId()),
+                        "subjectId", safe(saved.getSubjectId()), "semesterId", safe(saved.getSemesterId())));
+        return saved;
     }
 
     private void checkConflicts(CreateSlotRequest r) {
@@ -89,7 +98,15 @@ public class TimetableService {
         return id == null ? null : slots.findById(id).orElse(null);
     }
 
+    public boolean teacherAssigned(String teacherId, String classId, String subjectId, String semesterId) {
+        return slots.existsByTeacherIdAndClassIdAndSubjectIdAndSemesterId(teacherId, classId, subjectId, semesterId);
+    }
+
     /** Seed raw (bỏ qua conflict-check) — dùng bởi DataSeeder. */
+    public List<TimetableSlot> allSlots() {
+        return slots.findAll();
+    }
+
     public void seedSlots(List<TimetableSlot> list) {
         slots.saveAll(list);
     }
@@ -99,5 +116,9 @@ public class TimetableService {
             case "MON" -> 1; case "TUE" -> 2; case "WED" -> 3; case "THU" -> 4;
             case "FRI" -> 5; case "SAT" -> 6; case "SUN" -> 7; default -> 9;
         };
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value;
     }
 }

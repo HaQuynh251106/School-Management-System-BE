@@ -40,9 +40,22 @@ public class AttendanceController {
         return attendance.list(studentId, classId, slotId, date);
     }
 
+    @GetMapping("/students/{studentId}/attendance")
+    public List<AttendanceRecord> studentAttendance(@PathVariable String studentId,
+                                                    @RequestParam(required = false) String classId,
+                                                    @RequestParam(required = false) String slotId,
+                                                    @RequestParam(required = false)
+                                                    @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
+        CurrentUser me = CurrentUserHolder.require();
+        if (me.isStudent() && !me.id().equals(studentId)) throw ApiException.forbidden("Không đủ quyền");
+        if (me.isParent()) users.assertParentOf(me.id(), studentId);
+        return attendance.list(studentId, classId, slotId, date);
+    }
+
     @PostMapping("/attendance/bulk")
     public List<AttendanceRecord> bulk(@Valid @RequestBody BulkAttendanceRequest req) {
+        CurrentUser me = CurrentUserHolder.require();
         CurrentUserHolder.requireRole("TEACHER", "ADMIN");
-        return attendance.bulkMark(req);
+        return attendance.bulkMark(req, me.id(), me.isTeacher());
     }
 }

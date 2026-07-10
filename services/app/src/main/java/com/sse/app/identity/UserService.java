@@ -2,6 +2,7 @@ package com.sse.app.identity;
 
 import com.sse.app.common.ApiException;
 import com.sse.app.common.Ids;
+import com.sse.app.event.DomainEventPublisher;
 import com.sse.app.identity.IdentityDtos.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -20,14 +21,24 @@ public class UserService {
     private final UserRepository users;
     private final ParentStudentRepository relations;
     private final PasswordResetTokenRepository resetTokens;
+    private final RefreshTokenRepository refreshTokens;
+    private final LoginHistoryRepository loginHistory;
+    private final UserDeviceRepository devices;
     private final PasswordEncoder encoder;
+    private final DomainEventPublisher events;
 
     public UserService(UserRepository users, ParentStudentRepository relations,
-                       PasswordResetTokenRepository resetTokens, PasswordEncoder encoder) {
+                       PasswordResetTokenRepository resetTokens, RefreshTokenRepository refreshTokens,
+                       LoginHistoryRepository loginHistory, UserDeviceRepository devices,
+                       PasswordEncoder encoder, DomainEventPublisher events) {
         this.users = users;
         this.relations = relations;
         this.resetTokens = resetTokens;
+        this.refreshTokens = refreshTokens;
+        this.loginHistory = loginHistory;
+        this.devices = devices;
         this.encoder = encoder;
+        this.events = events;
     }
 
     // ---------- Tra cứu ----------
@@ -59,16 +70,94 @@ public class UserService {
 
     // ---------- Đăng nhập / xác thực ----------
 
-    public User authenticate(String username, String rawPassword) {
-        User u = users.findByUsername(username)
-                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "Sai tên đăng nhập hoặc mật khẩu"));
+    @Transactional
+    public User authenticate(String username, String rawPassword, String ipAddress, String userAgent) {
+        String identifier = username == null ? "" : username.trim();
+        Optional<User> found = users.findByUsername(identifier);
+        if (found.isEmpty() && !identifier.isBlank()) {
+            found = users.findByLoginIdentifier(identifier).stream().findFirst();
+        }
+        if (found.isEmpty()) {
+            recordLogin(null, identifier, ipAddress, userAgent, false, "USER_NOT_FOUND");
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "Sai tên đăng nhập hoặc mật khẩu");
+        }
+
+        User u = found.get();
         if (!"ACTIVE".equals(u.getStatus())) {
+            recordLogin(u.getId(), identifier, ipAddress, userAgent, false, "USER_" + u.getStatus());
             throw new ApiException(HttpStatus.FORBIDDEN, "Tài khoản bị khóa");
         }
         if (!encoder.matches(rawPassword, u.getPasswordHash())) {
+            recordLogin(u.getId(), identifier, ipAddress, userAgent, false, "BAD_PASSWORD");
             throw new ApiException(HttpStatus.UNAUTHORIZED, "Sai tên đăng nhập hoặc mật khẩu");
         }
+
+        recordLogin(u.getId(), identifier, ipAddress, userAgent, true, null);
+        events.publish("identity.user.login", u.getId(), "user", u.getId(),
+                Map.of("username", u.getUsername(), "role", u.getRole()));
         return u;
+    }
+
+    @Transactional
+    public void storeRefreshToken(String userId, String rawToken, long ttlSeconds, String ipAddress, String userAgent) {
+        refreshTokens.save(RefreshToken.builder()
+                .id(Ids.gen("rt"))
+                .userId(userId)
+                .tokenHash(sha256(rawToken))
+                .ipAddress(ipAddress)
+                .userAgent(userAgent)
+                .expiresAt(Instant.now().plusSeconds(ttlSeconds))
+                .createdAt(Instant.now())
+                .build());
+    }
+
+    @Transactional
+    public User verifyAndRotateRefreshToken(String rawToken, long ttlSeconds, String ipAddress, String userAgent) {
+        RefreshToken token = refreshTokens.findByTokenHash(sha256(rawToken))
+                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "Invalid refresh token"));
+        if (token.getRevokedAt() != null || token.getExpiresAt().isBefore(Instant.now())) {
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "Invalid refresh token");
+        }
+        User user = getById(token.getUserId());
+        if (!"ACTIVE".equals(user.getStatus())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Tài khoản bị khóa");
+        }
+        token.setRevokedAt(Instant.now());
+        refreshTokens.save(token);
+        return user;
+    }
+
+    @Transactional
+    public void revokeRefreshToken(String rawToken) {
+        if (rawToken == null || rawToken.isBlank()) return;
+        refreshTokens.findByTokenHash(sha256(rawToken)).ifPresent(t -> {
+            if (t.getRevokedAt() == null) {
+                t.setRevokedAt(Instant.now());
+                refreshTokens.save(t);
+            }
+        });
+    }
+
+    @Transactional
+    public void revokeAllRefreshTokens(String userId) {
+        Instant now = Instant.now();
+        List<RefreshToken> active = refreshTokens.findByUserIdAndRevokedAtIsNull(userId);
+        active.forEach(t -> t.setRevokedAt(now));
+        refreshTokens.saveAll(active);
+    }
+
+    private void recordLogin(String userId, String username, String ipAddress, String userAgent,
+                             boolean success, String failureReason) {
+        loginHistory.save(LoginHistory.builder()
+                .id(Ids.gen("lh"))
+                .userId(userId)
+                .username(username)
+                .ipAddress(ipAddress)
+                .userAgent(userAgent)
+                .success(success)
+                .failureReason(failureReason)
+                .createdAt(Instant.now())
+                .build());
     }
 
     // ---------- Quan hệ phụ huynh - học sinh (D1) ----------
@@ -194,6 +283,7 @@ public class UserService {
                 : newPassword;
         u.setPasswordHash(encoder.encode(pwd));
         users.save(u);
+        revokeAllRefreshTokens(u.getId());
         return pwd;
     }
 
@@ -215,6 +305,8 @@ public class UserService {
                 .tokenHash(sha256(raw))
                 .expiresAt(Instant.now().plus(30, ChronoUnit.MINUTES))
                 .build());
+        events.publish("identity.password.reset_requested", found.get().getId(), "user", found.get().getId(),
+                Map.of("username", found.get().getUsername(), "email", Optional.ofNullable(found.get().getEmail()).orElse("")));
         return raw;
     }
 
@@ -230,6 +322,29 @@ public class UserService {
         users.save(u);
         t.setUsedAt(Instant.now());
         resetTokens.save(t);
+        revokeAllRefreshTokens(u.getId());
+        events.publish("identity.password.reset_completed", u.getId(), "user", u.getId(),
+                Map.of("username", u.getUsername()));
+    }
+
+    @Transactional
+    public UserDevice registerDevice(String userId, RegisterDeviceRequest r) {
+        UserDevice device = devices.findByUserIdAndDeviceToken(userId, r.deviceToken())
+                .orElseGet(() -> UserDevice.builder()
+                        .id(Ids.gen("dev"))
+                        .userId(userId)
+                        .deviceToken(r.deviceToken())
+                        .createdAt(Instant.now())
+                        .build());
+        device.setPlatform(r.platform().toUpperCase());
+        device.setDeviceName(r.deviceName());
+        device.setActive(true);
+        device.setLastSeenAt(Instant.now());
+        return devices.save(device);
+    }
+
+    public List<UserDevice> activeDevices(String userId) {
+        return devices.findByUserIdAndActiveIsTrue(userId);
     }
 
     private String sha256(String s) {

@@ -9,6 +9,7 @@ import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.util.Date;
 import java.util.Map;
+import java.util.UUID;
 
 @Service
 public class JwtService {
@@ -27,6 +28,7 @@ public class JwtService {
     public String createAccessToken(String userId, String username, String role) {
         long now = System.currentTimeMillis();
         return Jwts.builder()
+                .id(UUID.randomUUID().toString())
                 .subject(userId)
                 .claims(Map.of("username", username, "role", role, "type", "access"))
                 .issuedAt(new Date(now))
@@ -38,6 +40,7 @@ public class JwtService {
     public String createRefreshToken(String userId) {
         long now = System.currentTimeMillis();
         return Jwts.builder()
+                .id(UUID.randomUUID().toString())
                 .subject(userId)
                 .claims(Map.of("type", "refresh"))
                 .issuedAt(new Date(now))

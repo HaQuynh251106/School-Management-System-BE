@@ -10,6 +10,8 @@ public final class IdentityDtos {
 
     public record RefreshRequest(@NotBlank String refreshToken) {}
 
+    public record LogoutRequest(String refreshToken) {}
+
     public record ForgotPasswordRequest(String email, String username) {}
 
     public record ResetPasswordRequest(@NotBlank String token, @NotBlank String newPassword) {}
@@ -43,4 +45,6 @@ public final class IdentityDtos {
     ) {}
 
     public record AdminResetPasswordRequest(String newPassword) {}
+
+    public record RegisterDeviceRequest(@NotBlank String deviceToken, @NotBlank String platform, String deviceName) {}
 }
