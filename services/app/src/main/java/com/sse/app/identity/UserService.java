@@ -201,7 +201,7 @@ public class UserService {
 
     /** Sinh reset token; trả token thô (DEV) hoặc null nếu không tìm thấy user (chống enumeration). */
     @Transactional
-    public String requestPasswordReset(String email, String username) {
+    public PasswordResetIssue requestPasswordReset(String email, String username) {
         Optional<User> found = Optional.empty();
         if (email != null && !email.isBlank())       found = users.findByEmail(email);
         if (found.isEmpty() && username != null && !username.isBlank())
@@ -215,8 +215,10 @@ public class UserService {
                 .tokenHash(sha256(raw))
                 .expiresAt(Instant.now().plus(30, ChronoUnit.MINUTES))
                 .build());
-        return raw;
+        return new PasswordResetIssue(raw, found.get().getEmail());
     }
+
+    public record PasswordResetIssue(String token, String email) {}
 
     @Transactional
     public void confirmPasswordReset(String rawToken, String newPassword) {

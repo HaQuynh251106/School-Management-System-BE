@@ -1,0 +1,27 @@
+spring:
+  flyway:
+    enabled: false
+  datasource:
+    url: jdbc:h2:mem:sse;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1
+    username: sa
+    password: ""
+    driver-class-name: org.h2.Driver
+
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+    hibernate:
+      ddl-auto: create-drop
+
+sse:
+  jwt:
+    secret: local-only-secret-change-me-0123456789-abcdef
+  seed:
+    enabled: true
+  cors:
+    allowed-origins: http://localhost:5173,http://127.0.0.1:5173
+  password-reset:
+    expose-token: true
+  payments:
+    mode: sandbox
+  storage:
+    path: ${java.io.tmpdir}/sse-uploads

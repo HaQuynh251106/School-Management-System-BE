@@ -66,6 +66,7 @@ public class FinanceController {
                                   @RequestParam(required = false) String parentId,
                                   @RequestParam(required = false) String status) {
         CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("ADMIN", "PARENT", "STUDENT");
         if (me.isParent()) {
             if (studentId != null) { users.assertParentOf(me.id(), studentId); }
             else parentId = me.id();
@@ -78,6 +79,7 @@ public class FinanceController {
     @GetMapping("/invoices/{id}")
     public Map<String, Object> invoiceDetail(@PathVariable String id) {
         CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("ADMIN", "PARENT", "STUDENT");
         Invoice inv = finance.getInvoice(id);
         if (me.isParent() && !me.id().equals(inv.getParentId())) {
             users.assertParentOf(me.id(), inv.getStudentId());
@@ -101,7 +103,14 @@ public class FinanceController {
 
     @GetMapping("/payments")
     public List<Payment> payments(@RequestParam String invoiceId) {
-        CurrentUserHolder.require();
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("ADMIN", "PARENT", "STUDENT");
+        Invoice inv = finance.getInvoice(invoiceId);
+        if (me.isParent() && !me.id().equals(inv.getParentId())) {
+            users.assertParentOf(me.id(), inv.getStudentId());
+        } else if (me.isStudent() && !me.id().equals(inv.getStudentId())) {
+            throw ApiException.forbidden("Không phải hóa đơn của bạn");
+        }
         return finance.paymentsOf(invoiceId);
     }
 }

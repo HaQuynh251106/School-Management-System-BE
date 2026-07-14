@@ -112,3 +112,31 @@ curl -X POST localhost:4000/auth/login -H 'Content-Type: application/json' \
 - **Thanh toán sandbox tự `SUCCESS`** thay cho gọi cổng VNPAY/MoMo + verify HMAC.
 - **File đính kèm** mới lưu *metadata tên file* (chưa nối MinIO presigned upload).
 - Mongo (audit/chat) chưa dùng.
+
+## Chạy demo không cần PostgreSQL
+
+Profile `local` dùng H2 trong bộ nhớ, tự tạo schema và seed dữ liệu mẫu. Dữ liệu được đặt lại khi dừng ứng dụng.
+
+```bash
+mvn -pl services/app spring-boot:run -Dspring-boot.run.profiles=local
+```
+
+## Chạy production
+
+Production dùng Flyway (`db/migration`), PostgreSQL và `ddl-auto=validate`; không tự seed dữ liệu và không có secret mặc định.
+
+```bash
+cp .env.example .env
+# thay toàn bộ password/secret/origin trong .env
+docker compose up --build -d
+```
+
+Các điểm vận hành:
+
+- Health: `/actuator/health`; metrics Prometheus: `/actuator/prometheus` (metrics yêu cầu JWT).
+- OpenAPI JSON: `/v3/api-docs`; Swagger UI: `/swagger-ui.html`.
+- File: `POST /files` multipart field `file`, tối đa 10 MB; `GET /files/{id}/content`.
+- Refresh token được lưu dạng hash, xoay vòng và bị thu hồi khi logout.
+- `SSE_PAYMENT_MODE=disabled` là mặc định production. Chỉ profile `local` dùng sandbox; hệ thống không ghi nhận thanh toán giả ở production.
+- Bật email reset bằng `SSE_MAIL_ENABLED=true` và cấu hình SMTP trong `.env.example`.
+- Dữ liệu upload và PostgreSQL được gắn persistent Docker volume.

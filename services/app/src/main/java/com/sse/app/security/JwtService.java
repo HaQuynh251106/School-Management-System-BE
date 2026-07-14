@@ -35,9 +35,10 @@ public class JwtService {
                 .compact();
     }
 
-    public String createRefreshToken(String userId) {
+    public String createRefreshToken(String userId, String tokenId) {
         long now = System.currentTimeMillis();
         return Jwts.builder()
+                .id(tokenId)
                 .subject(userId)
                 .claims(Map.of("type", "refresh"))
                 .issuedAt(new Date(now))

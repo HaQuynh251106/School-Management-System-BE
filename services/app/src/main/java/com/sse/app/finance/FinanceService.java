@@ -8,6 +8,7 @@ import com.sse.app.identity.UserDto;
 import com.sse.app.identity.UserService;
 import com.sse.app.notification.NotificationService;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
@@ -26,11 +27,13 @@ public class FinanceService {
     private final StructureService structure;
     private final UserService users;
     private final NotificationService notifications;
+    private final String paymentMode;
 
     public FinanceService(FeePeriodRepository periods, FeePeriodItemRepository periodItems,
                           InvoiceRepository invoices, InvoiceItemRepository invoiceItems,
                           PaymentRepository payments, StructureService structure,
-                          UserService users, NotificationService notifications) {
+                          UserService users, NotificationService notifications,
+                          @Value("${sse.payments.mode:disabled}") String paymentMode) {
         this.periods = periods;
         this.periodItems = periodItems;
         this.invoices = invoices;
@@ -39,6 +42,7 @@ public class FinanceService {
         this.structure = structure;
         this.users = users;
         this.notifications = notifications;
+        this.paymentMode = paymentMode;
     }
 
     // ---------- Đợt thu ----------
@@ -146,6 +150,10 @@ public class FinanceService {
     // ---------- Thanh toán (flowchart 2.9, sandbox tự succeed) ----------
     @Transactional
     public Map<String, Object> pay(PayRequest r) {
+        if (!"sandbox".equalsIgnoreCase(paymentMode)) {
+            throw ApiException.serviceUnavailable(
+                    "Cổng thanh toán chưa được cấu hình. Không có giao dịch nào được tạo.");
+        }
         Invoice inv = getInvoice(r.invoiceId());
         long remaining = inv.getTotalAmount() - inv.getPaidAmount();
         if (remaining <= 0) throw ApiException.badRequest("Hóa đơn đã thanh toán đủ");

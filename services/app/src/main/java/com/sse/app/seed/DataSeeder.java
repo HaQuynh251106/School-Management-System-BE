@@ -37,7 +37,7 @@ import java.util.List;
  */
 @Slf4j
 @Configuration
-@ConditionalOnProperty(name = "sse.seed.enabled", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(name = "sse.seed.enabled", havingValue = "true")
 public class DataSeeder {
 
     @Bean

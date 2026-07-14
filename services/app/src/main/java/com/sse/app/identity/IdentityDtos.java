@@ -1,6 +1,8 @@
 package com.sse.app.identity;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 
 /** Gom các request DTO của phân hệ identity. */
 public final class IdentityDtos {
@@ -9,17 +11,18 @@ public final class IdentityDtos {
     public record LoginRequest(@NotBlank String username, @NotBlank String password) {}
 
     public record RefreshRequest(@NotBlank String refreshToken) {}
+    public record LogoutRequest(String refreshToken) {}
 
     public record ForgotPasswordRequest(String email, String username) {}
 
-    public record ResetPasswordRequest(@NotBlank String token, @NotBlank String newPassword) {}
+    public record ResetPasswordRequest(@NotBlank String token, @NotBlank @Size(min = 8, max = 128) String newPassword) {}
 
     public record CreateUserRequest(
             String id,
             @NotBlank String username,
-            @NotBlank String password,
+            @NotBlank @Size(min = 8, max = 128) String password,
             @NotBlank String fullName,
-            @NotBlank String role,
+            @NotBlank @Pattern(regexp = "ADMIN|TEACHER|STUDENT|PARENT") String role,
             String email,
             String phone,
             String avatarUrl,
@@ -42,5 +45,5 @@ public final class IdentityDtos {
             String className
     ) {}
 
-    public record AdminResetPasswordRequest(String newPassword) {}
+    public record AdminResetPasswordRequest(@Size(min = 8, max = 128) String newPassword) {}
 }

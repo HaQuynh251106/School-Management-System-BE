@@ -13,14 +13,14 @@ spring:
   # PostgreSQL local (Homebrew). Override bằng biến môi trường khi cần.
   datasource:
     url: ${SSE_DB_URL:jdbc:postgresql://localhost:5432/sse_db}
-    username: ${SSE_DB_USER:a1234}
-    password: ${SSE_DB_PASSWORD:}
+    username: ${SSE_DB_USER:sse}
+    password: ${SSE_DB_PASSWORD}
     driver-class-name: org.postgresql.Driver
 
   jpa:
     hibernate:
-      # Hibernate tự tạo/cập nhật schema từ entity (DEV). Production nên chuyển sang Flyway.
-      ddl-auto: update
+      # Production schema must be managed by versioned migrations.
+      ddl-auto: validate
     open-in-view: false
     show-sql: false
     properties:
@@ -33,17 +33,68 @@ spring:
     default-property-inclusion: always
     serialization:
       write-dates-as-timestamps: false
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
+  mail:
+    host: ${SSE_MAIL_HOST:localhost}
+    port: ${SSE_MAIL_PORT:587}
+    username: ${SSE_MAIL_USERNAME:}
+    password: ${SSE_MAIL_PASSWORD:}
+    properties:
+      mail.smtp.auth: ${SSE_MAIL_AUTH:true}
+      mail.smtp.starttls.enable: ${SSE_MAIL_STARTTLS:true}
 
 sse:
   jwt:
-    # Đổi secret khi deploy. Tối thiểu 32 bytes cho HS256.
-    secret: ${SSE_JWT_SECRET:dev-secret-do-not-use-in-prod-change-me-please-0123456789}
+    # Required outside local/test. Use a secret manager in production.
+    secret: ${SSE_JWT_SECRET}
     access-ttl-seconds: 3600
     refresh-ttl-seconds: 604800
   seed:
-    enabled: true   # seed dữ liệu mẫu (khớp mock-server) nếu DB rỗng
+    enabled: ${SSE_SEED_ENABLED:false}
+  cors:
+    allowed-origins: ${SSE_CORS_ALLOWED_ORIGINS}
+  password-reset:
+    expose-token: false
+  payments:
+    # Production must configure a verified gateway adapter before enabling payments.
+    mode: ${SSE_PAYMENT_MODE:disabled}
+  storage:
+    path: ${SSE_STORAGE_PATH:/data/sse/uploads}
+  mail:
+    enabled: ${SSE_MAIL_ENABLED:false}
+    from: ${SSE_MAIL_FROM:no-reply@smartschool.local}
+    reset-url: ${SSE_PASSWORD_RESET_URL:http://localhost:5173/reset-password}
 
 logging:
   level:
     com.sse.app: INFO
     org.hibernate.SQL: WARN
+
+management:
+  health:
+    mail:
+      enabled: ${SSE_MAIL_ENABLED:false}
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  info:
+    env:
+      enabled: true
+
+info:
+  app:
+    name: Smart School Ecosystem
+    version: 0.1.0
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
