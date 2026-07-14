@@ -143,13 +143,14 @@ public class DataSeeder {
     // ---------- Grades + exam categories ----------
     private void seedGrades(GradeService grades) {
         var cats = List.of(
-                cat("ec-oral", "ORAL", "Miệng", 1), cat("ec-15m", "15M", "15 phút", 1),
-                cat("ec-mid", "MID", "Giữa kỳ", 2), cat("ec-final", "FINAL", "Cuối kỳ", 3));
+                cat("ec-oral", "ORAL", "Miệng", 1, 1), cat("ec-15m", "15M", "15 phút", 1, 1),
+                cat("ec-mid", "MID", "Giữa kỳ", 2, 1), cat("ec-final", "FINAL", "Cuối kỳ", 3, 1));
 
         var list = List.of(
                 grade("g-1", "u-student-1", "sj-math", "Toán", "ORAL", "Miệng", 9.0, "2025-09-15T08:00:00Z"),
                 grade("g-2", "u-student-1", "sj-math", "Toán", "15M", "15 phút", 8.5, "2025-09-20T08:00:00Z"),
                 grade("g-3", "u-student-1", "sj-math", "Toán", "MID", "Giữa kỳ", 7.5, "2025-10-25T08:00:00Z"),
+                grade("g-13", "u-student-1", "sj-math", "Toán", "FINAL", "Cuối kỳ", 8.0, "2025-12-20T08:00:00Z"),
                 grade("g-4", "u-student-1", "sj-phys", "Vật lý", "ORAL", "Miệng", 8.0, "2025-09-16T08:00:00Z"),
                 grade("g-5", "u-student-1", "sj-phys", "Vật lý", "MID", "Giữa kỳ", 8.8, "2025-10-26T08:00:00Z"),
                 grade("g-6", "u-student-1", "sj-eng", "Tiếng Anh", "ORAL", "Miệng", 7.0, "2025-09-17T08:00:00Z"),
@@ -273,14 +274,21 @@ public class DataSeeder {
                 .periodNo(period).startTime(start).endTime(end).semesterId("sm-2025-1").build();
     }
 
-    private static ExamCategory cat(String id, String code, String name, double weight) {
-        return ExamCategory.builder().id(id).code(code).name(name).weight(weight).build();
+    private static ExamCategory cat(String id, String code, String name, double weight, int requiredCount) {
+        return ExamCategory.builder().id(id).code(code).name(name).weight(weight)
+                .requiredCount(requiredCount).build();
     }
 
     private static Grade grade(String id, String studentId, String subjectId, String subjectName,
                                String cat, String catName, double score, String recordedAt) {
+        return grade(id, studentId, subjectId, subjectName, cat, catName, 1, score, recordedAt);
+    }
+
+    private static Grade grade(String id, String studentId, String subjectId, String subjectName,
+                               String cat, String catName, int assessmentIndex, double score, String recordedAt) {
         return Grade.builder().id(id).studentId(studentId).subjectId(subjectId).subjectName(subjectName)
-                .semesterId("sm-2025-1").category(cat).categoryName(catName).score(score)
+                .semesterId("sm-2025-1").category(cat).categoryName(catName)
+                .assessmentIndex(assessmentIndex).score(score)
                 .recordedAt(Instant.parse(recordedAt)).build();
     }
 

@@ -9,8 +9,8 @@ interface GradeRepository extends JpaRepository<Grade, String> {
     List<Grade> findByStudentId(String studentId);
     List<Grade> findByStudentIdAndSemesterId(String studentId, String semesterId);
     List<Grade> findBySubjectIdAndSemesterId(String subjectId, String semesterId);
-    Optional<Grade> findByStudentIdAndSubjectIdAndSemesterIdAndCategory(
-            String studentId, String subjectId, String semesterId, String category);
+    Optional<Grade> findByStudentIdAndSubjectIdAndSemesterIdAndCategoryAndAssessmentIndex(
+            String studentId, String subjectId, String semesterId, String category, Integer assessmentIndex);
 }
 
 interface GradeChangeLogRepository extends JpaRepository<GradeChangeLog, String> {

@@ -22,6 +22,7 @@ public class AssignmentSubmission {
     private String status;
     @Column(length = 4000)
     private String content;
+    private String attachmentFileId;
     private String attachmentName;
     private Instant submittedAt;
     private Double score;

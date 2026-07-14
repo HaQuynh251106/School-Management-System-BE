@@ -9,9 +9,9 @@ public final class AssignmentDtos {
 
     public record CreateAssignmentRequest(
             String id, @NotBlank String classId, @NotBlank String subjectId, @NotBlank String title,
-            String description, Instant deadline, Boolean allowLate, String attachmentName, Boolean publishNow) {}
+            String description, Instant deadline, Boolean allowLate, String attachmentFileId, Boolean publishNow) {}
 
-    public record SubmitRequest(String content, String attachmentName) {}
+    public record SubmitRequest(String content, String attachmentFileId) {}
 
     public record GradeSubmissionRequest(Double score, String feedback) {}
 }

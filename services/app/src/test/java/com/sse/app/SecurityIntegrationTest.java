@@ -13,7 +13,10 @@ import org.springframework.mock.web.MockMultipartFile;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -33,6 +36,18 @@ class SecurityIntegrationTest {
 
         mvc.perform(get("/users"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void mobileWebPreviewOriginCanCallTheAuthenticationApi() throws Exception {
+        String mobileOrigin = "http://127.0.0.1:8080";
+
+        mvc.perform(options("/auth/login")
+                        .header("Origin", mobileOrigin)
+                        .header("Access-Control-Request-Method", "POST")
+                        .header("Access-Control-Request-Headers", "content-type"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Access-Control-Allow-Origin", mobileOrigin));
     }
 
     @Test
@@ -125,6 +140,123 @@ class SecurityIntegrationTest {
                 .andExpect(status().isOk());
     }
 
+    @Test
+    void gradeCreateUpdateAndAuditFlowIsVersionSafe() throws Exception {
+        String teacher = login("gv.hoa", "teacher@123");
+
+        String createdResponse = mvc.perform(post("/grades")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"studentId":"u-student-2","subjectId":"sj-math","semesterId":"sm-2025-1",
+                                 "category":"FINAL","assessmentIndex":1,"score":7.5,"note":"Lần đầu"}
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.assessmentIndex").value(1))
+                .andExpect(jsonPath("$.createdBy").value("u-teacher-1"))
+                .andReturn().getResponse().getContentAsString();
+        JsonNode created = body(createdResponse);
+        String gradeId = created.path("id").asText();
+        long version = created.path("version").asLong();
+
+        mvc.perform(post("/grades")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"studentId":"u-student-2","subjectId":"sj-math","semesterId":"sm-2025-1",
+                                 "category":"FINAL","assessmentIndex":1,"score":8.0}
+                                """))
+                .andExpect(status().isConflict());
+
+        mvc.perform(put("/grades/{id}", gradeId)
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(new GradeUpdate(8.0, "Sau phúc khảo", "Phúc khảo", version))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.score").value(8.0))
+                .andExpect(jsonPath("$.updatedBy").value("u-teacher-1"));
+
+        mvc.perform(put("/grades/{id}", gradeId)
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(new GradeUpdate(8.5, null, "Bản sửa cũ", version))))
+                .andExpect(status().isConflict());
+
+        mvc.perform(get("/grades/{id}/change-logs", gradeId)
+                        .header("Authorization", "Bearer " + teacher))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].action").value("UPDATE"))
+                .andExpect(jsonPath("$[1].action").value("CREATE"));
+    }
+
+    @Test
+    void teacherCanAttachAFileAndStudentCanSubmitAFile() throws Exception {
+        String teacher = login("gv.hoa", "teacher@123");
+        String assignmentFileId = upload(teacher, "de-bai.pdf", "application/pdf", "%PDF-assignment");
+
+        String assignmentResponse = mvc.perform(post("/assignments")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"classId":"c-10a1","subjectId":"sj-math","title":"Bài tập có tệp đính kèm",
+                                 "description":"Hoàn thành toàn bộ câu hỏi trong đề.","allowLate":true,
+                                 "attachmentFileId":"%s","publishNow":true}
+                                """.formatted(assignmentFileId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.attachmentName").value("de-bai.pdf"))
+                .andReturn().getResponse().getContentAsString();
+        String assignmentId = body(assignmentResponse).path("id").asText();
+
+        String student = login("hs.an", "student@123");
+        String submissionFileId = upload(student, "bai-lam.pdf", "application/pdf", "%PDF-submission");
+        mvc.perform(post("/assignments/{id}/submit", assignmentId)
+                        .header("Authorization", "Bearer " + student)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"content":"Em gửi bài làm.","attachmentFileId":"%s"}
+                                """.formatted(submissionFileId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.attachmentName").value("bai-lam.pdf"))
+                .andExpect(jsonPath("$.status").value("SUBMITTED"));
+
+        mvc.perform(get("/assignments/{id}/submissions", assignmentId)
+                        .header("Authorization", "Bearer " + teacher))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].attachmentFileId").value(submissionFileId));
+    }
+
+    @Test
+    void teacherGradeWritesUseMainSubjectAndRejectDuplicateBulkStudents() throws Exception {
+        String teacher = login("gv.hoa", "teacher@123");
+
+        mvc.perform(get("/me/gradebook-context")
+                        .queryParam("classId", "c-10a1")
+                        .queryParam("semesterId", "sm-2025-1")
+                        .header("Authorization", "Bearer " + teacher))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.subjectId").value("sj-math"))
+                .andExpect(jsonPath("$.subjectName").value("Toán"));
+
+        mvc.perform(post("/grades")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"studentId":"u-student-2","subjectId":"sj-eng","semesterId":"sm-2025-1",
+                                 "category":"MID","assessmentIndex":1,"score":8.0}
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.subjectId").value("sj-math"));
+
+        mvc.perform(post("/grades/bulk")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"classId":"c-10a1","semesterId":"sm-2025-1","category":"MID","assessmentIndex":1,
+                                 "entries":[{"studentId":"u-student-1","score":8.0},{"studentId":"u-student-1","score":8.5}]}
+                                """))
+                .andExpect(status().isBadRequest());
+    }
+
     private String login(String username, String password) throws Exception {
         return loginBody(username, password).path("accessToken").asText();
     }
@@ -142,6 +274,16 @@ class SecurityIntegrationTest {
         return json.readTree(value);
     }
 
+    private String upload(String token, String name, String contentType, String content) throws Exception {
+        MockMultipartFile file = new MockMultipartFile("file", name, contentType, content.getBytes());
+        String response = mvc.perform(multipart("/files").file(file)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        return body(response).path("id").asText();
+    }
+
     private record Login(String username, String password) {}
     private record Refresh(String refreshToken) {}
+    private record GradeUpdate(Double score, String note, String reason, Long expectedVersion) {}
 }

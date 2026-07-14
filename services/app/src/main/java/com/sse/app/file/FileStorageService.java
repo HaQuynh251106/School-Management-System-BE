@@ -57,6 +57,14 @@ public class FileStorageService {
         return repository.findById(id).orElseThrow(() -> ApiException.notFound("Tệp"));
     }
 
+    public StoredFile ownedMetadata(String id, String userId) {
+        StoredFile file = metadata(id);
+        if (!file.getUploadedBy().equals(userId)) {
+            throw ApiException.forbidden("Không có quyền sử dụng tệp này");
+        }
+        return file;
+    }
+
     public Resource content(StoredFile file) {
         try {
             Resource resource = new UrlResource(root.resolve(file.getStorageName()).toUri());

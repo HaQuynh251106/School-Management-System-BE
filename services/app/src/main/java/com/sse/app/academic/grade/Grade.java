@@ -22,7 +22,17 @@ public class Grade {
     /** ORAL | 15M | MID | FINAL */
     private String category;
     private String categoryName;
+    /** Vị trí đầu điểm trong cùng loại, bắt đầu từ 1 (vd. Miệng 1..3). */
+    @Builder.Default
+    private Integer assessmentIndex = 1;
     private Double score;
     private String note;
     private Instant recordedAt;
+    private Instant createdAt;
+    private String createdBy;
+    private Instant updatedAt;
+    private String updatedBy;
+    @Version
+    @Builder.Default
+    private Long version = 0L;
 }

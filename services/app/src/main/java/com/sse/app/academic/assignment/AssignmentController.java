@@ -47,20 +47,21 @@ public class AssignmentController {
     public Assignment create(@Valid @RequestBody CreateAssignmentRequest r) {
         CurrentUser me = CurrentUserHolder.require();
         CurrentUserHolder.requireRole("TEACHER", "ADMIN");
-        return assignments.create(r, me.id());
+        return assignments.create(r, me.id(), me.role());
     }
 
     @PostMapping("/assignments/{id}/publish")
     public Assignment publish(@PathVariable String id) {
         CurrentUser me = CurrentUserHolder.require();
         CurrentUserHolder.requireRole("TEACHER", "ADMIN");
-        return assignments.publish(id, me.id());
+        return assignments.publish(id, me.id(), me.role());
     }
 
     @GetMapping("/assignments/{id}/submissions")
     public List<AssignmentSubmission> submissions(@PathVariable String id) {
+        CurrentUser me = CurrentUserHolder.require();
         CurrentUserHolder.requireRole("TEACHER", "ADMIN");
-        return assignments.submissionsOf(id);
+        return assignments.submissionsOf(id, me.id(), me.role());
     }
 
     @PostMapping("/assignments/{id}/submit")
@@ -74,7 +75,7 @@ public class AssignmentController {
     public AssignmentSubmission grade(@PathVariable String id, @Valid @RequestBody GradeSubmissionRequest r) {
         CurrentUser me = CurrentUserHolder.require();
         CurrentUserHolder.requireRole("TEACHER", "ADMIN");
-        return assignments.grade(id, r, me.id());
+        return assignments.grade(id, r, me.id(), me.role());
     }
 
     @GetMapping("/me/submissions")

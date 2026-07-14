@@ -87,6 +87,15 @@ public class StructureService {
         return subjects.findById(subjectId).map(Subject::getName).orElse(null);
     }
 
+    public String requireSubjectName(String subjectId) {
+        return subjects.findById(subjectId).map(Subject::getName)
+                .orElseThrow(() -> ApiException.notFound("Môn học"));
+    }
+
+    public void assertSemesterExists(String semesterId) {
+        if (!semesters.existsById(semesterId)) throw ApiException.notFound("Học kỳ");
+    }
+
     /** Cross-domain (finance): bậc khối của lớp, null-safe. */
     public String gradeLevelOf(String classId) {
         if (classId == null) return null;

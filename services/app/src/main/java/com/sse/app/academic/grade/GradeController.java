@@ -7,6 +7,7 @@ import com.sse.app.identity.UserService;
 import com.sse.app.security.CurrentUser;
 import com.sse.app.security.CurrentUserHolder;
 import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -37,6 +38,8 @@ public class GradeController {
         } else if (me.isParent()) {
             if (studentId == null) throw ApiException.badRequest("Thiếu studentId (chọn con)");
             users.assertParentOf(me.id(), studentId);
+        } else if (me.isTeacher() && classId != null && semesterId != null) {
+            subjectId = grades.teacherGradebookContext(me.id(), classId, semesterId).subjectId();
         }
         Set<String> studentIds = null;
         if (classId != null) {
@@ -50,7 +53,30 @@ public class GradeController {
     public List<Grade> bulk(@Valid @RequestBody BulkGradeRequest req) {
         CurrentUser me = CurrentUserHolder.require();
         CurrentUserHolder.requireRole("TEACHER", "ADMIN");
-        return grades.bulkUpsert(req, me.id());
+        return grades.bulkUpsert(req, me.id(), me.role());
+    }
+
+    @GetMapping("/me/gradebook-context")
+    public TeacherGradebookContext teacherGradebookContext(@RequestParam String classId,
+                                                           @RequestParam String semesterId) {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("TEACHER");
+        return grades.teacherGradebookContext(me.id(), classId, semesterId);
+    }
+
+    @PostMapping("/grades")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Grade create(@Valid @RequestBody CreateGradeRequest req) {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        return grades.create(req, me.id(), me.role());
+    }
+
+    @PutMapping("/grades/{id}")
+    public Grade update(@PathVariable String id, @Valid @RequestBody UpdateGradeRequest req) {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        return grades.update(id, req, me.id(), me.role());
     }
 
     @GetMapping("/grades/{id}/change-logs")

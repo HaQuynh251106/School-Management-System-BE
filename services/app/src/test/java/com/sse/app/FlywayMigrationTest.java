@@ -8,13 +8,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class FlywayMigrationTest {
 
     @Test
-    void initialMigrationBuildsAnEmptyDatabase() {
+    void migrationsBuildAnEmptyDatabase() {
         Flyway flyway = Flyway.configure()
                 .dataSource("jdbc:h2:mem:flyway;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1", "sa", "")
                 .locations("classpath:db/migration")
                 .load();
 
-        assertEquals(1, flyway.migrate().migrationsExecuted);
-        assertEquals(1, flyway.info().applied().length);
+        assertEquals(5, flyway.migrate().migrationsExecuted);
+        assertEquals(5, flyway.info().applied().length);
     }
 }

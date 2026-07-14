@@ -13,6 +13,8 @@ public class GradeChangeLog {
     @Id
     private String id;
     private String gradeId;
+    /** CREATE | UPDATE */
+    private String action;
     private Double oldScore;
     private Double newScore;
     private String oldNote;

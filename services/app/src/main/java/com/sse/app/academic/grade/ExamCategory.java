@@ -14,4 +14,7 @@ public class ExamCategory {
     private String code;        // ORAL | 15M | MID | FINAL
     private String name;        // Miệng | 15 phút | Giữa kỳ | Cuối kỳ
     private double weight;      // hệ số (vd 1, 1, 2, 3)
+    /** Số đầu điểm bắt buộc của loại này trong một học kỳ. */
+    @Builder.Default
+    private int requiredCount = 1;
 }

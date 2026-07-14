@@ -27,6 +27,11 @@ public class Assignment {
     private String status;
     private Instant deadline;
     private boolean allowLate;
-    private String attachmentName;   // metadata file đính kèm (S4) — bản đơn giản hoá
+    private String attachmentFileId;
+    private String attachmentName;
     private Instant createdAt;
+    @Transient
+    private int submissionCount;
+    @Transient
+    private int studentCount;
 }
