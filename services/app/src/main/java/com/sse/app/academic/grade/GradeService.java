@@ -1,6 +1,7 @@
 package com.sse.app.academic.grade;
 
 import com.sse.app.academic.structure.StructureService;
+import com.sse.app.academic.structure.SchoolClass;
 import com.sse.app.academic.timetable.TimetableService;
 import com.sse.app.academic.grade.GradeDtos.*;
 import com.sse.app.common.ApiException;
@@ -51,29 +52,51 @@ public class GradeService {
     public TeacherGradebookContext teacherGradebookContext(String teacherId, String classId, String semesterId) {
         User teacher = users.getById(teacherId);
         if (!"TEACHER".equals(teacher.getRole())) throw ApiException.forbidden("Tài khoản không phải giáo viên");
-        structure.getClass(classId);
+        SchoolClass schoolClass = structure.getClass(classId);
         structure.assertSemesterExists(semesterId);
 
-        LinkedHashMap<String, String> assignedSubjects = new LinkedHashMap<>();
-        timetable.list(classId, null, semesterId, null).stream()
-                .filter(slot -> teacherId.equals(slot.getTeacherId()))
-                .forEach(slot -> assignedSubjects.putIfAbsent(slot.getSubjectId(), slot.getSubjectName()));
-        if (assignedSubjects.isEmpty()) {
-            throw ApiException.forbidden("Giáo viên không được phân công dạy lớp này trong học kỳ đã chọn");
+        boolean homeroomTeacher = teacherId.equals(schoolClass.getHomeroomTeacherId());
+        String mainSubject = clean(teacher.getMainSubject());
+        LinkedHashMap<String, GradebookSubject> allSubjects = new LinkedHashMap<>();
+        timetable.list(classId, null, semesterId, null).forEach(slot -> {
+            boolean editable = teacherId.equals(slot.getTeacherId())
+                    && matchesSubject(mainSubject, slot.getSubjectId(), slot.getSubjectName());
+            GradebookSubject candidate = new GradebookSubject(
+                    slot.getSubjectId(), slot.getSubjectName(), slot.getTeacherName(), editable);
+            allSubjects.merge(slot.getSubjectId(), candidate, (existing, next) ->
+                    new GradebookSubject(existing.subjectId(), existing.subjectName(),
+                            existing.teacherName() != null ? existing.teacherName() : next.teacherName(),
+                            existing.editable() || next.editable()));
+        });
+
+        List<GradebookSubject> accessibleSubjects = allSubjects.values().stream()
+                .filter(subject -> homeroomTeacher || subject.editable())
+                .toList();
+        if (accessibleSubjects.isEmpty()) {
+            throw ApiException.forbidden(homeroomTeacher
+                    ? "Lớp chủ nhiệm chưa có môn học trong thời khóa biểu của học kỳ đã chọn"
+                    : "Giáo viên không được phân công dạy môn chuyên ngành tại lớp này trong học kỳ đã chọn");
         }
 
-        String mainSubject = clean(teacher.getMainSubject());
-        String subjectId = assignedSubjects.entrySet().stream()
-                .filter(entry -> mainSubject != null && (entry.getKey().equalsIgnoreCase(mainSubject)
-                        || entry.getValue().equalsIgnoreCase(mainSubject)))
-                .map(java.util.Map.Entry::getKey)
+        GradebookSubject defaultSubject = accessibleSubjects.stream()
+                .filter(GradebookSubject::editable)
                 .findFirst()
-                .orElse(null);
-        if (subjectId == null && assignedSubjects.size() == 1) subjectId = assignedSubjects.keySet().iterator().next();
-        if (subjectId == null) {
-            throw ApiException.badRequest("Chưa xác định được môn mặc định của giáo viên trong lớp này");
-        }
-        return new TeacherGradebookContext(classId, semesterId, subjectId, assignedSubjects.get(subjectId));
+                .orElse(accessibleSubjects.get(0));
+        return new TeacherGradebookContext(classId, semesterId,
+                defaultSubject.subjectId(), defaultSubject.subjectName(), homeroomTeacher,
+                defaultSubject.editable(), accessibleSubjects);
+    }
+
+    public String resolveTeacherViewSubject(String teacherId, String classId, String semesterId,
+                                            String requestedSubjectId) {
+        TeacherGradebookContext context = teacherGradebookContext(teacherId, classId, semesterId);
+        String subjectId = clean(requestedSubjectId);
+        if (subjectId == null) return context.subjectId();
+        return context.subjects().stream()
+                .filter(subject -> subject.subjectId().equals(subjectId))
+                .map(GradebookSubject::subjectId)
+                .findFirst()
+                .orElseThrow(() -> ApiException.forbidden("Bạn không có quyền xem bảng điểm môn này của lớp đã chọn"));
     }
 
     @Transactional
@@ -244,12 +267,12 @@ public class GradeService {
         structure.assertSemesterExists(semesterId);
         String subjectName = structure.requireSubjectName(subjectId);
 
-        if (!"ADMIN".equals(actorRole)) {
-            boolean assigned = timetable.list(null, actorId, null, null).stream().anyMatch(slot ->
-                    Objects.equals(slot.getClassId(), student.getClassId())
-                            && Objects.equals(slot.getSubjectId(), subjectId)
-                            && (slot.getSemesterId() == null || Objects.equals(slot.getSemesterId(), semesterId)));
-            if (!assigned) throw ApiException.forbidden("Giáo viên không phụ trách môn/lớp của học sinh này");
+        if ("TEACHER".equals(actorRole)) {
+            boolean editable = teacherGradebookContext(actorId, student.getClassId(), semesterId).subjects().stream()
+                    .anyMatch(subject -> subject.subjectId().equals(subjectId) && subject.editable());
+            if (!editable) {
+                throw ApiException.forbidden("Giáo viên chỉ được sửa điểm môn chuyên ngành mình được phân công giảng dạy");
+            }
         }
         return subjectName;
     }
@@ -258,7 +281,17 @@ public class GradeService {
                                     String semesterId, String requestedSubjectId) {
         if ("TEACHER".equals(actorRole)) {
             if (classId == null || classId.isBlank()) throw ApiException.badRequest("Thiếu lớp học để xác định môn mặc định");
-            return teacherGradebookContext(actorId, classId, semesterId).subjectId();
+            TeacherGradebookContext context = teacherGradebookContext(actorId, classId, semesterId);
+            String requested = clean(requestedSubjectId);
+            String subjectId = requested == null ? context.subjectId() : requested;
+            GradebookSubject selected = context.subjects().stream()
+                    .filter(subject -> subject.subjectId().equals(subjectId))
+                    .findFirst()
+                    .orElseThrow(() -> ApiException.forbidden("Bạn không có quyền truy cập môn học này"));
+            if (!selected.editable()) {
+                throw ApiException.forbidden("Giáo viên chủ nhiệm chỉ được xem, không được sửa điểm môn ngoài chuyên ngành");
+            }
+            return selected.subjectId();
         }
         if (requestedSubjectId == null || requestedSubjectId.isBlank()) {
             throw ApiException.badRequest("Thiếu môn học");
@@ -307,6 +340,11 @@ public class GradeService {
         if (value == null) return null;
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private boolean matchesSubject(String mainSubject, String subjectId, String subjectName) {
+        return mainSubject != null && ((subjectId != null && subjectId.equalsIgnoreCase(mainSubject))
+                || (subjectName != null && subjectName.equalsIgnoreCase(mainSubject)));
     }
 
     private String reason(String value, String fallback) {

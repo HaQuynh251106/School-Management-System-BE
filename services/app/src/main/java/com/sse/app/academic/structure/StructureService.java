@@ -4,7 +4,9 @@ import com.sse.app.common.ApiException;
 import com.sse.app.common.Ids;
 import com.sse.app.academic.structure.StructureDtos.*;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
 
 /** A2: Quản trị cơ cấu đào tạo. Là điểm truy cập chéo-domain cho academic.structure. */
@@ -68,7 +70,28 @@ public class StructureService {
                 .id(orGen(r.id(), "c")).code(r.code())
                 .name(r.name() == null ? "Lớp " + r.code() : r.name())
                 .gradeLevel(r.gradeLevel()).academicYearId(r.academicYearId())
-                .homeroomTeacherId(r.homeroomTeacherId()).studentCount(0).build());
+                .studentCount(0).build());
+    }
+
+    @Transactional
+    public SchoolClass assignHomeroomTeacher(String classId, String teacherId,
+                                             String teacherName, String assignedBy) {
+        SchoolClass schoolClass = getClass(classId);
+        schoolClass.setHomeroomTeacherId(teacherId);
+        schoolClass.setHomeroomTeacherName(teacherName);
+        schoolClass.setHomeroomAssignedAt(Instant.now());
+        schoolClass.setHomeroomAssignedBy(assignedBy);
+        return classes.save(schoolClass);
+    }
+
+    @Transactional
+    public SchoolClass clearHomeroomTeacher(String classId) {
+        SchoolClass schoolClass = getClass(classId);
+        schoolClass.setHomeroomTeacherId(null);
+        schoolClass.setHomeroomTeacherName(null);
+        schoolClass.setHomeroomAssignedAt(null);
+        schoolClass.setHomeroomAssignedBy(null);
+        return classes.save(schoolClass);
     }
 
     public List<SchoolClass> classesOfHomeroom(String teacherId) {

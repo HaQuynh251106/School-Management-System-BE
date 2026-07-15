@@ -1,6 +1,7 @@
 package com.sse.app.identity;
 
 import com.sse.app.identity.IdentityDtos.*;
+import com.sse.app.common.ApiException;
 import com.sse.app.security.CurrentUserHolder;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
@@ -24,12 +25,22 @@ public class UserController {
                               @RequestParam(required = false) String q,
                               @RequestParam(required = false) String classId) {
         CurrentUserHolder.requireRole("ADMIN", "TEACHER");
-        return users.list(role, q, classId);
+        var current = CurrentUserHolder.require();
+        return current.isAdmin()
+                ? users.list(role, q, classId)
+                : users.listSummaries(role, q, classId);
     }
 
     @GetMapping("/{id}")
     public UserDto get(@PathVariable String id) {
-        CurrentUserHolder.require();
+        var current = CurrentUserHolder.require();
+        if (!current.isAdmin() && !current.id().equals(id)) {
+            if (current.isParent()) {
+                users.assertParentOf(current.id(), id);
+            } else {
+                throw ApiException.forbidden("Không có quyền xem hồ sơ người dùng này");
+            }
+        }
         return users.dtoById(id);
     }
 

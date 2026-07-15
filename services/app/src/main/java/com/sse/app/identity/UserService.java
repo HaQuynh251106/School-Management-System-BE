@@ -50,7 +50,22 @@ public class UserService {
                 u.getId(), u.getUsername(), u.getFullName(), u.getRole(), u.getStatus(),
                 u.getEmail(), u.getPhone(), u.getAvatarUrl(),
                 u.getStudentCode(), u.getClassName(), u.getClassId(),
+                u.getDateOfBirth(), u.getGender(), u.getPlaceOfBirth(),
+                u.getEthnicity(), u.getNationality(), u.getAddress(),
+                u.getEnrollmentDate(), u.getGuardianName(), u.getGuardianPhone(),
                 u.getTeacherCode(), u.getMainSubject(), childrenIds);
+    }
+
+    /** Thông tin an toàn để dùng trong danh sách/lựa chọn, không lộ dữ liệu hồ sơ cá nhân. */
+    public UserDto toSummaryDto(User u) {
+        return new UserDto(
+                u.getId(), u.getUsername(), u.getFullName(), u.getRole(), u.getStatus(),
+                null, null, u.getAvatarUrl(),
+                u.getStudentCode(), u.getClassName(), u.getClassId(),
+                null, null, null,
+                null, null, null,
+                null, null, null,
+                u.getTeacherCode(), u.getMainSubject(), null);
     }
 
     public UserDto dtoById(String id) {
@@ -109,6 +124,18 @@ public class UserService {
     // ---------- Quản trị người dùng (A1) ----------
 
     public List<UserDto> list(String role, String q, String classId) {
+        return filteredUsers(role, q, classId).stream()
+                .map(this::toDto)
+                .toList();
+    }
+
+    public List<UserDto> listSummaries(String role, String q, String classId) {
+        return filteredUsers(role, q, classId).stream()
+                .map(this::toSummaryDto)
+                .toList();
+    }
+
+    private List<User> filteredUsers(String role, String q, String classId) {
         List<User> base;
         if (role != null && !role.isBlank()) base = users.findByRole(role);
         else if (classId != null && !classId.isBlank()) base = users.findByClassId(classId);
@@ -118,7 +145,6 @@ public class UserService {
         return base.stream()
                 .filter(u -> classId == null || classId.isBlank() || classId.equals(u.getClassId()))
                 .filter(u -> needle == null || needle.isEmpty() || matches(u, needle))
-                .map(this::toDto)
                 .toList();
     }
 
@@ -158,6 +184,15 @@ public class UserService {
                 .studentCode(studentCode)
                 .classId(r.classId())
                 .className(r.className())
+                .dateOfBirth(r.dateOfBirth())
+                .gender(r.gender())
+                .placeOfBirth(r.placeOfBirth())
+                .ethnicity(r.ethnicity())
+                .nationality(r.nationality())
+                .address(r.address())
+                .enrollmentDate(r.enrollmentDate())
+                .guardianName(r.guardianName())
+                .guardianPhone(r.guardianPhone())
                 .createdAt(Instant.now())
                 .build();
         return toDto(users.save(u));
@@ -175,6 +210,15 @@ public class UserService {
         if (r.studentCode() != null)u.setStudentCode(r.studentCode());
         if (r.classId() != null)    u.setClassId(r.classId());
         if (r.className() != null)  u.setClassName(r.className());
+        if (r.dateOfBirth() != null)u.setDateOfBirth(r.dateOfBirth());
+        if (r.gender() != null)     u.setGender(r.gender());
+        if (r.placeOfBirth() != null) u.setPlaceOfBirth(r.placeOfBirth());
+        if (r.ethnicity() != null)  u.setEthnicity(r.ethnicity());
+        if (r.nationality() != null)u.setNationality(r.nationality());
+        if (r.address() != null)    u.setAddress(r.address());
+        if (r.enrollmentDate() != null) u.setEnrollmentDate(r.enrollmentDate());
+        if (r.guardianName() != null) u.setGuardianName(r.guardianName());
+        if (r.guardianPhone() != null) u.setGuardianPhone(r.guardianPhone());
         return toDto(users.save(u));
     }
 

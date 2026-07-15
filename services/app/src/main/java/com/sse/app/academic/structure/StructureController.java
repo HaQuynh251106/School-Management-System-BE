@@ -1,6 +1,8 @@
 package com.sse.app.academic.structure;
 
 import com.sse.app.academic.structure.StructureDtos.*;
+import com.sse.app.common.ApiException;
+import com.sse.app.identity.User;
 import com.sse.app.identity.UserDto;
 import com.sse.app.identity.UserService;
 import com.sse.app.security.CurrentUserHolder;
@@ -63,14 +65,55 @@ public class StructureController {
 
     @GetMapping("/classes/{id}/students")
     public List<UserDto> classStudents(@PathVariable String id) {
-        CurrentUserHolder.require();
-        return users.list("STUDENT", null, id);
+        CurrentUserHolder.requireRole("ADMIN", "TEACHER");
+        return CurrentUserHolder.require().isAdmin()
+                ? users.list("STUDENT", null, id)
+                : users.listSummaries("STUDENT", null, id);
+    }
+
+    @GetMapping("/classes/{classId}/students/{studentId}/profile")
+    public UserDto homeroomStudentProfile(@PathVariable String classId,
+                                           @PathVariable String studentId) {
+        CurrentUserHolder.requireRole("ADMIN", "TEACHER");
+        var current = CurrentUserHolder.require();
+        SchoolClass schoolClass = structure.getClass(classId);
+        if (current.isTeacher() && !current.id().equals(schoolClass.getHomeroomTeacherId())) {
+            throw ApiException.forbidden("Chỉ giáo viên chủ nhiệm được xem hồ sơ chi tiết của học sinh");
+        }
+
+        User student = users.getById(studentId);
+        if (!"STUDENT".equals(student.getRole()) || !classId.equals(student.getClassId())) {
+            throw ApiException.forbidden("Học sinh không thuộc lớp này");
+        }
+        return users.toDto(student);
     }
 
     @PostMapping("/classes")
     public SchoolClass createClass(@Valid @RequestBody CreateClassRequest r) {
         CurrentUserHolder.requireRole("ADMIN");
-        return structure.createClass(r);
+        User teacher = null;
+        if (r.homeroomTeacherId() != null && !r.homeroomTeacherId().isBlank()) {
+            teacher = requireActiveTeacher(r.homeroomTeacherId());
+        }
+        SchoolClass created = structure.createClass(r);
+        if (teacher == null) return created;
+        return structure.assignHomeroomTeacher(created.getId(), teacher.getId(), teacher.getFullName(),
+                CurrentUserHolder.require().id());
+    }
+
+    @PutMapping("/classes/{id}/homeroom-teacher")
+    public SchoolClass assignHomeroomTeacher(@PathVariable String id,
+                                              @Valid @RequestBody AssignHomeroomTeacherRequest r) {
+        CurrentUserHolder.requireRole("ADMIN");
+        User teacher = requireActiveTeacher(r.teacherId());
+        return structure.assignHomeroomTeacher(id, teacher.getId(), teacher.getFullName(),
+                CurrentUserHolder.require().id());
+    }
+
+    @DeleteMapping("/classes/{id}/homeroom-teacher")
+    public SchoolClass clearHomeroomTeacher(@PathVariable String id) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return structure.clearHomeroomTeacher(id);
     }
 
     // ----- Môn -----
@@ -116,5 +159,16 @@ public class StructureController {
     public void deleteHoliday(@PathVariable String id) {
         CurrentUserHolder.requireRole("ADMIN");
         structure.deleteHoliday(id);
+    }
+
+    private User requireActiveTeacher(String teacherId) {
+        User teacher = users.getById(teacherId);
+        if (!"TEACHER".equals(teacher.getRole())) {
+            throw ApiException.badRequest("Người được phân công phải là giáo viên");
+        }
+        if (!"ACTIVE".equals(teacher.getStatus())) {
+            throw ApiException.badRequest("Không thể phân công giáo viên đang bị khóa");
+        }
+        return teacher;
     }
 }

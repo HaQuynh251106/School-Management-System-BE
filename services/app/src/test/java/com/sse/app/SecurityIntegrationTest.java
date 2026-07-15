@@ -11,6 +11,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.mock.web.MockMultipartFile;
 
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
@@ -59,6 +60,37 @@ class SecurityIntegrationTest {
     }
 
     @Test
+    void onlyHomeroomTeacherCanReadAStudentsFullProfile() throws Exception {
+        String homeroomTeacher = login("gv.hoa", "teacher@123");
+
+        mvc.perform(get("/classes/c-10a1/students/u-student-1/profile")
+                        .header("Authorization", "Bearer " + homeroomTeacher))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.fullName").value("Phạm Hoài An"))
+                .andExpect(jsonPath("$.dateOfBirth").value("2010-03-18"))
+                .andExpect(jsonPath("$.guardianName").value("Phạm Văn Quân"));
+
+        mvc.perform(get("/users")
+                        .queryParam("role", "STUDENT")
+                        .queryParam("classId", "c-10a1")
+                        .queryParam("q", "hs.an")
+                        .header("Authorization", "Bearer " + homeroomTeacher))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].fullName").value("Phạm Hoài An"))
+                .andExpect(jsonPath("$[0].email").value(nullValue()))
+                .andExpect(jsonPath("$[0].guardianName").value(nullValue()));
+
+        mvc.perform(get("/users/u-student-1")
+                        .header("Authorization", "Bearer " + homeroomTeacher))
+                .andExpect(status().isForbidden());
+
+        String otherTeacher = login("gv.minh", "teacher@123");
+        mvc.perform(get("/classes/c-10a1/students/u-student-1/profile")
+                        .header("Authorization", "Bearer " + otherTeacher))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     void studentCannotReadAnotherStudentsPayments() throws Exception {
         String admin = login("admin", "admin@123");
         JsonNode invoices = body(mvc.perform(get("/invoices")
@@ -93,6 +125,60 @@ class SecurityIntegrationTest {
                                 {"username":"weak.user","password":"123","fullName":"Weak User","role":"OWNER"}
                                 """))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void adminCanCreateAndUpdateACompleteStudentProfile() throws Exception {
+        String admin = login("admin", "admin@123");
+
+        mvc.perform(post("/users")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "id":"u-student-admin-profile",
+                                  "username":"hs.admin.profile",
+                                  "password":"Student@123",
+                                  "fullName":"Nguyễn Minh Anh",
+                                  "role":"STUDENT",
+                                  "email":"minhanh@sse.edu.vn",
+                                  "phone":"0912345678",
+                                  "studentCode":"HS2025099",
+                                  "classId":"c-10a1",
+                                  "className":"10A1",
+                                  "dateOfBirth":"2010-11-20",
+                                  "gender":"FEMALE",
+                                  "placeOfBirth":"Hà Nội",
+                                  "ethnicity":"Kinh",
+                                  "nationality":"Việt Nam",
+                                  "address":"20 Nguyễn Trãi, Hà Nội",
+                                  "enrollmentDate":"2025-09-05",
+                                  "guardianName":"Nguyễn Văn Minh",
+                                  "guardianPhone":"0987654321"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.studentCode").value("HS2025099"))
+                .andExpect(jsonPath("$.dateOfBirth").value("2010-11-20"))
+                .andExpect(jsonPath("$.address").value("20 Nguyễn Trãi, Hà Nội"))
+                .andExpect(jsonPath("$.guardianName").value("Nguyễn Văn Minh"));
+
+        mvc.perform(put("/users/u-student-admin-profile")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"guardianName":"Nguyễn Thị Hà","guardianPhone":"0901122334"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.guardianName").value("Nguyễn Thị Hà"))
+                .andExpect(jsonPath("$.guardianPhone").value("0901122334"));
+
+        mvc.perform(get("/users/u-student-admin-profile")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.fullName").value("Nguyễn Minh Anh"))
+                .andExpect(jsonPath("$.classId").value("c-10a1"))
+                .andExpect(jsonPath("$.guardianName").value("Nguyễn Thị Hà"));
     }
 
     @Test
@@ -235,7 +321,18 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + teacher))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.subjectId").value("sj-math"))
-                .andExpect(jsonPath("$.subjectName").value("Toán"));
+                .andExpect(jsonPath("$.subjectName").value("Toán"))
+                .andExpect(jsonPath("$.homeroomTeacher").value(true))
+                .andExpect(jsonPath("$.canEdit").value(true))
+                .andExpect(jsonPath("$.subjects.length()").value(5));
+
+        mvc.perform(get("/grades")
+                        .queryParam("classId", "c-10a1")
+                        .queryParam("semesterId", "sm-2025-1")
+                        .queryParam("subjectId", "sj-phys")
+                        .header("Authorization", "Bearer " + teacher))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].subjectId").value("sj-phys"));
 
         mvc.perform(post("/grades")
                         .header("Authorization", "Bearer " + teacher)
@@ -244,8 +341,7 @@ class SecurityIntegrationTest {
                                 {"studentId":"u-student-2","subjectId":"sj-eng","semesterId":"sm-2025-1",
                                  "category":"MID","assessmentIndex":1,"score":8.0}
                                 """))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.subjectId").value("sj-math"));
+                .andExpect(status().isForbidden());
 
         mvc.perform(post("/grades/bulk")
                         .header("Authorization", "Bearer " + teacher)
@@ -255,6 +351,23 @@ class SecurityIntegrationTest {
                                  "entries":[{"studentId":"u-student-1","score":8.0},{"studentId":"u-student-1","score":8.5}]}
                                 """))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void adminCanAssignAnActiveTeacherAsHomeroomTeacher() throws Exception {
+        String admin = login("admin", "admin@123");
+
+        mvc.perform(put("/classes/c-10a2/homeroom-teacher")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"teacherId":"u-teacher-1"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.homeroomTeacherId").value("u-teacher-1"))
+                .andExpect(jsonPath("$.homeroomTeacherName").value("Trần Thị Hoa"))
+                .andExpect(jsonPath("$.homeroomAssignedAt").isNotEmpty())
+                .andExpect(jsonPath("$.homeroomAssignedBy").value("u-admin-1"));
     }
 
     private String login(String username, String password) throws Exception {

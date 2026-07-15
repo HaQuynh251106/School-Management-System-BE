@@ -77,10 +77,31 @@ public class DataSeeder {
         users.save(teacher("u-teacher-2", "gv.minh", enc.encode("teacher@123"), "Lê Văn Minh",
                 "minh.le@sse.edu.vn", "0900000003", "GV002", "Vật lý"));
 
-        users.save(student("u-student-1", "hs.an", enc.encode("student@123"), "Phạm Hoài An",
-                "an.pham@sse.edu.vn", "0900000010", "HS2025001", "c-10a1", "10A1"));
-        users.save(student("u-student-2", "hs.binh", enc.encode("student@123"), "Phạm Hoài Bình",
-                "binh.pham@sse.edu.vn", "0900000011", "HS2025002", "c-8a1", "8A1"));
+        User an = student("u-student-1", "hs.an", enc.encode("student@123"), "Phạm Hoài An",
+                "an.pham@sse.edu.vn", "0900000010", "HS2025001", "c-10a1", "10A1");
+        an.setDateOfBirth(LocalDate.parse("2010-03-18"));
+        an.setGender("FEMALE");
+        an.setPlaceOfBirth("Hà Nội");
+        an.setEthnicity("Kinh");
+        an.setNationality("Việt Nam");
+        an.setAddress("12 Nguyễn Trãi, Thanh Xuân, Hà Nội");
+        an.setEnrollmentDate(LocalDate.parse("2025-09-05"));
+        an.setGuardianName("Phạm Văn Quân");
+        an.setGuardianPhone("0900000020");
+        users.save(an);
+
+        User binh = student("u-student-2", "hs.binh", enc.encode("student@123"), "Phạm Hoài Bình",
+                "binh.pham@sse.edu.vn", "0900000011", "HS2025002", "c-8a1", "8A1");
+        binh.setDateOfBirth(LocalDate.parse("2012-08-09"));
+        binh.setGender("MALE");
+        binh.setPlaceOfBirth("Hà Nội");
+        binh.setEthnicity("Kinh");
+        binh.setNationality("Việt Nam");
+        binh.setAddress("12 Nguyễn Trãi, Thanh Xuân, Hà Nội");
+        binh.setEnrollmentDate(LocalDate.parse("2025-09-05"));
+        binh.setGuardianName("Phạm Văn Quân");
+        binh.setGuardianPhone("0900000020");
+        users.save(binh);
 
         users.save(base("u-parent-1", "ph.pham", enc.encode("parent@123"), "Phạm Văn Quân",
                 "quan.pham@gmail.com", "0900000020", "PARENT"));
@@ -259,7 +280,10 @@ public class DataSeeder {
 
     private static SchoolClass cls(String id, String code, String name, String grade, String hr, int count) {
         return SchoolClass.builder().id(id).code(code).name(name).gradeLevel(grade)
-                .academicYearId("ay-2025").homeroomTeacherId(hr).studentCount(count).build();
+                .academicYearId("ay-2025").homeroomTeacherId(hr)
+                .homeroomTeacherName("u-teacher-1".equals(hr) ? "Trần Thị Hoa" : "Lê Văn Minh")
+                .homeroomAssignedAt(Instant.now()).homeroomAssignedBy("u-admin-1")
+                .studentCount(count).build();
     }
 
     private static Subject subj(String id, String code, String name) {

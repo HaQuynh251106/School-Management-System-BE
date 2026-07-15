@@ -38,8 +38,11 @@ public class GradeController {
         } else if (me.isParent()) {
             if (studentId == null) throw ApiException.badRequest("Thiếu studentId (chọn con)");
             users.assertParentOf(me.id(), studentId);
-        } else if (me.isTeacher() && classId != null && semesterId != null) {
-            subjectId = grades.teacherGradebookContext(me.id(), classId, semesterId).subjectId();
+        } else if (me.isTeacher()) {
+            if (classId == null || classId.isBlank() || semesterId == null || semesterId.isBlank()) {
+                throw ApiException.badRequest("Giáo viên phải chọn lớp và học kỳ để xem bảng điểm");
+            }
+            subjectId = grades.resolveTeacherViewSubject(me.id(), classId, semesterId, subjectId);
         }
         Set<String> studentIds = null;
         if (classId != null) {

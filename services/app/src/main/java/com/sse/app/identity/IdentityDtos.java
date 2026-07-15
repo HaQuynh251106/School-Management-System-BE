@@ -4,6 +4,8 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
+import java.time.LocalDate;
+
 /** Gom các request DTO của phân hệ identity. */
 public final class IdentityDtos {
     private IdentityDtos() {}
@@ -30,7 +32,16 @@ public final class IdentityDtos {
             String mainSubject,
             String studentCode,
             String classId,
-            String className
+            String className,
+            LocalDate dateOfBirth,
+            String gender,
+            String placeOfBirth,
+            String ethnicity,
+            String nationality,
+            String address,
+            LocalDate enrollmentDate,
+            String guardianName,
+            String guardianPhone
     ) {}
 
     public record UpdateUserRequest(
@@ -42,7 +53,16 @@ public final class IdentityDtos {
             String mainSubject,
             String studentCode,
             String classId,
-            String className
+            String className,
+            LocalDate dateOfBirth,
+            String gender,
+            String placeOfBirth,
+            String ethnicity,
+            String nationality,
+            String address,
+            LocalDate enrollmentDate,
+            String guardianName,
+            String guardianPhone
     ) {}
 
     public record AdminResetPasswordRequest(@Size(min = 8, max = 128) String newPassword) {}

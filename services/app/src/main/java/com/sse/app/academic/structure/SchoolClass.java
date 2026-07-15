@@ -3,6 +3,8 @@ package com.sse.app.academic.structure;
 import jakarta.persistence.*;
 import lombok.*;
 
+import java.time.Instant;
+
 /** A2: Lớp học (10A1, 8A1, ...). */
 @Entity
 @Table(name = "classes")
@@ -16,5 +18,8 @@ public class SchoolClass {
     private String gradeLevel;      // K10
     private String academicYearId;
     private String homeroomTeacherId;
+    private String homeroomTeacherName;
+    private Instant homeroomAssignedAt;
+    private String homeroomAssignedBy;
     private int studentCount;
 }

@@ -40,11 +40,21 @@ public final class GradeDtos {
             @Min(0) Long expectedVersion
     ) {}
 
+    public record GradebookSubject(
+            String subjectId,
+            String subjectName,
+            String teacherName,
+            boolean editable
+    ) {}
+
     public record TeacherGradebookContext(
             String classId,
             String semesterId,
             String subjectId,
-            String subjectName
+            String subjectName,
+            boolean homeroomTeacher,
+            boolean canEdit,
+            List<GradebookSubject> subjects
     ) {}
 
     public record CreateExamCategoryRequest(

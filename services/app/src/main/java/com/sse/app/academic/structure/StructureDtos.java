@@ -20,6 +20,8 @@ public final class StructureDtos {
             String id, @NotBlank String code, String name, @NotBlank String gradeLevel,
             String academicYearId, String homeroomTeacherId) {}
 
+    public record AssignHomeroomTeacherRequest(@NotBlank String teacherId) {}
+
     public record CreateSubjectRequest(String id, @NotBlank String code, @NotBlank String name) {}
 
     public record CreateRoomRequest(String id, @NotBlank String code, String name, Integer capacity) {}
