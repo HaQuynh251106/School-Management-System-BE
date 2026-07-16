@@ -6,9 +6,11 @@
 - JWT secret, DB password và CORS origin bắt buộc truyền từ môi trường; seed mặc định tắt.
 - Refresh token được hash, rotate và revoke khi logout.
 - Kiểm tra quyền truy cập dữ liệu tài chính giữa giáo viên, học sinh và phụ huynh.
-- Upload/download file có JWT, whitelist MIME, giới hạn 10 MB và persistent volume.
+- Upload/download file có JWT, ACL theo bài tập/bài nộp, whitelist MIME, giới hạn 10 MB và persistent volume.
 - Email reset password hỗ trợ SMTP; token không lộ trong response production.
-- Thanh toán production mặc định `disabled`, không tự tạo giao dịch SUCCESS giả.
+- Thanh toán production mặc định `disabled`; sandbox tạo giao dịch `PENDING` và chỉ hoàn tất qua callback HMAC hợp lệ.
+- Hóa đơn được chống sinh trùng theo đợt thu + học sinh; giao dịch treo được đối soát và hết hạn tự động.
+- Mật khẩu tạm bắt buộc đổi, access token sống ngắn và phiên cũ bị vô hiệu khi đổi/reset mật khẩu.
 - OpenAPI/Swagger, health probe và Prometheus metrics.
 - Docker image chạy non-root; Compose gồm Backend, PostgreSQL và persistent volumes.
 - CI build/test toàn bộ modules và Dependabot theo dõi Maven/GitHub Actions.

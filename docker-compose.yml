@@ -28,6 +28,7 @@ services:
       SSE_CORS_ALLOWED_ORIGINS: ${SSE_CORS_ALLOWED_ORIGINS:?Set the Web application origin in .env}
       SSE_SEED_ENABLED: ${SSE_SEED_ENABLED:-false}
       SSE_PAYMENT_MODE: ${SSE_PAYMENT_MODE:-disabled}
+      SSE_PAYMENT_CALLBACK_SECRET: ${SSE_PAYMENT_CALLBACK_SECRET:-}
       SSE_STORAGE_PATH: /data/uploads
       SSE_MAIL_ENABLED: ${SSE_MAIL_ENABLED:-false}
       SSE_MAIL_HOST: ${SSE_MAIL_HOST:-localhost}

@@ -55,6 +55,9 @@ public class DataSeeder {
 
             seedUsers(users, relations, enc);
             seedStructure(structure);
+            users.findByRole("STUDENT").forEach(student -> {
+                if (student.getClassId() != null) structure.recordEnrollment(student.getId(), student.getClassId());
+            });
             seedTimetable(timetable);
             seedGrades(grades);
             seedAttendance(attendance);

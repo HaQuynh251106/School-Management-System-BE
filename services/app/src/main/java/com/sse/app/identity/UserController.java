@@ -5,6 +5,10 @@ import com.sse.app.common.ApiException;
 import com.sse.app.security.CurrentUserHolder;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 
 import java.util.List;
 import java.util.Map;
@@ -15,9 +19,13 @@ import java.util.Map;
 public class UserController {
 
     private final UserService users;
+    private final UserImportService imports;
+    private final LoginHistoryService loginHistory;
 
-    public UserController(UserService users) {
+    public UserController(UserService users, UserImportService imports, LoginHistoryService loginHistory) {
         this.users = users;
+        this.imports = imports;
+        this.loginHistory = loginHistory;
     }
 
     @GetMapping
@@ -48,6 +56,47 @@ public class UserController {
     public UserDto create(@Valid @RequestBody CreateUserRequest req) {
         CurrentUserHolder.requireRole("ADMIN");
         return users.create(req);
+    }
+
+    @PostMapping(value = "/import", consumes = "multipart/form-data")
+    public ImportResult importUsers(@RequestParam("file") MultipartFile file) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return imports.importExcel(file);
+    }
+
+    @GetMapping("/import-template")
+    public ResponseEntity<byte[]> importTemplate() {
+        CurrentUserHolder.requireRole("ADMIN");
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=mau-nhap-nguoi-dung.xlsx")
+                .body(imports.template());
+    }
+
+    @GetMapping("/{id}/children")
+    public List<UserDto> children(@PathVariable String id) {
+        var current = CurrentUserHolder.require();
+        if (!current.isAdmin() && !current.id().equals(id)) throw ApiException.forbidden("Không có quyền xem liên kết này");
+        return users.childrenOf(id);
+    }
+
+    @PostMapping("/{id}/children")
+    public UserDto linkChild(@PathVariable String id, @Valid @RequestBody LinkChildRequest req) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return users.linkChild(id, req.studentId(), Boolean.TRUE.equals(req.primaryContact()));
+    }
+
+    @DeleteMapping("/{id}/children/{studentId}")
+    public void unlinkChild(@PathVariable String id, @PathVariable String studentId) {
+        CurrentUserHolder.requireRole("ADMIN");
+        users.unlinkChild(id, studentId);
+    }
+
+    @GetMapping("/{id}/login-history")
+    public List<LoginHistory> loginHistory(@PathVariable String id) {
+        var current = CurrentUserHolder.require();
+        if (!current.isAdmin() && !current.id().equals(id)) throw ApiException.forbidden("Không có quyền xem lịch sử đăng nhập");
+        return loginHistory.list(id);
     }
 
     @PutMapping("/{id}")

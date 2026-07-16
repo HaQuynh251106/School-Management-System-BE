@@ -21,5 +21,8 @@ public class SchoolClass {
     private String homeroomTeacherName;
     private Instant homeroomAssignedAt;
     private String homeroomAssignedBy;
+    @Builder.Default
+    @Column(nullable = false)
+    private int capacity = 45;
     private int studentCount;
 }

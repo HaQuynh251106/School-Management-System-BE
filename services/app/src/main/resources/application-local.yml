@@ -1,8 +1,9 @@
 spring:
   flyway:
-    enabled: false
+    enabled: true
   datasource:
-    url: jdbc:h2:mem:sse;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1
+    # Lưu trên đĩa để dữ liệu và lịch sử migration không mất khi Backend dừng.
+    url: jdbc:h2:file:${SSE_LOCAL_DB_PATH:./data/sse};MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;AUTO_SERVER=TRUE
     username: sa
     password: ""
     driver-class-name: org.h2.Driver
@@ -10,7 +11,7 @@ spring:
   jpa:
     database-platform: org.hibernate.dialect.H2Dialect
     hibernate:
-      ddl-auto: create-drop
+      ddl-auto: validate
 
 sse:
   jwt:
@@ -23,5 +24,6 @@ sse:
     expose-token: true
   payments:
     mode: sandbox
+    callback-secret: local-sandbox-callback-secret-change-me
   storage:
-    path: ${java.io.tmpdir}/sse-uploads
+    path: ${SSE_LOCAL_STORAGE_PATH:./data/uploads}

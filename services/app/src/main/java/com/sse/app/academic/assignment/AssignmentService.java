@@ -2,7 +2,7 @@ package com.sse.app.academic.assignment;
 
 import com.sse.app.academic.assignment.AssignmentDtos.*;
 import com.sse.app.academic.structure.StructureService;
-import com.sse.app.academic.timetable.TimetableService;
+import com.sse.app.academic.timetable.TeachingAssignmentService;
 import com.sse.app.common.ApiException;
 import com.sse.app.common.Ids;
 import com.sse.app.file.FileStorageService;
@@ -11,11 +11,13 @@ import com.sse.app.identity.User;
 import com.sse.app.identity.UserDto;
 import com.sse.app.identity.UserService;
 import com.sse.app.notification.NotificationService;
+import com.sse.app.security.CurrentUser;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -27,18 +29,19 @@ public class AssignmentService {
     private final AssignmentRepository assignments;
     private final AssignmentSubmissionRepository submissions;
     private final StructureService structure;
-    private final TimetableService timetable;
+    private final TeachingAssignmentService teachingAssignments;
     private final UserService users;
     private final NotificationService notifications;
     private final FileStorageService storage;
 
     public AssignmentService(AssignmentRepository assignments, AssignmentSubmissionRepository submissions,
-                             StructureService structure, TimetableService timetable, UserService users,
+                             StructureService structure, TeachingAssignmentService teachingAssignments,
+                             UserService users,
                              NotificationService notifications, FileStorageService storage) {
         this.assignments = assignments;
         this.submissions = submissions;
         this.structure = structure;
-        this.timetable = timetable;
+        this.teachingAssignments = teachingAssignments;
         this.users = users;
         this.notifications = notifications;
         this.storage = storage;
@@ -108,10 +111,41 @@ public class AssignmentService {
     private void notifyClass(Assignment assignment) {
         List<String> studentIds = users.list("STUDENT", null, assignment.getClassId()).stream()
                 .map(UserDto::id).toList();
-        notifications.notifyUsers(studentIds, "ASSIGNMENT", "Bài tập mới: " + assignment.getTitle(),
+        LinkedHashSet<String> recipients = new LinkedHashSet<>(studentIds);
+        studentIds.forEach(studentId -> recipients.addAll(users.parentIdsOf(studentId)));
+        notifications.notifyUsers(recipients.stream().toList(), "ASSIGNMENT", "Bài tập mới: " + assignment.getTitle(),
                 "Môn " + assignment.getSubjectName()
                         + (assignment.getDeadline() != null ? " — hạn " + assignment.getDeadline() : ""),
                 "ASSIGNMENT", assignment.getId());
+    }
+
+    /** Chỉ chủ sở hữu hoặc người tham gia đúng bài tập mới được tải tệp. */
+    public void assertCanAccessFile(StoredFile file, CurrentUser actor) {
+        if (actor.isAdmin() || actor.id().equals(file.getUploadedBy())) return;
+
+        var assignment = assignments.findByAttachmentFileId(file.getId());
+        if (assignment.isPresent()) {
+            Assignment item = assignment.get();
+            if (actor.isTeacher() && actor.id().equals(item.getTeacherId())) return;
+            if ("PUBLISHED".equals(item.getStatus())) {
+                if (actor.isStudent() && belongsToClass(actor.id(), item.getClassId())) return;
+                if (actor.isParent() && users.childrenOf(actor.id()).stream()
+                        .anyMatch(child -> item.getClassId().equals(child.classId()))) return;
+            }
+            throw ApiException.forbidden("Không có quyền truy cập tệp của bài tập này");
+        }
+
+        var submission = submissions.findByAttachmentFileId(file.getId());
+        if (submission.isPresent()) {
+            AssignmentSubmission item = submission.get();
+            Assignment parent = get(item.getAssignmentId());
+            if (actor.id().equals(item.getStudentId())) return;
+            if (actor.isTeacher() && actor.id().equals(parent.getTeacherId())) return;
+            if (actor.isParent() && users.parentIdsOf(item.getStudentId()).contains(actor.id())) return;
+            throw ApiException.forbidden("Không có quyền truy cập tệp bài làm này");
+        }
+
+        throw ApiException.forbidden("Không có quyền truy cập tệp này");
     }
 
     @Transactional
@@ -191,8 +225,8 @@ public class AssignmentService {
     private void assertTeacherAssignment(String actorId, String actorRole, String classId, String subjectId) {
         structure.getClass(classId);
         if ("ADMIN".equals(actorRole)) return;
-        boolean assigned = timetable.list(classId, null, null, null).stream().anyMatch(slot ->
-                actorId.equals(slot.getTeacherId()) && subjectId.equals(slot.getSubjectId()));
+        boolean assigned = teachingAssignments.assignmentsOfTeacher(actorId).stream().anyMatch(item ->
+                classId.equals(item.getClassId()) && subjectId.equals(item.getSubjectId()));
         if (!assigned) throw ApiException.forbidden("Giáo viên không được phân công môn/lớp này");
     }
 
@@ -204,6 +238,11 @@ public class AssignmentService {
 
     private StoredFile ownedFile(String fileId, String userId) {
         return fileId == null || fileId.isBlank() ? null : storage.ownedMetadata(fileId, userId);
+    }
+
+    private boolean belongsToClass(String studentId, String classId) {
+        User student = users.getById(studentId);
+        return "STUDENT".equals(student.getRole()) && classId.equals(student.getClassId());
     }
 
     private String clean(String value) {

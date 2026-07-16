@@ -2,7 +2,7 @@ package com.sse.app.academic.grade;
 
 import com.sse.app.academic.structure.StructureService;
 import com.sse.app.academic.structure.SchoolClass;
-import com.sse.app.academic.timetable.TimetableService;
+import com.sse.app.academic.timetable.TeachingAssignmentService;
 import com.sse.app.academic.grade.GradeDtos.*;
 import com.sse.app.common.ApiException;
 import com.sse.app.common.Ids;
@@ -29,18 +29,19 @@ public class GradeService {
     private final GradeChangeLogRepository logs;
     private final ExamCategoryRepository categories;
     private final StructureService structure;
-    private final TimetableService timetable;
+    private final TeachingAssignmentService teachingAssignments;
     private final UserService users;
     private final NotificationService notifications;
 
     public GradeService(GradeRepository grades, GradeChangeLogRepository logs,
                         ExamCategoryRepository categories, StructureService structure,
-                        TimetableService timetable, UserService users, NotificationService notifications) {
+                        TeachingAssignmentService teachingAssignments,
+                        UserService users, NotificationService notifications) {
         this.grades = grades;
         this.logs = logs;
         this.categories = categories;
         this.structure = structure;
-        this.timetable = timetable;
+        this.teachingAssignments = teachingAssignments;
         this.users = users;
         this.notifications = notifications;
     }
@@ -58,12 +59,12 @@ public class GradeService {
         boolean homeroomTeacher = teacherId.equals(schoolClass.getHomeroomTeacherId());
         String mainSubject = clean(teacher.getMainSubject());
         LinkedHashMap<String, GradebookSubject> allSubjects = new LinkedHashMap<>();
-        timetable.list(classId, null, semesterId, null).forEach(slot -> {
-            boolean editable = teacherId.equals(slot.getTeacherId())
-                    && matchesSubject(mainSubject, slot.getSubjectId(), slot.getSubjectName());
+        teachingAssignments.assignmentsOfClass(classId, semesterId).forEach(assignment -> {
+            boolean editable = teacherId.equals(assignment.getTeacherId())
+                    && matchesSubject(mainSubject, assignment.getSubjectId(), assignment.getSubjectName());
             GradebookSubject candidate = new GradebookSubject(
-                    slot.getSubjectId(), slot.getSubjectName(), slot.getTeacherName(), editable);
-            allSubjects.merge(slot.getSubjectId(), candidate, (existing, next) ->
+                    assignment.getSubjectId(), assignment.getSubjectName(), assignment.getTeacherName(), editable);
+            allSubjects.merge(assignment.getSubjectId(), candidate, (existing, next) ->
                     new GradebookSubject(existing.subjectId(), existing.subjectName(),
                             existing.teacherName() != null ? existing.teacherName() : next.teacherName(),
                             existing.editable() || next.editable()));

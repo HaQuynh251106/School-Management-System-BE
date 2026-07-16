@@ -10,6 +10,7 @@ import org.springframework.test.context.ActiveProfiles;
  */
 @SpringBootTest(properties = {
         "sse.seed.enabled=false",
+        "spring.datasource.url=jdbc:h2:mem:schema-test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
         "spring.jpa.hibernate.ddl-auto=none",
         "spring.jpa.database-platform=org.hibernate.dialect.PostgreSQLDialect",
         "spring.jpa.properties.jakarta.persistence.schema-generation.database.action=none",

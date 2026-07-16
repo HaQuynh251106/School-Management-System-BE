@@ -36,6 +36,11 @@ public class AttendanceController {
         } else if (me.isParent()) {
             if (studentId == null) throw ApiException.badRequest("Thiếu studentId (chọn con)");
             users.assertParentOf(me.id(), studentId);  // D1/D2 kiểm soát quyền
+        } else if (me.isTeacher()) {
+            if (slotId == null || slotId.isBlank()) {
+                throw ApiException.badRequest("Giáo viên cần chọn tiết học để xem sổ điểm danh");
+            }
+            attendance.assertCanManageSlot(me, slotId);
         }
         return attendance.list(studentId, classId, slotId, date);
     }
@@ -43,6 +48,6 @@ public class AttendanceController {
     @PostMapping("/attendance/bulk")
     public List<AttendanceRecord> bulk(@Valid @RequestBody BulkAttendanceRequest req) {
         CurrentUserHolder.requireRole("TEACHER", "ADMIN");
-        return attendance.bulkMark(req);
+        return attendance.bulkMark(req, CurrentUserHolder.require());
     }
 }

@@ -50,7 +50,7 @@ sse:
   jwt:
     # Required outside local/test. Use a secret manager in production.
     secret: ${SSE_JWT_SECRET}
-    access-ttl-seconds: 3600
+    access-ttl-seconds: 900
     refresh-ttl-seconds: 604800
   seed:
     enabled: ${SSE_SEED_ENABLED:false}
@@ -61,6 +61,7 @@ sse:
   payments:
     # Production must configure a verified gateway adapter before enabling payments.
     mode: ${SSE_PAYMENT_MODE:disabled}
+    callback-secret: ${SSE_PAYMENT_CALLBACK_SECRET:}
   storage:
     path: ${SSE_STORAGE_PATH:/data/sse/uploads}
   mail:

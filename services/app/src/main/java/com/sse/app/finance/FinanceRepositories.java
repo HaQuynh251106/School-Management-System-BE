@@ -3,8 +3,11 @@ package com.sse.app.finance;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.List;
+import java.util.Optional;
+import java.time.Instant;
 
 interface FeePeriodRepository extends JpaRepository<FeePeriod, String> {
+    Optional<FeePeriod> findByCode(String code);
 }
 
 interface FeePeriodItemRepository extends JpaRepository<FeePeriodItem, String> {
@@ -15,6 +18,7 @@ interface InvoiceRepository extends JpaRepository<Invoice, String> {
     List<Invoice> findByStudentId(String studentId);
     List<Invoice> findByParentId(String parentId);
     List<Invoice> findByFeePeriodId(String feePeriodId);
+    Optional<Invoice> findByFeePeriodIdAndStudentId(String feePeriodId, String studentId);
 }
 
 interface InvoiceItemRepository extends JpaRepository<InvoiceItem, String> {
@@ -23,4 +27,11 @@ interface InvoiceItemRepository extends JpaRepository<InvoiceItem, String> {
 
 interface PaymentRepository extends JpaRepository<Payment, String> {
     List<Payment> findByInvoiceId(String invoiceId);
+    Optional<Payment> findFirstByInvoiceIdAndStatusOrderByCreatedAtDesc(String invoiceId, String status);
+}
+
+interface PaymentGatewayTransactionRepository extends JpaRepository<PaymentGatewayTransaction, String> {
+    Optional<PaymentGatewayTransaction> findByTxnRef(String txnRef);
+    Optional<PaymentGatewayTransaction> findByPaymentId(String paymentId);
+    List<PaymentGatewayTransaction> findByStatusAndCreatedAtBefore(String status, Instant cutoff);
 }

@@ -1,5 +1,6 @@
 package com.sse.app.file;
 
+import com.sse.app.academic.assignment.AssignmentService;
 import com.sse.app.security.CurrentUserHolder;
 import org.springframework.core.io.Resource;
 import org.springframework.http.ContentDisposition;
@@ -20,8 +21,12 @@ import java.nio.charset.StandardCharsets;
 @RequestMapping("/files")
 public class FileController {
     private final FileStorageService storage;
+    private final AssignmentService assignments;
 
-    public FileController(FileStorageService storage) { this.storage = storage; }
+    public FileController(FileStorageService storage, AssignmentService assignments) {
+        this.storage = storage;
+        this.assignments = assignments;
+    }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public StoredFile upload(@RequestPart("file") MultipartFile file) {
@@ -30,14 +35,15 @@ public class FileController {
 
     @GetMapping("/{id}")
     public StoredFile metadata(@PathVariable String id) {
-        CurrentUserHolder.require();
-        return storage.metadata(id);
+        StoredFile file = storage.metadata(id);
+        assignments.assertCanAccessFile(file, CurrentUserHolder.require());
+        return file;
     }
 
     @GetMapping("/{id}/content")
     public ResponseEntity<Resource> content(@PathVariable String id) {
-        CurrentUserHolder.require();
         StoredFile file = storage.metadata(id);
+        assignments.assertCanAccessFile(file, CurrentUserHolder.require());
         MediaType type;
         try { type = MediaType.parseMediaType(file.getContentType()); }
         catch (Exception ignored) { type = MediaType.APPLICATION_OCTET_STREAM; }

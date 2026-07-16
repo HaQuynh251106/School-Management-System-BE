@@ -7,6 +7,8 @@ import com.sse.app.academic.grade.GradeService;
 import com.sse.app.academic.structure.StructureService;
 import com.sse.app.finance.FinanceService;
 import com.sse.app.identity.UserService;
+import com.sse.app.academic.summary.YearEndService;
+import com.sse.app.academic.summary.StudentYearlySummary;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -20,14 +22,16 @@ public class ReportService {
     private final FinanceService finance;
     private final UserService users;
     private final StructureService structure;
+    private final YearEndService yearEnd;
 
     public ReportService(GradeService grades, AttendanceService attendance, FinanceService finance,
-                         UserService users, StructureService structure) {
+                         UserService users, StructureService structure, YearEndService yearEnd) {
         this.grades = grades;
         this.attendance = attendance;
         this.finance = finance;
         this.users = users;
         this.structure = structure;
+        this.yearEnd = yearEnd;
     }
 
     public Map<String, Object> overview() {
@@ -88,5 +92,52 @@ public class ReportService {
 
     public Map<String, Object> revenue() {
         return finance.revenueReport();
+    }
+
+    public Map<String, Object> promotion(String academicYearId) {
+        List<StudentYearlySummary> rows = yearEnd.summaries(academicYearId);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("total", rows.size());
+        result.put("promoted", rows.stream().filter(row -> "PROMOTED".equals(row.getPromotionStatus())).count());
+        result.put("pendingClass", rows.stream().filter(row -> "PROMOTED_PENDING_CLASS".equals(row.getPromotionStatus())).count());
+        result.put("graduated", rows.stream().filter(row -> "GRADUATED".equals(row.getPromotionStatus())).count());
+        result.put("retained", rows.stream().filter(row -> "RETAINED".equals(row.getPromotionStatus())).count());
+        result.put("incomplete", rows.stream().filter(row -> "INCOMPLETE".equals(row.getPromotionStatus())).count());
+        return result;
+    }
+
+    public String exportCsv(String type, String semesterId) {
+        StringBuilder csv = new StringBuilder("\uFEFF");
+        switch (type == null ? "overview" : type.toLowerCase()) {
+            case "grades" -> {
+                csv.append("Khoảng điểm,Số kết quả\n");
+                gradeDistribution(semesterId).forEach(row -> csv.append(cell(row.get("band"))).append(',')
+                        .append(cell(row.get("count"))).append('\n'));
+            }
+            case "attendance" -> {
+                csv.append("Trạng thái,Số lượt\n");
+                Map<String, Object> data = attendanceSummary();
+                csv.append("Có mặt,").append(data.get("present")).append('\n')
+                        .append("Đi muộn,").append(data.get("late")).append('\n')
+                        .append("Vắng có phép,").append(data.get("absentExcused")).append('\n')
+                        .append("Vắng không phép,").append(data.get("absentUnexcused")).append('\n');
+            }
+            case "revenue" -> {
+                csv.append("Hạng mục,Giá trị\n");
+                revenue().forEach((key, value) -> csv.append(cell(key)).append(',').append(cell(value)).append('\n'));
+            }
+            case "overview" -> {
+                csv.append("Nhóm dữ liệu,Số lượng\n");
+                overview().forEach((key, value) -> csv.append(cell(key)).append(',').append(cell(value)).append('\n'));
+            }
+            default -> throw com.sse.app.common.ApiException.badRequest("Loại báo cáo không hợp lệ");
+        }
+        return csv.toString();
+    }
+
+    private String cell(Object value) {
+        String text = String.valueOf(value == null ? "" : value).replace("\"", "\"\"");
+        if (!text.isEmpty() && "=+-@".indexOf(text.charAt(0)) >= 0) text = "'" + text;
+        return "\"" + text + "\"";
     }
 }

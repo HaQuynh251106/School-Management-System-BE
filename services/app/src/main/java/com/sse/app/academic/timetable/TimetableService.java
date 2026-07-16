@@ -1,82 +1,125 @@
 package com.sse.app.academic.timetable;
 
 import com.sse.app.academic.structure.StructureService;
+import com.sse.app.academic.timetable.TimetableDtos.CreateSlotRequest;
 import com.sse.app.common.ApiException;
 import com.sse.app.common.Ids;
-import com.sse.app.academic.timetable.TimetableDtos.CreateSlotRequest;
 import com.sse.app.identity.User;
 import com.sse.app.identity.UserService;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
-/** A3: Xếp TKB + Conflict Resolution (flowchart 2.4). */
+/** Xếp thời khóa biểu và xử lý xung đột lớp, giáo viên, phòng học. */
 @Service
 public class TimetableService {
-
     private final TimetableRepository slots;
     private final StructureService structure;
     private final UserService users;
+    private final TeachingAssignmentService teachingAssignments;
 
-    public TimetableService(TimetableRepository slots, StructureService structure, UserService users) {
+    public TimetableService(TimetableRepository slots, StructureService structure, UserService users,
+                            TeachingAssignmentService teachingAssignments) {
         this.slots = slots;
         this.structure = structure;
         this.users = users;
+        this.teachingAssignments = teachingAssignments;
     }
 
     public List<TimetableSlot> list(String classId, String teacherId, String semesterId, String dayOfWeek) {
         List<TimetableSlot> base;
-        if (classId != null)        base = slots.findByClassId(classId);
+        if (classId != null) base = slots.findByClassId(classId);
         else if (teacherId != null) base = slots.findByTeacherId(teacherId);
         else if (semesterId != null) base = slots.findBySemesterId(semesterId);
         else base = slots.findAll();
         return base.stream()
-                .filter(s -> semesterId == null || semesterId.equals(s.getSemesterId()))
-                .filter(s -> dayOfWeek == null || dayOfWeek.equalsIgnoreCase(s.getDayOfWeek()))
-                .sorted((a, b) -> {
-                    int d = dayIndex(a.getDayOfWeek()) - dayIndex(b.getDayOfWeek());
-                    return d != 0 ? d : Integer.compare(a.getPeriodNo(), b.getPeriodNo());
+                .filter(slot -> semesterId == null || semesterId.equals(slot.getSemesterId()))
+                .filter(slot -> dayOfWeek == null || dayOfWeek.equalsIgnoreCase(slot.getDayOfWeek()))
+                .sorted((left, right) -> {
+                    int day = dayIndex(left.getDayOfWeek()) - dayIndex(right.getDayOfWeek());
+                    return day != 0 ? day : Integer.compare(left.getPeriodNo(), right.getPeriodNo());
                 })
                 .toList();
     }
 
-    public TimetableSlot create(CreateSlotRequest r) {
-        checkConflicts(r);
-
-        User teacher = users.getById(r.teacherId());
-        String subjectName = structure.subjectName(r.subjectId());
-
+    @Transactional
+    public TimetableSlot create(CreateSlotRequest request) {
+        SlotContext context = validateSlot(request, null);
+        checkConflicts(request, null);
         return slots.save(TimetableSlot.builder()
-                .id(r.id() == null || r.id().isBlank() ? Ids.gen("tt") : r.id())
-                .classId(r.classId())
-                .subjectId(r.subjectId())
-                .subjectName(subjectName)
-                .teacherId(r.teacherId())
-                .teacherName(teacher.getFullName())
-                .roomCode(r.roomCode())
-                .dayOfWeek(r.dayOfWeek().toUpperCase())
-                .periodNo(r.periodNo())
-                .startTime(r.startTime())
-                .endTime(r.endTime())
-                .semesterId(r.semesterId())
+                .id(request.id() == null || request.id().isBlank() ? Ids.gen("tt") : request.id())
+                .classId(request.classId())
+                .subjectId(request.subjectId())
+                .subjectName(context.subjectName())
+                .teacherId(request.teacherId())
+                .teacherName(context.teacher().getFullName())
+                .roomCode(request.roomCode())
+                .dayOfWeek(request.dayOfWeek().toUpperCase())
+                .periodNo(request.periodNo())
+                .startTime(request.startTime())
+                .endTime(request.endTime())
+                .semesterId(request.semesterId())
                 .build());
     }
 
-    private void checkConflicts(CreateSlotRequest r) {
-        List<TimetableSlot> sameCell = slots.findByDayOfWeekAndPeriodNo(r.dayOfWeek().toUpperCase(), r.periodNo());
-        for (TimetableSlot s : sameCell) {
-            if (differentSemester(r.semesterId(), s.getSemesterId())) continue;
-            if (r.classId().equals(s.getClassId()))
-                throw ApiException.conflict("Lớp đã có tiết khác ở thứ " + r.dayOfWeek() + " tiết " + r.periodNo());
-            if (r.teacherId().equals(s.getTeacherId()))
-                throw ApiException.conflict("Giáo viên bận tiết này (" + s.getSubjectName() + ")");
-            if (r.roomCode() != null && r.roomCode().equals(s.getRoomCode()))
-                throw ApiException.conflict("Phòng " + r.roomCode() + " đang được dùng tiết này");
+    @Transactional
+    public TimetableSlot update(String id, CreateSlotRequest request) {
+        TimetableSlot slot = slots.findById(id).orElseThrow(() -> ApiException.notFound("Tiết học"));
+        SlotContext context = validateSlot(request, id);
+        checkConflicts(request, id);
+        slot.setClassId(request.classId());
+        slot.setSubjectId(request.subjectId());
+        slot.setSubjectName(context.subjectName());
+        slot.setTeacherId(request.teacherId());
+        slot.setTeacherName(context.teacher().getFullName());
+        slot.setRoomCode(request.roomCode());
+        slot.setDayOfWeek(request.dayOfWeek().toUpperCase());
+        slot.setPeriodNo(request.periodNo());
+        slot.setStartTime(request.startTime());
+        slot.setEndTime(request.endTime());
+        slot.setSemesterId(request.semesterId());
+        return slots.save(slot);
+    }
+
+    private SlotContext validateSlot(CreateSlotRequest request, String ignoredSlotId) {
+        structure.getClass(request.classId());
+        structure.assertSemesterExists(request.semesterId());
+        String subjectName = structure.requireSubjectName(request.subjectId());
+        User teacher = users.getById(request.teacherId());
+        if (!"TEACHER".equals(teacher.getRole()) || !"ACTIVE".equals(teacher.getStatus())) {
+            throw ApiException.badRequest("Chỉ có thể xếp lịch cho giáo viên đang hoạt động");
+        }
+        TeachingAssignment assignment = teachingAssignments.requireForSlot(
+                request.classId(), request.subjectId(), request.teacherId(), request.semesterId());
+        teachingAssignments.assertCanSchedule(assignment, ignoredSlotId);
+        return new SlotContext(subjectName, teacher);
+    }
+
+    private void checkConflicts(CreateSlotRequest request, String ignoredSlotId) {
+        List<TimetableSlot> sameCell = slots.findByDayOfWeekAndPeriodNo(
+                request.dayOfWeek().toUpperCase(), request.periodNo());
+        for (TimetableSlot existing : sameCell) {
+            if (existing.getId().equals(ignoredSlotId)) continue;
+            if (differentSemester(request.semesterId(), existing.getSemesterId())) continue;
+            if (request.classId().equals(existing.getClassId())) {
+                throw ApiException.conflict("Lớp đã có tiết khác ở " + vietnameseDay(request.dayOfWeek())
+                        + ", tiết " + request.periodNo());
+            }
+            if (request.teacherId().equals(existing.getTeacherId())) {
+                String classCode = structure.getClass(existing.getClassId()).getCode();
+                throw ApiException.conflict("Giáo viên đã kín lịch ở tiết này: đang dạy "
+                        + existing.getSubjectName() + " tại lớp " + classCode);
+            }
+            if (request.roomCode() != null && !request.roomCode().isBlank()
+                    && request.roomCode().equals(existing.getRoomCode())) {
+                throw ApiException.conflict("Phòng " + request.roomCode() + " đang được sử dụng ở tiết này");
+            }
         }
     }
 
-    private boolean differentSemester(String a, String b) {
-        return a != null && b != null && !a.equals(b);
+    private boolean differentSemester(String left, String right) {
+        return left != null && right != null && !left.equals(right);
     }
 
     public void delete(String id) {
@@ -84,20 +127,45 @@ public class TimetableService {
         slots.deleteById(id);
     }
 
-    /** Cross-domain: lấy 1 tiết học (điểm danh cần subjectName/periodNo/classId). */
     public TimetableSlot findSlot(String id) {
         return id == null ? null : slots.findById(id).orElse(null);
     }
 
-    /** Seed raw (bỏ qua conflict-check) — dùng bởi DataSeeder. */
-    public void seedSlots(List<TimetableSlot> list) {
-        slots.saveAll(list);
+    public boolean teacherTeachesClass(String teacherId, String classId) {
+        return teachingAssignments.isAssigned(teacherId, classId);
     }
 
-    private int dayIndex(String d) {
-        return switch (d == null ? "" : d.toUpperCase()) {
-            case "MON" -> 1; case "TUE" -> 2; case "WED" -> 3; case "THU" -> 4;
-            case "FRI" -> 5; case "SAT" -> 6; case "SUN" -> 7; default -> 9;
+    /** Chèn dữ liệu mẫu và tự tạo phân công tương ứng. */
+    public void seedSlots(List<TimetableSlot> list) {
+        slots.saveAll(list);
+        teachingAssignments.seedFromSlots(list);
+    }
+
+    private int dayIndex(String day) {
+        return switch (day == null ? "" : day.toUpperCase()) {
+            case "MON" -> 1;
+            case "TUE" -> 2;
+            case "WED" -> 3;
+            case "THU" -> 4;
+            case "FRI" -> 5;
+            case "SAT" -> 6;
+            case "SUN" -> 7;
+            default -> 9;
         };
     }
+
+    private String vietnameseDay(String day) {
+        return switch (day == null ? "" : day.toUpperCase()) {
+            case "MON" -> "thứ Hai";
+            case "TUE" -> "thứ Ba";
+            case "WED" -> "thứ Tư";
+            case "THU" -> "thứ Năm";
+            case "FRI" -> "thứ Sáu";
+            case "SAT" -> "thứ Bảy";
+            case "SUN" -> "Chủ nhật";
+            default -> day;
+        };
+    }
+
+    private record SlotContext(String subjectName, User teacher) {}
 }

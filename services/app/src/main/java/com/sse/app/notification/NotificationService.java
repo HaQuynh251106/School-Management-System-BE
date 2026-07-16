@@ -21,25 +21,45 @@ public class NotificationService {
     private final NotificationTemplateRepository templates;
     private final AnnouncementRepository announcements;
     private final UserService users;
+    private final NotificationPreferenceRepository preferences;
+    private final NotificationDeliveryLogRepository deliveryLogs;
+    private final UserDeviceRepository devices;
+    private final NotificationChannelDispatcher dispatcher;
 
     public NotificationService(NotificationRepository notifications,
                                NotificationTemplateRepository templates,
                                AnnouncementRepository announcements,
-                               UserService users) {
+                               UserService users,
+                               NotificationPreferenceRepository preferences,
+                               NotificationDeliveryLogRepository deliveryLogs,
+                               UserDeviceRepository devices,
+                               NotificationChannelDispatcher dispatcher) {
         this.notifications = notifications;
         this.templates = templates;
         this.announcements = announcements;
         this.users = users;
+        this.preferences = preferences;
+        this.deliveryLogs = deliveryLogs;
+        this.devices = devices;
+        this.dispatcher = dispatcher;
     }
 
     // ---------- Phát thông báo in-app ----------
 
     public Notification notifyUser(String recipientId, String type, String title, String body,
                                    String refType, String refId) {
-        return notifications.save(Notification.builder()
-                .id(Ids.gen("noti")).recipientId(recipientId).type(type)
-                .title(title).body(body).read(false)
-                .refType(refType).refId(refId).createdAt(Instant.now()).build());
+        Notification notification = null;
+        if (channelEnabled(recipientId, "IN_APP")) {
+            notification = notifications.save(Notification.builder()
+                    .id(Ids.gen("noti")).recipientId(recipientId).type(type)
+                    .title(title).body(body).read(false)
+                    .refType(refType).refId(refId).createdAt(Instant.now()).build());
+            deliveryLogs.save(NotificationDeliveryLog.builder().id(Ids.gen("ndl"))
+                    .notificationId(notification.getId()).recipientId(recipientId).channel("IN_APP")
+                    .status("DELIVERED").attempts(1).createdAt(Instant.now()).build());
+        }
+        dispatcher.dispatch(recipientId, notification == null ? null : notification.getId(), title, body);
+        return notification;
     }
 
     public void notifyUsers(List<String> recipientIds, String type, String title, String body,
@@ -76,6 +96,62 @@ public class NotificationService {
         var list = notifications.findByRecipientIdAndReadIsFalseOrderByCreatedAtDesc(recipientId);
         list.forEach(n -> n.setRead(true));
         notifications.saveAll(list);
+    }
+
+    public List<NotificationPreference> preferences(String userId) {
+        for (String channel : List.of("IN_APP", "PUSH", "EMAIL")) {
+            if (preferences.findByUserIdAndChannel(userId, channel).isEmpty()) {
+                preferences.save(NotificationPreference.builder().id(Ids.gen("np"))
+                        .userId(userId).channel(channel).enabled("IN_APP".equals(channel))
+                        .updatedAt(Instant.now()).build());
+            }
+        }
+        return preferences.findByUserIdOrderByChannel(userId);
+    }
+
+    public NotificationPreference updatePreference(String userId, UpdatePreferenceRequest request) {
+        String channel = request.channel().trim().toUpperCase();
+        if (!List.of("IN_APP", "PUSH", "EMAIL").contains(channel)) {
+            throw ApiException.badRequest("Kênh thông báo không hợp lệ");
+        }
+        NotificationPreference preference = preferences.findByUserIdAndChannel(userId, channel)
+                .orElseGet(() -> NotificationPreference.builder().id(Ids.gen("np"))
+                        .userId(userId).channel(channel).build());
+        preference.setEnabled(!Boolean.FALSE.equals(request.enabled()));
+        preference.setUpdatedAt(Instant.now());
+        return preferences.save(preference);
+    }
+
+    public List<NotificationDeliveryLog> deliveryLogs() {
+        return deliveryLogs.findTop200ByOrderByCreatedAtDesc();
+    }
+
+    public List<UserDevice> devices(String userId) {
+        return devices.findByUserIdAndActiveTrue(userId);
+    }
+
+    public UserDevice registerDevice(String userId, RegisterDeviceRequest request) {
+        UserDevice device = devices.findByDeviceToken(request.deviceToken().trim())
+                .orElseGet(() -> UserDevice.builder().id(Ids.gen("dev"))
+                        .deviceToken(request.deviceToken().trim()).createdAt(Instant.now()).build());
+        device.setUserId(userId);
+        device.setPlatform(request.platform().toUpperCase());
+        device.setActive(true);
+        device.setUpdatedAt(Instant.now());
+        return devices.save(device);
+    }
+
+    public void deactivateDevice(String userId, String deviceId) {
+        UserDevice device = devices.findById(deviceId).orElseThrow(() -> ApiException.notFound("Thiết bị"));
+        if (!userId.equals(device.getUserId())) throw ApiException.forbidden("Thiết bị không thuộc tài khoản của bạn");
+        device.setActive(false);
+        device.setUpdatedAt(Instant.now());
+        devices.save(device);
+    }
+
+    private boolean channelEnabled(String userId, String channel) {
+        return preferences.findByUserIdAndChannel(userId, channel)
+                .map(NotificationPreference::isEnabled).orElse(true);
     }
 
     // ---------- Announcements ----------

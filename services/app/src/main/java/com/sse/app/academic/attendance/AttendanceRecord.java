@@ -7,7 +7,9 @@ import java.time.LocalDate;
 
 /** B3/C3/D2: Một lượt điểm danh của 1 HS trong 1 tiết. */
 @Entity
-@Table(name = "attendance_records", indexes = {
+@Table(name = "attendance_records", uniqueConstraints = {
+        @UniqueConstraint(name = "uk_att_slot_date_student", columnNames = {"slotId", "date", "studentId"})
+}, indexes = {
         @Index(name = "idx_att_student", columnList = "studentId"),
         @Index(name = "idx_att_class_date", columnList = "classId,date")
 })

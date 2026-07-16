@@ -3,15 +3,23 @@ package com.sse.app.academic.attendance;
 import com.sse.app.academic.attendance.AttendanceDtos.*;
 import com.sse.app.academic.timetable.TimetableService;
 import com.sse.app.academic.timetable.TimetableSlot;
+import com.sse.app.academic.structure.Semester;
+import com.sse.app.academic.structure.StructureService;
 import com.sse.app.common.Ids;
+import com.sse.app.common.ApiException;
+import com.sse.app.identity.User;
 import com.sse.app.identity.UserService;
 import com.sse.app.notification.NotificationService;
+import com.sse.app.security.CurrentUser;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
+import java.util.Set;
 
 /** B3: Sổ điểm danh + D2: cảnh báo vắng tức thời (flowchart 2.5). */
 @Service
@@ -21,13 +29,16 @@ public class AttendanceService {
     private final TimetableService timetable;
     private final UserService users;
     private final NotificationService notifications;
+    private final StructureService structure;
 
     public AttendanceService(AttendanceRepository records, TimetableService timetable,
-                             UserService users, NotificationService notifications) {
+                             UserService users, NotificationService notifications,
+                             StructureService structure) {
         this.records = records;
         this.timetable = timetable;
         this.users = users;
         this.notifications = notifications;
+        this.structure = structure;
     }
 
     public List<AttendanceRecord> list(String studentId, String classId, String slotId, LocalDate date) {
@@ -44,36 +55,103 @@ public class AttendanceService {
                 .toList();
     }
 
+    public void assertCanManageSlot(CurrentUser actor, String slotId) {
+        TimetableSlot slot = requireSlot(slotId);
+        if (actor.isTeacher()) {
+            if (!actor.id().equals(slot.getTeacherId())) {
+                throw ApiException.forbidden("Không có quyền điểm danh tiết học của giáo viên khác");
+            }
+            User teacher = users.getById(actor.id());
+            String mainSubject = normalizeSubject(teacher.getMainSubject());
+            if (mainSubject == null) {
+                throw ApiException.forbidden("Giáo viên chưa được cấu hình môn chuyên ngành để điểm danh");
+            }
+            if (!matchesSubject(mainSubject, slot.getSubjectId(), slot.getSubjectName())) {
+                throw ApiException.forbidden("Giáo viên chỉ được điểm danh các tiết đúng môn chuyên ngành của mình");
+            }
+        }
+    }
+
     @Transactional
-    public List<AttendanceRecord> bulkMark(BulkAttendanceRequest req) {
-        TimetableSlot slot = timetable.findSlot(req.slotId());
-        String subjectName = req.subjectName() != null ? req.subjectName()
-                : (slot != null ? slot.getSubjectName() : null);
-        Integer periodNo = req.periodNo() != null ? req.periodNo()
-                : (slot != null ? slot.getPeriodNo() : null);
-        String classId = req.classId() != null ? req.classId()
-                : (slot != null ? slot.getClassId() : null);
+    public List<AttendanceRecord> bulkMark(BulkAttendanceRequest req, CurrentUser actor) {
+        TimetableSlot slot = requireSlot(req.slotId());
+        assertCanManageSlot(actor, req.slotId());
+        validateOccurrence(slot, req.date());
+
+        Set<String> seenStudents = new HashSet<>();
+        for (Mark mark : req.marks()) {
+            if (!seenStudents.add(mark.studentId())) {
+                throw ApiException.badRequest("Danh sách điểm danh chứa học sinh bị trùng");
+            }
+            if (!"PRESENT".equals(mark.status()) && (mark.note() == null || mark.note().isBlank())) {
+                throw ApiException.badRequest("Cần nhập ghi chú cho học sinh vắng hoặc đi muộn");
+            }
+            User student = users.getById(mark.studentId());
+            if (!"STUDENT".equals(student.getRole()) || !slot.getClassId().equals(student.getClassId())) {
+                throw ApiException.badRequest("Học sinh " + student.getFullName() + " không thuộc lớp của tiết học");
+            }
+        }
 
         List<AttendanceRecord> saved = new ArrayList<>();
         for (Mark m : req.marks()) {
             AttendanceRecord rec = records
                     .findBySlotIdAndDateAndStudentId(req.slotId(), req.date(), m.studentId())
                     .orElseGet(() -> AttendanceRecord.builder().id(Ids.gen("att")).build());
+            String previousStatus = rec.getStatus();
             rec.setStudentId(m.studentId());
-            rec.setClassId(classId);
+            rec.setClassId(slot.getClassId());
             rec.setSlotId(req.slotId());
             rec.setDate(req.date());
             rec.setStatus(m.status());
-            rec.setNote(m.note());
-            rec.setSubjectName(subjectName);
-            rec.setPeriodNo(periodNo);
+            rec.setNote(normalizeNote(m.note()));
+            rec.setSubjectName(slot.getSubjectName());
+            rec.setPeriodNo(slot.getPeriodNo());
             saved.add(records.save(rec));
 
-            if (isAbsentOrLate(m.status())) {
+            if (isAbsentOrLate(m.status()) && !Objects.equals(previousStatus, m.status())) {
                 alertParents(rec);
             }
         }
         return saved;
+    }
+
+    private TimetableSlot requireSlot(String slotId) {
+        TimetableSlot slot = timetable.findSlot(slotId);
+        if (slot == null) throw ApiException.notFound("Tiết học");
+        return slot;
+    }
+
+    private void validateOccurrence(TimetableSlot slot, LocalDate date) {
+        if (date.isAfter(LocalDate.now())) {
+            throw ApiException.badRequest("Không thể điểm danh cho ngày trong tương lai");
+        }
+        Semester semester = structure.getSemester(slot.getSemesterId());
+        if ((semester.getStartDate() != null && date.isBefore(semester.getStartDate()))
+                || (semester.getEndDate() != null && date.isAfter(semester.getEndDate()))) {
+            throw ApiException.badRequest("Ngày điểm danh nằm ngoài thời gian của học kỳ");
+        }
+        String actualDay = date.getDayOfWeek().name().substring(0, 3);
+        if (!actualDay.equalsIgnoreCase(slot.getDayOfWeek())) {
+            throw ApiException.badRequest("Ngày điểm danh không đúng thứ của tiết học trong thời khóa biểu");
+        }
+        if (structure.isHoliday(date)) {
+            throw ApiException.badRequest("Không thể điểm danh vào ngày nghỉ của trường");
+        }
+    }
+
+    private String normalizeNote(String note) {
+        if (note == null || note.isBlank()) return null;
+        return note.trim();
+    }
+
+    private String normalizeSubject(String subject) {
+        if (subject == null || subject.isBlank()) return null;
+        return subject.trim();
+    }
+
+    private boolean matchesSubject(String mainSubject, String subjectId, String subjectName) {
+        return (subjectId != null && subjectId.trim().equalsIgnoreCase(mainSubject))
+                || (subjectName != null && subjectName.trim().equalsIgnoreCase(mainSubject));
     }
 
     private void alertParents(AttendanceRecord rec) {

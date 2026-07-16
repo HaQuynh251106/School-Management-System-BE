@@ -10,6 +10,7 @@ public record UserDto(
         String fullName,
         String role,
         String status,
+        boolean passwordChangeRequired,
         String email,
         String phone,
         String avatarUrl,

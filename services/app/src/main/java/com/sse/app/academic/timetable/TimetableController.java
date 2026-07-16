@@ -9,6 +9,9 @@ import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import com.sse.app.academic.structure.SchoolClass;
+import com.sse.app.academic.structure.StructureService;
+import com.sse.app.common.ApiException;
 
 /** A3/B2/C2: TKB lớp + TKB cá nhân. Route /timetableSlots khớp json-server. */
 @RestController
@@ -16,10 +19,15 @@ public class TimetableController {
 
     private final TimetableService timetable;
     private final UserService users;
+    private final StructureService structure;
+    private final TeachingAssignmentService teachingAssignments;
 
-    public TimetableController(TimetableService timetable, UserService users) {
+    public TimetableController(TimetableService timetable, UserService users, StructureService structure,
+                               TeachingAssignmentService teachingAssignments) {
         this.timetable = timetable;
         this.users = users;
+        this.structure = structure;
+        this.teachingAssignments = teachingAssignments;
     }
 
     @GetMapping("/timetableSlots")
@@ -27,7 +35,8 @@ public class TimetableController {
                                     @RequestParam(required = false) String teacherId,
                                     @RequestParam(required = false) String semesterId,
                                     @RequestParam(required = false) String dayOfWeek) {
-        CurrentUserHolder.require();
+        CurrentUser current = CurrentUserHolder.require();
+        assertCanView(current, classId, teacherId);
         return timetable.list(classId, teacherId, semesterId, dayOfWeek);
     }
 
@@ -51,5 +60,46 @@ public class TimetableController {
         User u = users.getById(me.id());
         if (u.getClassId() != null) return timetable.list(u.getClassId(), null, null, null);
         return List.of();
+    }
+
+    @PutMapping("/timetableSlots/{id}")
+    public TimetableSlot update(@PathVariable String id, @Valid @RequestBody CreateSlotRequest r) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return timetable.update(id, r);
+    }
+
+    @GetMapping("/me/teaching-classes")
+    public List<SchoolClass> teachingClasses() {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("TEACHER");
+        java.util.LinkedHashSet<String> ids = new java.util.LinkedHashSet<>();
+        teachingAssignments.assignmentsOfTeacher(me.id()).forEach(item -> ids.add(item.getClassId()));
+        structure.classesOfHomeroom(me.id()).forEach(schoolClass -> ids.add(schoolClass.getId()));
+        return ids.stream().map(structure::getClass).toList();
+    }
+
+    private void assertCanView(CurrentUser current, String classId, String teacherId) {
+        if (current.isAdmin()) return;
+        if (current.isTeacher()) {
+            if (teacherId != null && teacherId.equals(current.id())) return;
+            if (classId != null) {
+                boolean teaches = teachingAssignments.isAssigned(current.id(), classId);
+                boolean homeroom = current.id().equals(structure.getClass(classId).getHomeroomTeacherId());
+                if (teaches || homeroom) return;
+            }
+            throw ApiException.forbidden("Không có quyền xem thời khóa biểu ngoài lớp được phân công");
+        }
+        if (current.isStudent()) {
+            User student = users.getById(current.id());
+            if (classId != null && classId.equals(student.getClassId())) return;
+            throw ApiException.forbidden("Học sinh chỉ được xem thời khóa biểu lớp mình");
+        }
+        if (current.isParent()) {
+            boolean childClass = classId != null && users.childrenOf(current.id()).stream()
+                    .anyMatch(child -> classId.equals(child.classId()));
+            if (childClass) return;
+            throw ApiException.forbidden("Phụ huynh chỉ được xem thời khóa biểu của con");
+        }
+        throw ApiException.forbidden("Không có quyền xem thời khóa biểu");
     }
 }

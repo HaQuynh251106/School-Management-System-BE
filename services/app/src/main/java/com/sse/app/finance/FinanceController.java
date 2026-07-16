@@ -101,6 +101,18 @@ public class FinanceController {
         return finance.pay(r);
     }
 
+    @PostMapping("/payments/cash")
+    public Map<String, Object> recordCash(@Valid @RequestBody PayRequest request) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return finance.recordCashPayment(request.invoiceId());
+    }
+
+    @PostMapping("/payments/callback/{gateway}")
+    public Map<String, Object> paymentCallback(@PathVariable String gateway,
+                                               @Valid @RequestBody PaymentCallbackRequest request) {
+        return finance.completeGatewayPayment(gateway, request);
+    }
+
     @GetMapping("/payments")
     public List<Payment> payments(@RequestParam String invoiceId) {
         CurrentUser me = CurrentUserHolder.require();

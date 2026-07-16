@@ -2,6 +2,11 @@ package com.sse.app.chat;
 
 import com.sse.app.common.Ids;
 import com.sse.app.identity.UserService;
+import com.sse.app.identity.UserDto;
+import com.sse.app.security.CurrentUser;
+import com.sse.app.academic.structure.StructureService;
+import com.sse.app.academic.timetable.TeachingAssignmentService;
+import com.sse.app.common.ApiException;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -13,10 +18,15 @@ public class ChatService {
 
     private final ChatRepository repo;
     private final UserService users;
+    private final StructureService structure;
+    private final TeachingAssignmentService teachingAssignments;
 
-    public ChatService(ChatRepository repo, UserService users) {
+    public ChatService(ChatRepository repo, UserService users, StructureService structure,
+                       TeachingAssignmentService teachingAssignments) {
         this.repo = repo;
         this.users = users;
+        this.structure = structure;
+        this.teachingAssignments = teachingAssignments;
     }
 
     private List<ChatMessage> involving(String meId) {
@@ -63,6 +73,49 @@ public class ChatService {
                 .id(Ids.gen("msg")).senderId(meId).senderName(meName)
                 .recipientId(toId).recipientName(users.fullNameOf(toId))
                 .body(body).readFlag(false).createdAt(Instant.now()).build());
+    }
+
+    public List<UserDto> contacts(CurrentUser current) {
+        LinkedHashSet<String> ids = new LinkedHashSet<>();
+        if (current.isAdmin()) {
+            ids.addAll(users.allUserIds());
+        } else if (current.isParent()) {
+            users.childrenOf(current.id()).forEach(child -> {
+                if (child.classId() != null) {
+                    String homeroom = structure.getClass(child.classId()).getHomeroomTeacherId();
+                    if (homeroom != null) ids.add(homeroom);
+                }
+            });
+        } else if (current.isStudent()) {
+            var student = users.getById(current.id());
+            if (student.getClassId() != null) {
+                teachingAssignments.assignmentsOfClass(student.getClassId(), null)
+                        .forEach(item -> ids.add(item.getTeacherId()));
+            }
+            ids.addAll(users.parentIdsOf(current.id()));
+        } else if (current.isTeacher()) {
+            LinkedHashSet<String> classIds = new LinkedHashSet<>();
+            teachingAssignments.assignmentsOfTeacher(current.id())
+                    .forEach(item -> classIds.add(item.getClassId()));
+            structure.classesOfHomeroom(current.id()).forEach(schoolClass -> classIds.add(schoolClass.getId()));
+            for (String classId : classIds) {
+                for (UserDto student : users.listSummaries("STUDENT", null, classId)) {
+                    ids.add(student.id());
+                    ids.addAll(users.parentIdsOf(student.id()));
+                }
+            }
+        }
+        ids.remove(current.id());
+        return ids.stream().map(users::getById).filter(user -> "ACTIVE".equals(user.getStatus()))
+                .map(users::toSummaryDto).sorted(Comparator.comparing(UserDto::fullName)).toList();
+    }
+
+    public void assertCanContact(CurrentUser current, String otherId) {
+        if (otherId == null || otherId.isBlank() || current.id().equals(otherId)) {
+            throw ApiException.badRequest("Người nhận không hợp lệ");
+        }
+        boolean allowed = contacts(current).stream().anyMatch(contact -> contact.id().equals(otherId));
+        if (!allowed) throw ApiException.forbidden("Không thể nhắn tin ngoài phạm vi lớp học được phân công");
     }
 
     public void seed(List<ChatMessage> list) {

@@ -18,6 +18,7 @@ public final class FinanceEntities {
 class FeePeriod {
     @Id
     private String id;
+    @Column(nullable = false)
     private String code;
     private String name;
     /** DRAFT | OPEN | CLOSED */
@@ -64,6 +65,8 @@ class Invoice {
     private String status;
     private Instant issuedAt;
     private LocalDate dueDate;
+    @Version
+    private long version;
 }
 
 @Entity
@@ -93,4 +96,31 @@ class Payment {
     private String txnRef;
     private Instant createdAt;
     private Instant paidAt;
+}
+
+/** Trạng thái trao đổi độc lập với cổng thanh toán, phục vụ callback và đối soát. */
+@Entity
+@Table(name = "payment_gateway_transactions", indexes =
+        @Index(name = "idx_gateway_txn_status", columnList = "status,createdAt"))
+@Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
+class PaymentGatewayTransaction {
+    @Id
+    private String id;
+    @Column(nullable = false, unique = true)
+    private String paymentId;
+    @Column(nullable = false, unique = true)
+    private String txnRef;
+    @Column(nullable = false, length = 32)
+    private String gateway;
+    @Column(nullable = false, length = 32)
+    private String status;
+    @Column(length = 4000)
+    private String requestPayload;
+    @Column(length = 4000)
+    private String callbackPayload;
+    private Boolean signatureValid;
+    @Column(nullable = false)
+    private Instant createdAt;
+    @Column(nullable = false)
+    private Instant updatedAt;
 }

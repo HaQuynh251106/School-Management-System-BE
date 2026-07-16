@@ -30,6 +30,7 @@ logs/
 
 # Docker volumes
 infrastructure/docker/**/data/
+data/
 
 # Maven
 .mvn/wrapper/maven-wrapper.jar

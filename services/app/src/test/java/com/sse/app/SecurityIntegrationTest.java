@@ -10,9 +10,14 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.mock.web.MockMultipartFile;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+
+import java.io.ByteArrayOutputStream;
 
 import static org.hamcrest.Matchers.nullValue;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -21,7 +26,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest
+@SpringBootTest(properties = {
+        "spring.datasource.url=jdbc:h2:mem:security-test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
+        "sse.storage.path=target/test-uploads"
+})
 @AutoConfigureMockMvc
 @ActiveProfiles("local")
 class SecurityIntegrationTest {
@@ -57,6 +65,80 @@ class SecurityIntegrationTest {
 
         mvc.perform(get("/invoices").header("Authorization", "Bearer " + token))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void attendanceRegisterIsIdempotentAndRestrictedToTheAssignedTeacher() throws Exception {
+        String teacher = login("gv.hoa", "teacher@123");
+
+        mvc.perform(get("/attendance")
+                        .queryParam("slotId", "tt-1")
+                        .queryParam("date", "2026-05-18")
+                        .header("Authorization", "Bearer " + teacher))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].studentId").value("u-student-1"));
+
+        mvc.perform(get("/attendance")
+                        .queryParam("slotId", "tt-2")
+                        .queryParam("date", "2026-05-18")
+                        .header("Authorization", "Bearer " + teacher))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(get("/attendance")
+                        .queryParam("slotId", "tt-3")
+                        .queryParam("date", "2026-05-18")
+                        .header("Authorization", "Bearer " + teacher))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(post("/attendance/bulk")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"slotId":"tt-3","date":"2026-06-01","marks":[
+                                  {"studentId":"u-student-1","status":"PRESENT"}]}
+                                """))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(post("/attendance/bulk")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"slotId":"tt-1","date":"2026-01-12","classId":"c-8a1","subjectName":"Sai",
+                                 "periodNo":9,"marks":[{"studentId":"u-student-1","status":"LATE","note":"  Muộn 5 phút  "}]}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].classId").value("c-10a1"))
+                .andExpect(jsonPath("$[0].subjectName").value("Toán"))
+                .andExpect(jsonPath("$[0].periodNo").value(1))
+                .andExpect(jsonPath("$[0].note").value("Muộn 5 phút"));
+
+        mvc.perform(post("/attendance/bulk")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"slotId":"tt-1","date":"2026-01-12","marks":[
+                                  {"studentId":"u-student-1","status":"PRESENT"},
+                                  {"studentId":"u-student-1","status":"PRESENT"}]}
+                                """))
+                .andExpect(status().isBadRequest());
+
+        mvc.perform(post("/attendance/bulk")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"slotId":"tt-1","date":"2026-01-12","marks":[
+                                  {"studentId":"u-student-1","status":"ABSENT_EXCUSED"}]}
+                                """))
+                .andExpect(status().isBadRequest());
+
+        mvc.perform(post("/attendance/bulk")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"slotId":"tt-1","date":"2026-01-12","marks":[
+                                  {"studentId":"u-student-2","status":"PRESENT"}]}
+                                """))
+                .andExpect(status().isBadRequest());
     }
 
     @Test
@@ -294,6 +376,14 @@ class SecurityIntegrationTest {
         String assignmentId = body(assignmentResponse).path("id").asText();
 
         String student = login("hs.an", "student@123");
+        String otherStudent = login("hs.binh", "student@123");
+        mvc.perform(get("/files/{id}/content", assignmentFileId)
+                        .header("Authorization", "Bearer " + otherStudent))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/files/{id}/content", assignmentFileId)
+                        .header("Authorization", "Bearer " + student))
+                .andExpect(status().isOk());
+
         String submissionFileId = upload(student, "bai-lam.pdf", "application/pdf", "%PDF-submission");
         mvc.perform(post("/assignments/{id}/submit", assignmentId)
                         .header("Authorization", "Bearer " + student)
@@ -309,6 +399,88 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + teacher))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].attachmentFileId").value(submissionFileId));
+
+        mvc.perform(get("/files/{id}/content", submissionFileId)
+                        .header("Authorization", "Bearer " + otherStudent))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/files/{id}/content", submissionFileId)
+                        .header("Authorization", "Bearer " + teacher))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void invoiceGenerationAndSignedPaymentCallbackAreIdempotent() throws Exception {
+        String admin = login("admin", "admin@123");
+        mvc.perform(post("/fee-periods/fp-hk1/generate-invoices")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk());
+        JsonNode afterFirstGeneration = body(mvc.perform(get("/invoices")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        mvc.perform(post("/fee-periods/fp-hk1/generate-invoices")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk());
+        JsonNode afterSecondGeneration = body(mvc.perform(get("/invoices")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        org.junit.jupiter.api.Assertions.assertEquals(
+                afterFirstGeneration.size(), afterSecondGeneration.size());
+
+        String parent = login("ph.pham", "parent@123");
+        JsonNode parentInvoices = body(mvc.perform(get("/invoices")
+                        .header("Authorization", "Bearer " + parent))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        JsonNode invoice = null;
+        for (JsonNode item : parentInvoices) {
+            if (!"PAID".equals(item.path("status").asText())) { invoice = item; break; }
+        }
+        if (invoice == null) throw new AssertionError("A pending parent invoice is required");
+
+        JsonNode initiated = body(mvc.perform(post("/payments")
+                        .header("Authorization", "Bearer " + parent)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"invoiceId\":\"" + invoice.path("id").asText() + "\",\"method\":\"VNPAY\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.payment.status").value("PENDING"))
+                .andReturn().getResponse().getContentAsString());
+        String callbackUrl = initiated.path("callbackUrl").asText();
+        String callbackBody = json.writeValueAsString(initiated.path("sandboxCallback"));
+        mvc.perform(post(callbackUrl).contentType(MediaType.APPLICATION_JSON).content(callbackBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.payment.status").value("SUCCESS"))
+                .andExpect(jsonPath("$.invoice.status").value("PAID"));
+        mvc.perform(post(callbackUrl).contentType(MediaType.APPLICATION_JSON).content(callbackBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.payment.status").value("SUCCESS"))
+                .andExpect(jsonPath("$.invoice.paidAmount").value(invoice.path("totalAmount").asLong()));
+    }
+
+    @Test
+    void temporaryPasswordMustBeChangedAndOldAccessTokenIsRevoked() throws Exception {
+        String admin = login("admin", "admin@123");
+        mvc.perform(post("/users")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"username":"forced.change","password":"Temporary@123",
+                                 "fullName":"Tài khoản đổi mật khẩu","role":"PARENT"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.passwordChangeRequired").value(true));
+
+        String temporaryToken = login("forced.change", "Temporary@123");
+        mvc.perform(get("/classes").header("Authorization", "Bearer " + temporaryToken))
+                .andExpect(status().isForbidden());
+        mvc.perform(put("/me/password")
+                        .header("Authorization", "Bearer " + temporaryToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"currentPassword":"Temporary@123","newPassword":"Permanent@456"}
+                                """))
+                .andExpect(status().isOk());
+        mvc.perform(get("/me").header("Authorization", "Bearer " + temporaryToken))
+                .andExpect(status().isUnauthorized());
+        login("forced.change", "Permanent@456");
     }
 
     @Test
@@ -368,6 +540,267 @@ class SecurityIntegrationTest {
                 .andExpect(jsonPath("$.homeroomTeacherName").value("Trần Thị Hoa"))
                 .andExpect(jsonPath("$.homeroomAssignedAt").isNotEmpty())
                 .andExpect(jsonPath("$.homeroomAssignedBy").value("u-admin-1"));
+    }
+
+    @Test
+    void loginHistoryAndReportExportAreAvailableToAdmin() throws Exception {
+        String admin = login("admin", "admin@123");
+
+        mvc.perform(get("/users/u-admin-1/login-history")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].username").value("admin"))
+                .andExpect(jsonPath("$[0].success").value(true));
+
+        mvc.perform(get("/reports/export")
+                        .queryParam("type", "attendance")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Type", "text/csv;charset=UTF-8"));
+    }
+
+    @Test
+    void adminCanLinkAnotherParentToAStudent() throws Exception {
+        String admin = login("admin", "admin@123");
+        String response = mvc.perform(post("/users")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"username":"ph.flowchart","password":"Parent@123","fullName":"Phụ huynh Flowchart","role":"PARENT"}
+                                """))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String parentId = body(response).path("id").asText();
+
+        mvc.perform(post("/users/" + parentId + "/children")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"studentId":"u-student-1","primaryContact":false}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("u-student-1"));
+
+        mvc.perform(get("/users/" + parentId + "/children")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value("u-student-1"));
+    }
+
+    @Test
+    void adminCanImportUsersFromExcelWithPerRowResult() throws Exception {
+        String admin = login("admin", "admin@123");
+        byte[] workbook;
+        try (XSSFWorkbook excel = new XSSFWorkbook(); ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
+            var sheet = excel.createSheet("Nguoi dung");
+            var headerRow = sheet.createRow(0);
+            String[] headers = {"Tên đăng nhập", "Họ tên", "Vai trò", "Mật khẩu", "Mã lớp", "Ngày sinh"};
+            for (int i = 0; i < headers.length; i++) headerRow.createCell(i).setCellValue(headers[i]);
+            var data = sheet.createRow(1);
+            data.createCell(0).setCellValue("hs.flowchart");
+            data.createCell(1).setCellValue("Học sinh Flowchart");
+            data.createCell(2).setCellValue("Học sinh");
+            data.createCell(3).setCellValue("Student@123");
+            data.createCell(4).setCellValue("10A1");
+            data.createCell(5).setCellValue("10/10/2010");
+            excel.write(bytes);
+            workbook = bytes.toByteArray();
+        }
+        MockMultipartFile file = new MockMultipartFile("file", "nguoi-dung.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", workbook);
+
+        mvc.perform(multipart("/users/import").file(file)
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalRows").value(1))
+                .andExpect(jsonPath("$.importedRows").value(1))
+                .andExpect(jsonPath("$.failedRows").value(0));
+    }
+
+    @Test
+    void subjectCoefficientAndYearEndPreviewFollowTheFlowchart() throws Exception {
+        String admin = login("admin", "admin@123");
+        mvc.perform(put("/subjects/sj-math")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name":"Toán","coefficient":2.0}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.coefficient").value(2.0));
+
+        mvc.perform(get("/academic-years/ay-2025/promotion-preview")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].promotionStatus").value("INCOMPLETE"));
+    }
+
+    @Test
+    void notificationPreferencesArePersistedPerUser() throws Exception {
+        String student = login("hs.an", "student@123");
+        mvc.perform(get("/notification-preferences")
+                        .header("Authorization", "Bearer " + student))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[1].channel").value("IN_APP"))
+                .andExpect(jsonPath("$[1].enabled").value(true));
+
+        mvc.perform(put("/notification-preferences")
+                        .header("Authorization", "Bearer " + student)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"channel":"EMAIL","enabled":false}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.enabled").value(false));
+    }
+
+    @Test
+    void chatAndTimetableQueriesAreRestrictedToTheUsersSchoolScope() throws Exception {
+        String student = login("hs.an", "student@123");
+        mvc.perform(post("/chat/messages")
+                        .header("Authorization", "Bearer " + student)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"toUserId":"u-admin-1","body":"Tin nhắn ngoài phạm vi"}
+                                """))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(get("/timetableSlots")
+                        .queryParam("classId", "c-8a1")
+                        .header("Authorization", "Bearer " + student))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void teachingAssignmentControlsTimetableCapacityAndTeacherConflicts() throws Exception {
+        String admin = login("admin", "admin@123");
+        String teacher = login("gv.hoa", "teacher@123");
+
+        String assignmentPayload = """
+                {"classId":"c-10a2","subjectId":"sj-math","teacherId":"u-teacher-1",
+                 "semesterId":"sm-2025-2","weeklyPeriods":1}
+                """;
+        JsonNode assignment = body(mvc.perform(post("/teaching-assignments")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(assignmentPayload))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+
+        mvc.perform(post("/teaching-assignments")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(assignmentPayload))
+                .andExpect(status().isForbidden());
+
+        String firstSlot = """
+                {"classId":"c-10a2","subjectId":"sj-math","teacherId":"u-teacher-1",
+                 "roomCode":"P201","dayOfWeek":"MON","periodNo":1,
+                 "startTime":"07:00","endTime":"07:45","semesterId":"sm-2025-2"}
+                """;
+        mvc.perform(post("/timetableSlots")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(firstSlot))
+                .andExpect(status().isOk());
+
+        String crossSpecialtyAssignment = """
+                {"classId":"c-8a1","subjectId":"sj-eng","teacherId":"u-teacher-2",
+                 "semesterId":"sm-2025-2","weeklyPeriods":2}
+                """;
+        mvc.perform(post("/teaching-assignments")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(crossSpecialtyAssignment))
+                .andExpect(status().isOk());
+
+        String conflictingAssignment = """
+                {"classId":"c-8a1","subjectId":"sj-math","teacherId":"u-teacher-1",
+                 "semesterId":"sm-2025-2","weeklyPeriods":1}
+                """;
+        mvc.perform(post("/teaching-assignments")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(conflictingAssignment))
+                .andExpect(status().isOk());
+
+        JsonNode workloads = body(mvc.perform(get("/teaching-assignments/workloads")
+                        .queryParam("semesterId", "sm-2025-2")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+        JsonNode hoaWorkload = null;
+        for (JsonNode item : workloads) {
+            if ("u-teacher-1".equals(item.path("teacherId").asText())) hoaWorkload = item;
+        }
+        assertTrue(hoaWorkload != null && hoaWorkload.path("classCount").asInt() == 2);
+        assertTrue(hoaWorkload.path("classCodes").toString().contains("10A2"));
+        assertTrue(hoaWorkload.path("classCodes").toString().contains("8A1"));
+
+        mvc.perform(get("/teaching-assignments")
+                        .queryParam("classId", "c-8a1")
+                        .queryParam("subjectId", "sj-math")
+                        .queryParam("semesterId", "sm-2025-2")
+                        .queryParam("dayOfWeek", "MON")
+                        .queryParam("periodNo", "1")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].teacherClassCount").value(2))
+                .andExpect(jsonPath("$[0].teacherWeeklyPeriods").value(2))
+                .andExpect(jsonPath("$[0].teacherScheduledPeriods").value(1))
+                .andExpect(jsonPath("$[0].teacherBusy").value(true))
+                .andExpect(jsonPath("$[0].canSchedule").value(false))
+                .andExpect(jsonPath("$[0].availabilityMessage")
+                        .value(org.hamcrest.Matchers.containsString("đang dạy")));
+        String teacherConflictSlot = """
+                {"classId":"c-8a1","subjectId":"sj-math","teacherId":"u-teacher-1",
+                 "roomCode":"P105","dayOfWeek":"MON","periodNo":1,
+                 "startTime":"07:00","endTime":"07:45","semesterId":"sm-2025-2"}
+                """;
+        mvc.perform(post("/timetableSlots")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(teacherConflictSlot))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("kín lịch")));
+
+        String extraSlot = """
+                {"classId":"c-10a2","subjectId":"sj-math","teacherId":"u-teacher-1",
+                 "roomCode":"P201","dayOfWeek":"TUE","periodNo":2,
+                 "startTime":"07:50","endTime":"08:35","semesterId":"sm-2025-2"}
+                """;
+        mvc.perform(post("/timetableSlots")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(extraSlot))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("đã xếp đủ")));
+
+        mvc.perform(get("/teaching-assignments")
+                        .queryParam("classId", "c-10a2")
+                        .queryParam("semesterId", "sm-2025-2")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(assignment.path("id").asText()))
+                .andExpect(jsonPath("$[0].scheduledPeriods").value(1))
+                .andExpect(jsonPath("$[0].fullyScheduled").value(true))
+                .andExpect(jsonPath("$[0].canSchedule").value(false));
+
+        mvc.perform(delete("/teaching-assignments/{id}", assignment.path("id").asText())
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isConflict());
+
+        String missingAssignmentSlot = """
+                {"classId":"c-10a2","subjectId":"sj-phys","teacherId":"u-teacher-2",
+                 "roomCode":"LAB1","dayOfWeek":"WED","periodNo":3,
+                 "startTime":"08:45","endTime":"09:30","semesterId":"sm-2025-2"}
+                """;
+        mvc.perform(post("/timetableSlots")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(missingAssignmentSlot))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("Chưa phân công")));
     }
 
     private String login(String username, String password) throws Exception {

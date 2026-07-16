@@ -14,7 +14,7 @@ class FlywayMigrationTest {
                 .locations("classpath:db/migration")
                 .load();
 
-        assertEquals(7, flyway.migrate().migrationsExecuted);
-        assertEquals(7, flyway.info().applied().length);
+        assertEquals(13, flyway.migrate().migrationsExecuted);
+        assertEquals(13, flyway.info().applied().length);
     }
 }

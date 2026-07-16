@@ -1,112 +1,75 @@
-# School Management System — Backend Monorepo
+# School Management System — Backend
 
-> Hệ thống quản lý trường học microservices. Java 17 + Spring Boot 3.x. 6 service độc lập, PostgreSQL 16 (4 DB) + MongoDB 7 + RabbitMQ + MinIO.
+Backend hiện tại là một **modular monolith** chạy bằng Java 17, Spring Boot 3 và Maven. Các phân hệ danh tính, cơ cấu đào tạo, thời khóa biểu, điểm danh, điểm số, bài tập, tài chính, thông báo, chat, ngoại khóa và báo cáo nằm trong cùng ứng dụng `services/app`, mặc định phục vụ tại `http://localhost:4000`.
 
-## 🚀 Mới vào dự án? Đọc đây trước
+## Chạy cục bộ
 
-➡️ **[docs/GETTING-STARTED.md](docs/GETTING-STARTED.md)** — Hướng dẫn cài máy + chạy demo + tự thêm nghiệp vụ. **Bắt buộc đọc nếu bạn chưa quen Spring Boot.**
+Yêu cầu: JDK 17+ và Maven 3.9+.
 
-➡️ **[docs/team/TEAM-ASSIGNMENT.md](docs/team/TEAM-ASSIGNMENT.md)** — Phân công 5 thành viên, ai làm bảng nào, endpoint nào.
-
-## Cấu trúc
-
-```
-School Management System/
-├── docs/
-│   ├── GETTING-STARTED.md      ★ Hướng dẫn cho người mới
-│   ├── team/TEAM-ASSIGNMENT.md  ★ Phân công + ownership matrix
-│   └── architecture/            Kiến trúc, event, git workflow
-│
-├── infrastructure/             # Docker, K8s, Nginx
-│
-├── common/                     # Thư viện dùng chung
-│
-├── services/                   # 6 microservice
-│   ├── api-gateway/            (8080) — Owner: P1
-│   ├── identity-service/       (8081) — Owner: P1  ★ có sample Role CRUD chạy được
-│   ├── academic-service/       (8082) — Owner: P2 + P3
-│   ├── finance-service/        (8083) — Owner: P4
-│   ├── notification-service/   (8084) — Owner: P5
-│   └── file-service/           (8085) — Owner: P4
-│
-├── docker-compose.dev.yml      # PG x4 + Mongo + Rabbit + MinIO + Mailhog
-├── pom.xml                     # Parent multi-module Maven
-└── .gitignore
+```powershell
+mvn -pl services/app -am spring-boot:run -Dspring-boot.run.profiles=local
 ```
 
-## Layout chuẩn của mỗi service (Spring Boot Layered Architecture)
+Profile `local` sử dụng H2 lưu trên đĩa, không xóa dữ liệu khi dừng Backend:
 
-```
-service-x/
-├── pom.xml
-└── src/
-    ├── main/
-    │   ├── java/com/sse/<name>/
-    │   │   ├── <Name>Application.java   # Entry point (main)
-    │   │   ├── config/                  # @Configuration beans
-    │   │   ├── controller/              # @RestController (REST endpoint)
-    │   │   ├── service/                 # @Service (business logic)
-    │   │   ├── repository/              # @Repository extends JpaRepository
-    │   │   ├── entity/                  # @Entity (map với bảng DB)
-    │   │   ├── dto/
-    │   │   │   ├── request/             # input từ client
-    │   │   │   └── response/            # output cho client
-    │   │   ├── mapper/                  # convert entity ↔ DTO
-    │   │   ├── event/
-    │   │   │   ├── publisher/           # gửi event lên RabbitMQ
-    │   │   │   └── listener/            # consume event
-    │   │   ├── exception/               # custom exception + handler
-    │   │   └── util/                    # helper
-    │   └── resources/
-    │       ├── application.yml          # cấu hình port, DB, ...
-    │       └── db/migration/            # Flyway: V1__*.sql, V2__*.sql
-    └── test/java/...
+- Cơ sở dữ liệu: `services/app/data/sse.mv.db`
+- Tệp tải lên: `services/app/data/uploads`
+- Có thể đổi vị trí bằng `SSE_LOCAL_DB_PATH` và `SSE_LOCAL_STORAGE_PATH`.
+
+Kiểm tra trạng thái tại `http://localhost:4000/actuator/health`; OpenAPI tại `http://localhost:4000/swagger-ui.html`.
+
+## Kiểm thử và đóng gói
+
+```powershell
+mvn -pl services/app -am test
+mvn -pl services/app -am package
 ```
 
-## Chạy nhanh (sau khi cài JDK 17 + Maven + Docker)
+Flyway là nguồn chân lý của schema. Hibernate dùng `validate`; không dùng `create-drop` ở profile chạy sản phẩm. Kiểm thử tích hợp sử dụng H2 in-memory riêng nên không tác động dữ liệu local.
 
-```bash
-# 1. Khởi động hạ tầng (PG x4, Mongo, Rabbit, MinIO)
-docker compose -f docker-compose.dev.yml up -d
+## Chạy với PostgreSQL bằng Docker
 
-# 2. Build toàn bộ
-mvn -T 1C clean install -DskipTests
-
-# 3. Chạy identity-service (đã có demo Role CRUD)
-cd services/identity-service
-mvn spring-boot:run
-
-# 4. Test
-curl http://localhost:8081/roles
+```powershell
+Copy-Item .env.example .env
+# Điền toàn bộ secret trong .env
+docker compose up --build
 ```
 
-Service đã chạy → xem chi tiết test từng endpoint trong [GETTING-STARTED.md](docs/GETTING-STARTED.md).
+Compose khởi động một PostgreSQL 16 và một Backend. Dữ liệu PostgreSQL cùng tệp upload được gắn volume bền vững.
 
-## Port mapping
+## Biến môi trường chính
 
-| Service | Port | DB Port |
-|---|---|---|
-| api-gateway | 8080 | — |
-| identity-service | 8081 | 5441 (identity_db) |
-| academic-service | 8082 | 5442 (academic_db) |
-| finance-service | 8083 | 5443 (finance_db) |
-| notification-service | 8084 | 5444 (notification_db) + Mongo 27017 |
-| file-service | 8085 | — (chỉ MinIO 9000) |
-| RabbitMQ | — | 5672 (AMQP) + 15672 (UI) |
-| MinIO | — | 9000 (S3) + 9001 (UI) |
-| Mailhog | — | 1025 (SMTP) + 8025 (UI) |
-
-## Tài liệu
-
-| File | Mô tả |
+| Biến | Mục đích |
 |---|---|
-| **[docs/GETTING-STARTED.md](docs/GETTING-STARTED.md)** | ★ Cài máy + chạy demo + tự code nghiệp vụ mới |
-| **[docs/team/TEAM-ASSIGNMENT.md](docs/team/TEAM-ASSIGNMENT.md)** | ★ Phân công 5 người + ma trận DB/endpoint |
-| [docs/architecture/system-overview.md](docs/architecture/system-overview.md) | Sơ đồ kiến trúc tổng quan |
-| [docs/architecture/event-catalog.md](docs/architecture/event-catalog.md) | Danh mục RabbitMQ event |
-| [docs/architecture/git-workflow.md](docs/architecture/git-workflow.md) | Quy tắc branch + PR |
+| `SSE_DB_URL`, `SSE_DB_USER`, `SSE_DB_PASSWORD` | Kết nối PostgreSQL |
+| `SSE_JWT_SECRET` | Khóa ký JWT tối thiểu 32 ký tự |
+| `SSE_CORS_ALLOWED_ORIGINS` | Danh sách origin Web/Mobile Web |
+| `SSE_SEED_ENABLED` | Chỉ bật dữ liệu mẫu ở môi trường phát triển |
+| `SSE_STORAGE_PATH` | Thư mục lưu tệp upload |
+| `SSE_MAIL_*` | SMTP cho email reset mật khẩu/thông báo |
+| `SSE_PAYMENT_MODE` | Mặc định `disabled`; `sandbox` chỉ dùng local |
+| `SSE_PAYMENT_CALLBACK_SECRET` | Khóa HMAC callback thanh toán, tối thiểu 32 ký tự |
 
-## Tham chiếu nguồn
+## Quy tắc an toàn đã áp dụng
 
-- Plan tổng + DDL chi tiết: `~/Downloads/users-a1234-downloads-chu-c-na-ng-xlsx-parallel-haven (1).md`
-- Flowchart & Use Case (Mermaid): `~/Downloads/SSE-FLOWCHART-USECASE.md`
+- Access token sống ngắn; refresh token được hash, xoay vòng, gắn IP/User-Agent và thu hồi khi đổi mật khẩu.
+- Tài khoản tạo/import/reset phải đổi mật khẩu tạm; phiên cũ bị vô hiệu qua `tokenVersion`.
+- File chỉ tải được bởi người tải lên, quản trị viên hoặc người thực sự tham gia bài tập/bài nộp.
+- Hóa đơn có khóa duy nhất theo đợt thu + học sinh; chạy sinh hóa đơn nhiều lần không tạo bản trùng.
+- Thanh toán bắt đầu ở `PENDING`; chỉ callback HMAC hợp lệ mới cập nhật hóa đơn. Thu tiền mặt có endpoint riêng cho quản trị viên.
+- Mọi API ghi dữ liệu thành công được đưa vào audit log.
+
+## Cấu trúc chính
+
+```text
+services/app/src/main/java/com/sse/app/
+├── identity/        tài khoản, đăng nhập, phụ huynh–học sinh
+├── academic/        lớp, môn, thời khóa biểu, điểm danh, điểm, bài tập, tổng kết
+├── finance/         đợt thu, hóa đơn, thanh toán, đối soát
+├── notification/    thông báo, sở thích kênh, thiết bị, delivery log
+├── file/            upload và download có phân quyền
+├── audit/           nhật ký thay đổi
+└── report/          báo cáo và xuất dữ liệu
+```
+
+Các tài liệu mô tả sáu microservice trong `docs/architecture` là thiết kế lịch sử, không phải cấu trúc runtime hiện tại.

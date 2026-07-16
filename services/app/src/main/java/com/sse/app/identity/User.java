@@ -38,6 +38,13 @@ public class User {
     @Column(nullable = false)
     private String status;
 
+    /** Tài khoản tạm/import/reset phải đổi mật khẩu trước khi tiếp tục sử dụng. */
+    @Builder.Default
+    private boolean passwordChangeRequired = false;
+
+    @Builder.Default
+    private int tokenVersion = 0;
+
     // Teacher
     private String teacherCode;
     private String mainSubject;

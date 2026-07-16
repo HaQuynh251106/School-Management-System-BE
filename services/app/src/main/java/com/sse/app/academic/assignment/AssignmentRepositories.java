@@ -8,11 +8,13 @@ import java.util.Optional;
 interface AssignmentRepository extends JpaRepository<Assignment, String> {
     List<Assignment> findByClassId(String classId);
     List<Assignment> findByTeacherId(String teacherId);
+    Optional<Assignment> findByAttachmentFileId(String attachmentFileId);
 }
 
 interface AssignmentSubmissionRepository extends JpaRepository<AssignmentSubmission, String> {
     List<AssignmentSubmission> findByAssignmentId(String assignmentId);
     List<AssignmentSubmission> findByStudentId(String studentId);
     Optional<AssignmentSubmission> findByAssignmentIdAndStudentId(String assignmentId, String studentId);
+    Optional<AssignmentSubmission> findByAttachmentFileId(String attachmentFileId);
     long countByAssignmentId(String assignmentId);
 }

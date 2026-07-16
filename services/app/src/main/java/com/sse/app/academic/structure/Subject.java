@@ -13,4 +13,6 @@ public class Subject {
     @Column(unique = true)
     private String code;    // MATH
     private String name;    // Toán
+    @Builder.Default
+    private double coefficient = 1.0;
 }

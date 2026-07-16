@@ -5,6 +5,7 @@ import com.sse.app.common.ApiException;
 import com.sse.app.identity.User;
 import com.sse.app.identity.UserDto;
 import com.sse.app.identity.UserService;
+import com.sse.app.academic.timetable.TimetableService;
 import com.sse.app.security.CurrentUserHolder;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
@@ -17,10 +18,12 @@ public class StructureController {
 
     private final StructureService structure;
     private final UserService users;
+    private final TimetableService timetable;
 
-    public StructureController(StructureService structure, UserService users) {
+    public StructureController(StructureService structure, UserService users, TimetableService timetable) {
         this.structure = structure;
         this.users = users;
+        this.timetable = timetable;
     }
 
     // ----- Năm học -----
@@ -54,7 +57,9 @@ public class StructureController {
     public List<SchoolClass> classes(@RequestParam(required = false) String academicYearId,
                                      @RequestParam(required = false) String gradeLevel) {
         CurrentUserHolder.require();
-        return structure.listClasses(academicYearId, gradeLevel);
+        List<SchoolClass> result = structure.listClasses(academicYearId, gradeLevel);
+        result.forEach(item -> item.setStudentCount(users.studentCountOfClass(item.getId())));
+        return result;
     }
 
     @GetMapping("/classes/{id}")
@@ -66,7 +71,13 @@ public class StructureController {
     @GetMapping("/classes/{id}/students")
     public List<UserDto> classStudents(@PathVariable String id) {
         CurrentUserHolder.requireRole("ADMIN", "TEACHER");
-        return CurrentUserHolder.require().isAdmin()
+        var current = CurrentUserHolder.require();
+        SchoolClass schoolClass = structure.getClass(id);
+        if (current.isTeacher() && !current.id().equals(schoolClass.getHomeroomTeacherId())
+                && !timetable.teacherTeachesClass(current.id(), id)) {
+            throw ApiException.forbidden("Giáo viên không được phân công giảng dạy hoặc chủ nhiệm lớp này");
+        }
+        return current.isAdmin()
                 ? users.list("STUDENT", null, id)
                 : users.listSummaries("STUDENT", null, id);
     }
@@ -86,6 +97,16 @@ public class StructureController {
             throw ApiException.forbidden("Học sinh không thuộc lớp này");
         }
         return users.toDto(student);
+    }
+
+    @GetMapping("/students/{studentId}/enrollments")
+    public List<ClassEnrollment> enrollmentHistory(@PathVariable String studentId) {
+        var current = CurrentUserHolder.require();
+        if (!current.isAdmin() && !current.id().equals(studentId)) {
+            if (current.isParent()) users.assertParentOf(current.id(), studentId);
+            else throw ApiException.forbidden("Không có quyền xem lịch sử xếp lớp");
+        }
+        return structure.enrollmentHistory(studentId);
     }
 
     @PostMapping("/classes")
@@ -159,6 +180,12 @@ public class StructureController {
     public void deleteHoliday(@PathVariable String id) {
         CurrentUserHolder.requireRole("ADMIN");
         structure.deleteHoliday(id);
+    }
+
+    @PutMapping("/subjects/{id}")
+    public Subject updateSubject(@PathVariable String id, @Valid @RequestBody UpdateSubjectRequest r) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return structure.updateSubject(id, r);
     }
 
     private User requireActiveTeacher(String teacherId) {

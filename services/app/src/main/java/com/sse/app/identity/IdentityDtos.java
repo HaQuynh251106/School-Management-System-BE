@@ -5,6 +5,7 @@ import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 import java.time.LocalDate;
+import java.util.List;
 
 /** Gom các request DTO của phân hệ identity. */
 public final class IdentityDtos {
@@ -17,12 +18,16 @@ public final class IdentityDtos {
 
     public record ForgotPasswordRequest(String email, String username) {}
 
-    public record ResetPasswordRequest(@NotBlank String token, @NotBlank @Size(min = 8, max = 128) String newPassword) {}
+    public record ResetPasswordRequest(@NotBlank String token, @NotBlank @Size(min = 10, max = 128) String newPassword) {}
+
+    public record ChangePasswordRequest(
+            @NotBlank String currentPassword,
+            @NotBlank @Size(min = 10, max = 128) String newPassword) {}
 
     public record CreateUserRequest(
             String id,
             @NotBlank String username,
-            @NotBlank @Size(min = 8, max = 128) String password,
+            @NotBlank @Size(min = 10, max = 128) String password,
             @NotBlank String fullName,
             @NotBlank @Pattern(regexp = "ADMIN|TEACHER|STUDENT|PARENT") String role,
             String email,
@@ -65,5 +70,10 @@ public final class IdentityDtos {
             String guardianPhone
     ) {}
 
-    public record AdminResetPasswordRequest(@Size(min = 8, max = 128) String newPassword) {}
+    public record AdminResetPasswordRequest(@Size(min = 10, max = 128) String newPassword) {}
+
+    public record LinkChildRequest(@NotBlank String studentId, Boolean primaryContact) {}
+
+    public record ImportRowError(int row, String username, String error) {}
+    public record ImportResult(int totalRows, int importedRows, int failedRows, List<ImportRowError> errors) {}
 }

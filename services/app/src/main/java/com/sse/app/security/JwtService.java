@@ -24,11 +24,11 @@ public class JwtService {
     public long accessTtlSeconds()  { return props.getAccessTtlSeconds(); }
     public long refreshTtlSeconds() { return props.getRefreshTtlSeconds(); }
 
-    public String createAccessToken(String userId, String username, String role) {
+    public String createAccessToken(String userId, String username, String role, int tokenVersion) {
         long now = System.currentTimeMillis();
         return Jwts.builder()
                 .subject(userId)
-                .claims(Map.of("username", username, "role", role, "type", "access"))
+                .claims(Map.of("username", username, "role", role, "type", "access", "ver", tokenVersion))
                 .issuedAt(new Date(now))
                 .expiration(new Date(now + props.getAccessTtlSeconds() * 1000))
                 .signWith(key)

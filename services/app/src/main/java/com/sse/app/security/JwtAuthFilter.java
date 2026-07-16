@@ -1,5 +1,6 @@
 package com.sse.app.security;
 
+import com.sse.app.identity.UserService;
 import io.jsonwebtoken.Claims;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -21,9 +22,11 @@ import java.io.IOException;
 public class JwtAuthFilter extends OncePerRequestFilter {
 
     private final JwtService jwt;
+    private final UserService users;
 
-    public JwtAuthFilter(JwtService jwt) {
+    public JwtAuthFilter(JwtService jwt, UserService users) {
         this.jwt = jwt;
+        this.users = users;
     }
 
     @Override
@@ -31,6 +34,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         String p = request.getRequestURI();
         return HttpMethod.OPTIONS.matches(request.getMethod())
                 || p.startsWith("/auth/")
+                || p.startsWith("/payments/callback/")
                 || p.equals("/")
                 || p.equals("/health")
                 || p.equals("/actuator/health")
@@ -54,6 +58,18 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                     c.getSubject(),
                     c.get("username", String.class),
                     c.get("role", String.class)));
+            var account = users.getById(c.getSubject());
+            Integer tokenVersion = c.get("ver", Integer.class);
+            if (tokenVersion == null || tokenVersion != account.getTokenVersion()) {
+                unauthorized(res, "Phiên đăng nhập đã hết hiệu lực");
+                return;
+            }
+            if (account.isPasswordChangeRequired()
+                    && !req.getRequestURI().equals("/me")
+                    && !req.getRequestURI().equals("/me/password")) {
+                forbidden(res, "Bạn cần đổi mật khẩu trước khi tiếp tục");
+                return;
+            }
             chain.doFilter(req, res);
         } catch (Exception e) {
             unauthorized(res, "Invalid token");
@@ -64,6 +80,13 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
     private void unauthorized(HttpServletResponse res, String msg) throws IOException {
         res.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        res.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        res.setCharacterEncoding("UTF-8");
+        res.getWriter().write("{\"error\":\"" + msg + "\"}");
+    }
+
+    private void forbidden(HttpServletResponse res, String msg) throws IOException {
+        res.setStatus(HttpServletResponse.SC_FORBIDDEN);
         res.setContentType(MediaType.APPLICATION_JSON_VALUE);
         res.setCharacterEncoding("UTF-8");
         res.getWriter().write("{\"error\":\"" + msg + "\"}");

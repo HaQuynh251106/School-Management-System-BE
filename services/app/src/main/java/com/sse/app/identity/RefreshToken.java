@@ -28,4 +28,7 @@ public class RefreshToken {
     @Column(nullable = false)
     private Instant createdAt;
     private Instant revokedAt;
+    private String ipAddress;
+    @Column(length = 1000)
+    private String userAgent;
 }

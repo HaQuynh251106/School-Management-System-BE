@@ -16,7 +16,6 @@ public final class TimetableDtos {
             @NotNull Integer periodNo,
             String startTime,
             String endTime,
-            String semesterId,
-            Boolean overrideHoliday
+            @NotBlank String semesterId
     ) {}
 }
