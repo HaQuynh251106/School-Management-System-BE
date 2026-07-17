@@ -1,22 +1,28 @@
 package com.sse.app.seed;
 
+import com.sse.app.academic.assignment.AssignmentService;
+import com.sse.app.academic.assignment.AssignmentDtos.CreateAssignmentRequest;
+import com.sse.app.academic.assignment.AssignmentDtos.GradeSubmissionRequest;
+import com.sse.app.academic.assignment.AssignmentDtos.SubmitRequest;
 import com.sse.app.academic.attendance.AttendanceRecord;
 import com.sse.app.academic.attendance.AttendanceService;
 import com.sse.app.academic.grade.ExamCategory;
 import com.sse.app.academic.grade.Grade;
 import com.sse.app.academic.grade.GradeService;
 import com.sse.app.academic.structure.*;
+import com.sse.app.academic.teaching.TeacherClassSubject;
+import com.sse.app.academic.teaching.TeachingAssignmentRepository;
 import com.sse.app.academic.timetable.TimetableService;
 import com.sse.app.academic.timetable.TimetableSlot;
-import com.sse.app.identity.ParentStudent;
-import com.sse.app.identity.ParentStudentRepository;
-import com.sse.app.identity.User;
-import com.sse.app.identity.UserRepository;
 import com.sse.app.audit.AuditLog;
 import com.sse.app.audit.AuditService;
 import com.sse.app.chat.ChatMessage;
 import com.sse.app.chat.ChatService;
 import com.sse.app.finance.FinanceService;
+import com.sse.app.identity.ParentStudent;
+import com.sse.app.identity.ParentStudentRepository;
+import com.sse.app.identity.User;
+import com.sse.app.identity.UserRepository;
 import com.sse.app.notification.Announcement;
 import com.sse.app.notification.NotificationService;
 import com.sse.app.notification.NotificationTemplate;
@@ -29,270 +35,321 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Seed dữ liệu mẫu khớp mock-server (cùng id/username/mật khẩu) để cả 2 FE chạy được ngay.
- * Idempotent: chỉ chạy khi bảng users rỗng. Tắt bằng sse.seed.enabled=false.
+ * Fresh local demonstration data.
+ *
+ * All identities below are fictional. Grade 10 is deliberately empty so Excel import
+ * can be tested repeatedly without deleting existing student or parent accounts.
  */
 @Slf4j
 @Configuration
 @ConditionalOnProperty(name = "sse.seed.enabled", havingValue = "true", matchIfMissing = true)
 public class DataSeeder {
+    private static final String YEAR_ID = "ay-2026";
+    private static final String SEMESTER_1 = "sm-2026-1";
+
+    private static final List<TeacherSeed> TEACHERS = List.of(
+            new TeacherSeed("u-t-math", "gv.toan", "Nguyen Thi Mai An", "GV001", "MATH", "Toan"),
+            new TeacherSeed("u-t-lit", "gv.van", "Tran Van Huy", "GV002", "LIT", "Ngu van"),
+            new TeacherSeed("u-t-eng", "gv.anh", "Le Thu Trang", "GV003", "ENG", "Tieng Anh"),
+            new TeacherSeed("u-t-phys", "gv.ly", "Pham Quang Minh", "GV004", "PHYS", "Vat ly"),
+            new TeacherSeed("u-t-chem", "gv.hoa", "Do Khanh Linh", "GV005", "CHEM", "Hoa hoc"),
+            new TeacherSeed("u-t-bio", "gv.sinh", "Vu Hoai Nam", "GV006", "BIO", "Sinh hoc"),
+            new TeacherSeed("u-t-hist", "gv.su", "Bui Thanh Ha", "GV007", "HIST", "Lich su"),
+            new TeacherSeed("u-t-geo", "gv.dia", "Hoang Gia Bao", "GV008", "GEO", "Dia ly"),
+            new TeacherSeed("u-t-it", "gv.tin", "Nguyen Duc Long", "GV009", "IT", "Tin hoc"),
+            new TeacherSeed("u-t-pe", "gv.theduc", "Dinh Ngoc Son", "GV010", "PE", "Giao duc the chat"),
+            new TeacherSeed("u-t-civic", "gv.gdcd", "Mai Phuong Thao", "GV011", "CIVIC", "GDKT va PL"),
+            new TeacherSeed("u-t-defense", "gv.gdqp", "Luong Thanh Binh", "GV012", "DEF", "GDQP-AN")
+    );
+
+    private static final List<StudentSeed> STUDENTS = List.of(
+            new StudentSeed("u-s-minh", "hs.minh", "Nguyen Gia Minh", "HS2601101", "c-11a1", "11A1"),
+            new StudentSeed("u-s-linh", "hs.linh", "Tran Khanh Linh", "HS2601102", "c-11a1", "11A1"),
+            new StudentSeed("u-s-quan", "hs.quan", "Le Minh Quan", "HS2601103", "c-11a1", "11A1"),
+            new StudentSeed("u-s-ngoc", "hs.ngoc", "Pham Bao Ngoc", "HS2601104", "c-11a1", "11A1"),
+            new StudentSeed("u-s-huy", "hs.huy", "Do Anh Huy", "HS2601105", "c-11a2", "11A2"),
+            new StudentSeed("u-s-thao", "hs.thao", "Vu Phuong Thao", "HS2601106", "c-11a2", "11A2"),
+            new StudentSeed("u-s-khoi", "hs.khoi", "Bui Dang Khoi", "HS2601107", "c-11a2", "11A2"),
+            new StudentSeed("u-s-yen", "hs.yen", "Hoang Nhu Yen", "HS2601108", "c-11a2", "11A2"),
+            new StudentSeed("u-s-mai", "hs.mai", "Nguyen Thanh Mai", "HS2601201", "c-12a1", "12A1"),
+            new StudentSeed("u-s-nam", "hs.nam", "Tran Quoc Nam", "HS2601202", "c-12a1", "12A1"),
+            new StudentSeed("u-s-phuong", "hs.phuong", "Le Bao Phuong", "HS2601203", "c-12a1", "12A1"),
+            new StudentSeed("u-s-viet", "hs.viet", "Pham Trung Viet", "HS2601204", "c-12a1", "12A1"),
+            new StudentSeed("u-s-lam", "hs.lam", "Do Minh Lam", "HS2601205", "c-12a2", "12A2"),
+            new StudentSeed("u-s-han", "hs.han", "Vu Thu Han", "HS2601206", "c-12a2", "12A2"),
+            new StudentSeed("u-s-tuan", "hs.tuan", "Bui Anh Tuan", "HS2601207", "c-12a2", "12A2"),
+            new StudentSeed("u-s-chi", "hs.chi", "Hoang Lan Chi", "HS2601208", "c-12a2", "12A2")
+    );
 
     @Bean
     ApplicationRunner seedRunner(UserRepository users, ParentStudentRepository relations,
-                                 PasswordEncoder enc, StructureService structure,
+                                 PasswordEncoder encoder, StructureService structure,
+                                 TeachingAssignmentRepository teachingAssignments,
                                  TimetableService timetable, GradeService grades,
-                                 AttendanceService attendance, NotificationService notifications,
-                                 AuditService audit, ChatService chat, FinanceService finance) {
+                                 AttendanceService attendance, AssignmentService assignments,
+                                 NotificationService notifications, AuditService audit,
+                                 ChatService chat, FinanceService finance) {
         return args -> {
             if (users.count() > 0) {
-                log.info("[seed] DB đã có dữ liệu — bỏ qua seed.");
+                log.info("[seed] Existing database detected; skipping seed.");
                 return;
             }
-            log.info("[seed] DB rỗng — seed dữ liệu mẫu...");
-
-            seedUsers(users, relations, enc);
+            log.info("[seed] Creating fresh high-school demonstration data...");
+            seedUsers(users, relations, encoder);
             seedStructure(structure);
+            seedTeachingAssignments(teachingAssignments);
             seedTimetable(timetable);
             seedGrades(grades);
             seedAttendance(attendance);
+            seedAssignments(assignments);
             seedNotifications(notifications);
             seedAudit(audit);
             seedChat(chat);
             finance.seedDefaultPeriodAndInvoices();
-
-            log.info("[seed] xong: {} users.", users.count());
+            log.info("[seed] Complete: {} users, grades 10-12 only; grade 10 has no students.", users.count());
         };
     }
 
-    // ---------- Identity ----------
-    private void seedUsers(UserRepository users, ParentStudentRepository relations, PasswordEncoder enc) {
-        users.save(base("u-admin-1", "admin", enc.encode("admin@123"), "Nguyễn Văn Quản",
-                "admin@sse.edu.vn", "0900000001", "ADMIN"));
+    private void seedUsers(UserRepository users, ParentStudentRepository relations, PasswordEncoder encoder) {
+        users.save(base("u-admin-1", "admin", encoder.encode("admin@123"), "School Administrator",
+                "admin@demo.sse.local", "0900000001", "ADMIN"));
+        int teacherNumber = 1;
+        for (TeacherSeed teacher : TEACHERS) {
+            users.save(teacher(teacher.id(), teacher.username(), encoder.encode("teacher@123"), teacher.name(),
+                    "teacher" + teacherNumber + "@demo.sse.local", "0911000" + pad(teacherNumber, 3),
+                    teacher.code(), teacher.subjectName()));
+            teacherNumber++;
+        }
+        int studentNumber = 1;
+        for (StudentSeed student : STUDENTS) {
+            users.save(student(student.id(), student.username(), encoder.encode("student@123"), student.name(),
+                    "student" + studentNumber + "@demo.sse.local", "0922000" + pad(studentNumber, 3),
+                    student.code(), student.classId(), student.classCode()));
+            studentNumber++;
+        }
 
-        users.save(teacher("u-teacher-1", "gv.hoa", enc.encode("teacher@123"), "Trần Thị Hoa",
-                "hoa.tran@sse.edu.vn", "0900000002", "GV001", "Toán"));
-        users.save(teacher("u-teacher-2", "gv.minh", enc.encode("teacher@123"), "Lê Văn Minh",
-                "minh.le@sse.edu.vn", "0900000003", "GV002", "Vật lý"));
-
-        users.save(student("u-student-1", "hs.an", enc.encode("student@123"), "Phạm Hoài An",
-                "an.pham@sse.edu.vn", "0900000010", "HS2025001", "c-10a1", "10A1"));
-        users.save(student("u-student-2", "hs.binh", enc.encode("student@123"), "Phạm Hoài Bình",
-                "binh.pham@sse.edu.vn", "0900000011", "HS2025002", "c-8a1", "8A1"));
-
-        users.save(base("u-parent-1", "ph.pham", enc.encode("parent@123"), "Phạm Văn Quân",
-                "quan.pham@gmail.com", "0900000020", "PARENT"));
-
-        relations.save(rel("ps-1", "u-parent-1", "u-student-1", true));
-        relations.save(rel("ps-2", "u-parent-1", "u-student-2", false));
+        List<ParentSeed> parents = List.of(
+                new ParentSeed("u-p-nguyen", "ph.nguyen", "Nguyen Van Duc", List.of("u-s-minh", "u-s-mai")),
+                new ParentSeed("u-p-tran", "ph.tran", "Tran Thi Lan", List.of("u-s-linh", "u-s-nam")),
+                new ParentSeed("u-p-le", "ph.le", "Le Quang Hieu", List.of("u-s-quan", "u-s-phuong")),
+                new ParentSeed("u-p-pham", "ph.pham", "Pham Thu Huong", List.of("u-s-ngoc", "u-s-viet")),
+                new ParentSeed("u-p-do", "ph.do", "Do Minh Tuan", List.of("u-s-huy", "u-s-lam")),
+                new ParentSeed("u-p-vu", "ph.vu", "Vu Thanh Van", List.of("u-s-thao", "u-s-han")),
+                new ParentSeed("u-p-bui", "ph.bui", "Bui Anh Khoa", List.of("u-s-khoi", "u-s-tuan")),
+                new ParentSeed("u-p-hoang", "ph.hoang", "Hoang Mai Anh", List.of("u-s-yen", "u-s-chi"))
+        );
+        int parentNumber = 1;
+        for (ParentSeed parent : parents) {
+            users.save(base(parent.id(), parent.username(), encoder.encode("parent@123"), parent.name(),
+                    "parent" + parentNumber + "@demo.sse.local", "0933000" + pad(parentNumber, 3), "PARENT"));
+            int relationNumber = 1;
+            for (String childId : parent.childIds()) {
+                relations.save(ParentStudent.builder().id("ps-" + parentNumber + "-" + relationNumber)
+                        .parentId(parent.id()).studentId(childId).primaryContact(relationNumber == 1).build());
+                relationNumber++;
+            }
+            parentNumber++;
+        }
     }
 
-    // ---------- Academic structure ----------
     private void seedStructure(StructureService structure) {
-        var year = AcademicYear.builder().id("ay-2025").code("2025-2026").name("Năm học 2025-2026")
-                .startDate(LocalDate.parse("2025-09-05")).endDate(LocalDate.parse("2026-05-31"))
-                .status("ACTIVE").build();
-
-        var sems = List.of(
-                Semester.builder().id("sm-2025-1").academicYearId("ay-2025").code("HK1").name("Học kỳ 1")
-                        .sequence(1).startDate(LocalDate.parse("2025-09-05")).endDate(LocalDate.parse("2026-01-15"))
-                        .status("ACTIVE").build(),
-                Semester.builder().id("sm-2025-2").academicYearId("ay-2025").code("HK2").name("Học kỳ 2")
-                        .sequence(2).startDate(LocalDate.parse("2026-01-20")).endDate(LocalDate.parse("2026-05-31"))
-                        .status("PLANNED").build());
-
-        var classes = List.of(
-                cls("c-10a1", "10A1", "Lớp 10A1", "K10", "u-teacher-1", 38),
-                cls("c-10a2", "10A2", "Lớp 10A2", "K10", "u-teacher-2", 40),
-                cls("c-8a1", "8A1", "Lớp 8A1", "K8", "u-teacher-1", 35));
-
-        var subjects = List.of(
-                subj("sj-math", "MATH", "Toán"), subj("sj-phys", "PHYS", "Vật lý"),
-                subj("sj-lit", "LIT", "Ngữ văn"), subj("sj-eng", "ENG", "Tiếng Anh"),
-                subj("sj-bio", "BIO", "Sinh học"));
-
-        var rooms = List.of(
-                Room.builder().id("rm-201").code("P201").name("Phòng 201").capacity(45).build(),
-                Room.builder().id("rm-105").code("P105").name("Phòng 105").capacity(45).build(),
-                Room.builder().id("rm-lab1").code("LAB1").name("Phòng thí nghiệm 1").capacity(30).build());
-
-        var holidays = List.of(
-                SchoolHoliday.builder().id("hol-1").date(LocalDate.parse("2026-04-30"))
-                        .name("Giải phóng miền Nam").build(),
-                SchoolHoliday.builder().id("hol-2").date(LocalDate.parse("2026-05-01"))
-                        .name("Quốc tế Lao động").build());
-
-        structure.seedAll(List.of(year), sems, classes, subjects, rooms, holidays);
+        LocalDate now = LocalDate.now();
+        AcademicYear year = AcademicYear.builder().id(YEAR_ID).code("2026-2027").name("Nam hoc 2026-2027")
+                .startDate(LocalDate.of(2026, 9, 5)).endDate(LocalDate.of(2027, 5, 31)).status("ACTIVE").build();
+        List<Semester> semesters = List.of(
+                Semester.builder().id(SEMESTER_1).academicYearId(YEAR_ID).code("HK1").name("Hoc ky 1")
+                        .sequence(1).startDate(LocalDate.of(2026, 9, 5)).endDate(LocalDate.of(2027, 1, 15)).status("ACTIVE").build(),
+                Semester.builder().id("sm-2026-2").academicYearId(YEAR_ID).code("HK2").name("Hoc ky 2")
+                        .sequence(2).startDate(LocalDate.of(2027, 1, 20)).endDate(LocalDate.of(2027, 5, 31)).status("PLANNED").build()
+        );
+        List<SchoolClass> classes = new ArrayList<>();
+        int classIndex = 0;
+        for (int grade = 10; grade <= 12; grade++) {
+            for (int number = 1; number <= 10; number++) {
+                String code = grade + "A" + number;
+                classes.add(SchoolClass.builder().id("c-" + code.toLowerCase()).code(code).name("Lop " + code)
+                        .gradeLevel("K" + grade).academicYearId(YEAR_ID)
+                        .homeroomTeacherId(TEACHERS.get(classIndex % TEACHERS.size()).id())
+                        .studentCount(studentCount(code)).build());
+                classIndex++;
+            }
+        }
+        List<Subject> subjects = TEACHERS.stream().map(t -> Subject.builder().id("sj-" + t.subjectCode().toLowerCase())
+                .code(t.subjectCode()).name(t.subjectName()).build()).toList();
+        List<Room> rooms = List.of(
+                room("rm-101", "P101", "Phong hoc 101", 45), room("rm-102", "P102", "Phong hoc 102", 45),
+                room("rm-201", "P201", "Phong hoc 201", 45), room("rm-202", "P202", "Phong hoc 202", 45),
+                room("rm-lab", "LAB1", "Phong thi nghiem", 35), room("rm-it", "IT1", "Phong tin hoc", 40)
+        );
+        structure.seedAll(List.of(year), semesters, classes, subjects, rooms, List.of(
+                SchoolHoliday.builder().id("hol-national").date(now.plusDays(30)).name("Ngay nghi mau").build()));
     }
 
-    // ---------- Timetable ----------
+    private void seedTeachingAssignments(TeachingAssignmentRepository repository) {
+        List<TeacherClassSubject> rows = new ArrayList<>();
+        for (int grade = 10; grade <= 12; grade++) {
+            for (int number = 1; number <= 10; number++) {
+                String classCode = grade + "A" + number;
+                String classId = "c-" + classCode.toLowerCase();
+                for (TeacherSeed teacher : TEACHERS) {
+                    rows.add(TeacherClassSubject.builder().id("tcs-" + classCode.toLowerCase() + "-" + teacher.subjectCode().toLowerCase())
+                            .teacherId(teacher.id()).teacherName(teacher.name()).classId(classId).classCode(classCode)
+                            .subjectId("sj-" + teacher.subjectCode().toLowerCase()).subjectName(teacher.subjectName())
+                            .semesterId(SEMESTER_1).status("ACTIVE").createdAt(Instant.now()).updatedAt(Instant.now()).build());
+                }
+            }
+        }
+        repository.saveAll(rows);
+    }
+
     private void seedTimetable(TimetableService timetable) {
-        timetable.seedSlots(List.of(
-                slot("tt-1", "c-10a1", "sj-math", "Toán", "u-teacher-1", "Trần Thị Hoa", "P201", "MON", 1, "07:00", "07:45"),
-                slot("tt-2", "c-10a1", "sj-phys", "Vật lý", "u-teacher-2", "Lê Văn Minh", "P201", "MON", 2, "07:50", "08:35"),
-                slot("tt-3", "c-10a1", "sj-lit", "Ngữ văn", "u-teacher-1", "Trần Thị Hoa", "P201", "MON", 3, "08:45", "09:30"),
-                slot("tt-4", "c-10a1", "sj-eng", "Tiếng Anh", "u-teacher-2", "Lê Văn Minh", "P201", "TUE", 1, "07:00", "07:45"),
-                slot("tt-5", "c-10a1", "sj-bio", "Sinh học", "u-teacher-1", "Trần Thị Hoa", "P201", "TUE", 2, "07:50", "08:35"),
-                slot("tt-6", "c-10a1", "sj-math", "Toán", "u-teacher-1", "Trần Thị Hoa", "P201", "WED", 1, "07:00", "07:45"),
-                slot("tt-7", "c-8a1", "sj-math", "Toán", "u-teacher-1", "Trần Thị Hoa", "P105", "MON", 4, "09:35", "10:20"),
-                slot("tt-8", "c-8a1", "sj-eng", "Tiếng Anh", "u-teacher-2", "Lê Văn Minh", "P105", "TUE", 4, "09:35", "10:20")));
+        List<TimetableSlot> rows = new ArrayList<>();
+        String[] classes = {"11A1", "11A2", "12A1", "12A2"};
+        String[] days = {"MON", "TUE", "WED", "THU"};
+        for (int classIndex = 0; classIndex < classes.length; classIndex++) {
+            for (int subjectIndex = 0; subjectIndex < 4; subjectIndex++) {
+                TeacherSeed teacher = TEACHERS.get(subjectIndex);
+                String code = classes[classIndex];
+                rows.add(TimetableSlot.builder().id("tt-" + code.toLowerCase() + "-" + teacher.subjectCode().toLowerCase())
+                        .classId("c-" + code.toLowerCase()).subjectId("sj-" + teacher.subjectCode().toLowerCase())
+                        .subjectName(teacher.subjectName()).teacherId(teacher.id()).teacherName(teacher.name())
+                        .roomCode("P" + (101 + classIndex)).dayOfWeek(days[subjectIndex]).periodNo(classIndex + 1)
+                        .startTime("07:00").endTime("07:45").semesterId(SEMESTER_1).build());
+            }
+        }
+        timetable.seedSlots(rows);
     }
 
-    // ---------- Grades + exam categories ----------
     private void seedGrades(GradeService grades) {
-        var cats = List.of(
-                cat("ec-oral", "ORAL", "Miệng", 1), cat("ec-15m", "15M", "15 phút", 1),
-                cat("ec-mid", "MID", "Giữa kỳ", 2), cat("ec-final", "FINAL", "Cuối kỳ", 3));
-
-        var list = List.of(
-                grade("g-1", "u-student-1", "sj-math", "Toán", "ORAL", "Miệng", 9.0, "2025-09-15T08:00:00Z"),
-                grade("g-2", "u-student-1", "sj-math", "Toán", "15M", "15 phút", 8.5, "2025-09-20T08:00:00Z"),
-                grade("g-3", "u-student-1", "sj-math", "Toán", "MID", "Giữa kỳ", 7.5, "2025-10-25T08:00:00Z"),
-                grade("g-4", "u-student-1", "sj-phys", "Vật lý", "ORAL", "Miệng", 8.0, "2025-09-16T08:00:00Z"),
-                grade("g-5", "u-student-1", "sj-phys", "Vật lý", "MID", "Giữa kỳ", 8.8, "2025-10-26T08:00:00Z"),
-                grade("g-6", "u-student-1", "sj-eng", "Tiếng Anh", "ORAL", "Miệng", 7.0, "2025-09-17T08:00:00Z"),
-                grade("g-7", "u-student-1", "sj-lit", "Ngữ văn", "MID", "Giữa kỳ", 6.5, "2025-10-27T08:00:00Z"),
-                grade("g-8", "u-student-2", "sj-math", "Toán", "ORAL", "Miệng", 9.5, "2025-09-15T08:00:00Z"),
-                grade("g-9", "u-student-2", "sj-eng", "Tiếng Anh", "MID", "Giữa kỳ", 8.0, "2025-10-26T08:00:00Z"));
-
-        grades.seed(cats, list);
+        List<ExamCategory> categories = List.of(
+                category("ec-oral", "ORAL", "Mieng", 1), category("ec-15m", "15M", "15 phut", 1),
+                category("ec-mid", "MID", "Giua ky", 2), category("ec-final", "FINAL", "Cuoi ky", 3)
+        );
+        List<Grade> rows = new ArrayList<>();
+        double[] marks = {7.2, 8.4, 6.8, 9.0, 7.6, 8.2, 6.4, 8.8, 7.4, 9.2};
+        for (int studentIndex = 0; studentIndex < STUDENTS.size(); studentIndex++) {
+            StudentSeed student = STUDENTS.get(studentIndex);
+            for (int subjectIndex = 0; subjectIndex < 4; subjectIndex++) {
+                TeacherSeed teacher = TEACHERS.get(subjectIndex);
+                rows.add(Grade.builder().id("g-" + (studentIndex + 1) + "-" + subjectIndex)
+                        .studentId(student.id()).subjectId("sj-" + teacher.subjectCode().toLowerCase())
+                        .subjectName(teacher.subjectName()).semesterId(SEMESTER_1).category(subjectIndex == 2 ? "MID" : "15M")
+                        .categoryName(subjectIndex == 2 ? "Giua ky" : "15 phut")
+                        .score(marks[(studentIndex + subjectIndex * 2) % marks.length])
+                        .recordedAt(Instant.now().minusSeconds((long) (studentIndex + 1) * 3600)).build());
+            }
+        }
+        grades.seed(categories, rows);
     }
 
-    // ---------- Attendance ----------
     private void seedAttendance(AttendanceService attendance) {
-        attendance.seed(List.of(
-                att("att-1", "u-student-1", "c-10a1", "tt-1", "2026-05-18", "PRESENT", null, "Toán", 1),
-                att("att-2", "u-student-1", "c-10a1", "tt-2", "2026-05-18", "PRESENT", null, "Vật lý", 2),
-                att("att-3", "u-student-1", "c-10a1", "tt-4", "2026-05-19", "ABSENT_UNEXCUSED", "Không liên lạc được phụ huynh", "Tiếng Anh", 1),
-                att("att-4", "u-student-1", "c-10a1", "tt-5", "2026-05-19", "LATE", "Muộn 10 phút", "Sinh học", 2),
-                att("att-5", "u-student-1", "c-10a1", "tt-6", "2026-05-20", "ABSENT_EXCUSED", "Có đơn xin nghỉ ốm", "Toán", 1),
-                att("att-6", "u-student-2", "c-8a1", "tt-7", "2026-05-19", "PRESENT", null, "Toán", 4)));
+        List<AttendanceRecord> rows = new ArrayList<>();
+        for (int studentIndex = 0; studentIndex < STUDENTS.size(); studentIndex++) {
+            StudentSeed student = STUDENTS.get(studentIndex);
+            for (int dayOffset = 0; dayOffset < 5; dayOffset++) {
+                String status = "PRESENT";
+                if (studentIndex == 1 && dayOffset == 1) status = "LATE";
+                if (studentIndex == 4 && dayOffset == 2) status = "ABSENT_UNEXCUSED";
+                if (studentIndex == 9 && dayOffset == 3) status = "ABSENT_EXCUSED";
+                rows.add(AttendanceRecord.builder().id("att-" + studentIndex + "-" + dayOffset).studentId(student.id())
+                        .classId(student.classId()).slotId("tt-" + student.classCode().toLowerCase() + "-math")
+                        .date(LocalDate.now().minusDays(dayOffset)).status(status)
+                        .note("PRESENT".equals(status) ? null : "Demo attendance record")
+                        .subjectName("Toan").periodNo(1).build());
+            }
+        }
+        attendance.seed(rows);
     }
 
-    // ---------- Announcements + templates ----------
+    private void seedAssignments(AssignmentService assignments) {
+        assignments.create(new CreateAssignmentRequest("asg-11a1-math", "c-11a1", "sj-math", "Luyen tap ham so",
+                "Hoan thanh bai tap chuong ham so.", Instant.now().plusSeconds(5 * 86_400L), false, null, true, null), "u-t-math");
+        assignments.create(new CreateAssignmentRequest("asg-11a2-eng", "c-11a2", "sj-eng", "English presentation",
+                "Prepare a short presentation.", Instant.now().plusSeconds(7 * 86_400L), true, null, true, null), "u-t-eng");
+        assignments.create(new CreateAssignmentRequest("asg-12a1-lit", "c-12a1", "sj-lit", "Phan tich tac pham",
+                "Write a short analysis.", Instant.now().plusSeconds(4 * 86_400L), false, null, true, null), "u-t-lit");
+        assignments.submit("asg-11a1-math", "u-s-minh", new SubmitRequest("Bai lam cua Nguyen Gia Minh", null, null));
+        assignments.submit("asg-11a1-math", "u-s-linh", new SubmitRequest("Bai lam cua Tran Khanh Linh", null, null));
+        assignments.grade(assignments.submissionsOf("asg-11a1-math").get(0).getId(),
+                new GradeSubmissionRequest(8.4, "Lam bai tot.", null), "u-t-math");
+    }
+
     private void seedNotifications(NotificationService notifications) {
-        var anns = List.of(
-                Announcement.builder().id("an-1").title("Lịch nghỉ lễ 30/04 - 01/05")
-                        .body("Học sinh nghỉ từ thứ 4 tới chủ nhật. Quay lại trường thứ 2.")
-                        .createdAt(Instant.parse("2026-04-25T10:00:00Z")).audience("ALL").build(),
-                Announcement.builder().id("an-2").title("Hội phụ huynh học kỳ 2")
-                        .body("Sáng thứ 7 tuần này, tại hội trường lớn.")
-                        .createdAt(Instant.parse("2026-05-15T08:00:00Z")).audience("PARENT").build());
-
-        var tpls = List.of(
-                tpl("tpl-att", "ATTENDANCE_ABSENT", "Cảnh báo vắng", "IN_APP",
-                        "Cảnh báo chuyên cần", "{{studentName}} {{status}} môn {{subject}} ngày {{date}}"),
-                tpl("tpl-grade", "GRADE_PUBLISHED", "Công bố điểm", "IN_APP",
-                        "Có điểm mới", "Môn {{subject}} - {{category}}: {{score}}"),
-                tpl("tpl-inv", "INVOICE_ISSUED", "Hóa đơn mới", "EMAIL",
-                        "Thông báo học phí", "Quý phụ huynh có hóa đơn {{invoiceCode}} số tiền {{amount}}"));
-
-        notifications.seed(anns, tpls);
+        notifications.seed(List.of(
+                Announcement.builder().id("an-welcome").title("Thong bao nam hoc moi")
+                        .body("Du lieu demo da san sang de kiem thu cac luong nghiep vu.")
+                        .createdAt(Instant.now()).audience("ALL").build()),
+                List.of(
+                        template("tpl-att", "ATTENDANCE_ABSENT", "Attendance alert", "IN_APP", "Attendance alert", "{{studentName}} {{status}}"),
+                        template("tpl-grade", "GRADE_PUBLISHED", "Grade published", "IN_APP", "New grade", "{{subject}}: {{score}}"),
+                        template("tpl-inv", "INVOICE_ISSUED", "Invoice issued", "IN_APP", "New invoice", "{{invoiceCode}}")
+                ));
     }
 
-    // ---------- Audit (A6) ----------
     private void seedAudit(AuditService audit) {
-        Instant now = Instant.now();
-        audit.seed(List.of(
-                AuditLog.builder().id("evt-1").actorId("u-admin-1").actorName("Nguyễn Văn Quản").role("ADMIN")
-                        .action("CREATE").module("identity").entityType("user").entityId("u-teacher-2")
-                        .detail("Tạo tài khoản GV Lê Văn Minh").createdAt(now.minusSeconds(86400)).build(),
-                AuditLog.builder().id("evt-2").actorId("u-teacher-1").actorName("Trần Thị Hoa").role("TEACHER")
-                        .action("UPDATE").module("academic").entityType("grade").entityId("g-3")
-                        .detail("Sửa điểm GK Toán 7.5 → 8.0").createdAt(now.minusSeconds(7200)).build(),
-                AuditLog.builder().id("evt-3").actorId("system").actorName("Hệ thống").role("SYSTEM")
-                        .action("PAYMENT").module("finance").entityType("invoice").entityId("INV-HK1-2025")
-                        .detail("VNPAY thành công 1.800.000₫").createdAt(now.minusSeconds(3600)).build(),
-                AuditLog.builder().id("evt-4").actorId("u-admin-1").actorName("Nguyễn Văn Quản").role("ADMIN")
-                        .action("EXPORT").module("reports").entityType("report").entityId("grade-dist")
-                        .detail("Xuất phổ điểm HK1").createdAt(now.minusSeconds(1800)).build()));
+        audit.seed(List.of(AuditLog.builder().id("audit-seed").actorId("u-admin-1").actorName("School Administrator")
+                .role("ADMIN").action("SEED").module("system").entityType("database").entityId("sse_db")
+                .detail("Fresh local demonstration data created.").createdAt(Instant.now()).build()));
     }
 
-    // ---------- Chat (B6/D3) ----------
     private void seedChat(ChatService chat) {
-        Instant now = Instant.now();
-        chat.seed(List.of(
-                ChatMessage.builder().id("msg-1").senderId("u-parent-1").senderName("Phạm Văn Quân")
-                        .recipientId("u-teacher-1").recipientName("Trần Thị Hoa")
-                        .body("Chào cô, em là phụ huynh bé An ạ.").readFlag(true)
-                        .createdAt(now.minusSeconds(7200)).build(),
-                ChatMessage.builder().id("msg-2").senderId("u-teacher-1").senderName("Trần Thị Hoa")
-                        .recipientId("u-parent-1").recipientName("Phạm Văn Quân")
-                        .body("Chào anh, bé An học tốt môn Toán ạ. Anh yên tâm nhé.").readFlag(false)
-                        .createdAt(now.minusSeconds(3600)).build(),
-                ChatMessage.builder().id("msg-3").senderId("u-student-1").senderName("Phạm Hoài An")
-                        .recipientId("u-teacher-1").recipientName("Trần Thị Hoa")
-                        .body("Cô ơi em chưa hiểu bài 3 ạ.").readFlag(false)
-                        .createdAt(now.minusSeconds(1800)).build()));
+        chat.seed(List.of(ChatMessage.builder().id("msg-demo").senderId("u-p-nguyen").senderName("Nguyen Van Duc")
+                .recipientId("u-t-math").recipientName("Nguyen Thi Mai An").body("Xin chao co.")
+                .readFlag(false).createdAt(Instant.now().minusSeconds(1800)).build()));
     }
 
-    // ---------- Builders ----------
-    private static User base(String id, String u, String h, String name, String email, String phone, String role) {
-        return User.builder().id(id).username(u).passwordHash(h).fullName(name)
+    private static User base(String id, String username, String password, String name, String email, String phone, String role) {
+        return User.builder().id(id).username(username).passwordHash(password).fullName(name)
                 .email(email).phone(phone).role(role).status("ACTIVE").createdAt(Instant.now()).build();
     }
 
-    private static User teacher(String id, String u, String h, String name, String email,
+    private static User teacher(String id, String username, String password, String name, String email,
                                 String phone, String code, String subject) {
-        User x = base(id, u, h, name, email, phone, "TEACHER");
-        x.setTeacherCode(code);
-        x.setMainSubject(subject);
-        return x;
+        User user = base(id, username, password, name, email, phone, "TEACHER");
+        user.setTeacherCode(code);
+        user.setMainSubject(subject);
+        return user;
     }
 
-    private static User student(String id, String u, String h, String name, String email,
+    private static User student(String id, String username, String password, String name, String email,
                                 String phone, String code, String classId, String className) {
-        User x = base(id, u, h, name, email, phone, "STUDENT");
-        x.setStudentCode(code);
-        x.setClassId(classId);
-        x.setClassName(className);
-        return x;
+        User user = base(id, username, password, name, email, phone, "STUDENT");
+        user.setStudentCode(code);
+        user.setClassId(classId);
+        user.setClassName(className);
+        return user;
     }
 
-    private static ParentStudent rel(String id, String parentId, String studentId, boolean primary) {
-        return ParentStudent.builder().id(id).parentId(parentId).studentId(studentId)
-                .primaryContact(primary).build();
+    private static Room room(String id, String code, String name, int capacity) {
+        return Room.builder().id(id).code(code).name(name).capacity(capacity).build();
     }
 
-    private static SchoolClass cls(String id, String code, String name, String grade, String hr, int count) {
-        return SchoolClass.builder().id(id).code(code).name(name).gradeLevel(grade)
-                .academicYearId("ay-2025").homeroomTeacherId(hr).studentCount(count).build();
-    }
-
-    private static Subject subj(String id, String code, String name) {
-        return Subject.builder().id(id).code(code).name(name).build();
-    }
-
-    private static TimetableSlot slot(String id, String classId, String subjectId, String subjectName,
-                                      String teacherId, String teacherName, String room, String day,
-                                      int period, String start, String end) {
-        return TimetableSlot.builder().id(id).classId(classId).subjectId(subjectId).subjectName(subjectName)
-                .teacherId(teacherId).teacherName(teacherName).roomCode(room).dayOfWeek(day)
-                .periodNo(period).startTime(start).endTime(end).semesterId("sm-2025-1").build();
-    }
-
-    private static ExamCategory cat(String id, String code, String name, double weight) {
+    private static ExamCategory category(String id, String code, String name, double weight) {
         return ExamCategory.builder().id(id).code(code).name(name).weight(weight).build();
     }
 
-    private static Grade grade(String id, String studentId, String subjectId, String subjectName,
-                               String cat, String catName, double score, String recordedAt) {
-        return Grade.builder().id(id).studentId(studentId).subjectId(subjectId).subjectName(subjectName)
-                .semesterId("sm-2025-1").category(cat).categoryName(catName).score(score)
-                .recordedAt(Instant.parse(recordedAt)).build();
-    }
-
-    private static AttendanceRecord att(String id, String studentId, String classId, String slotId,
-                                        String date, String status, String note, String subject, int period) {
-        return AttendanceRecord.builder().id(id).studentId(studentId).classId(classId).slotId(slotId)
-                .date(LocalDate.parse(date)).status(status).note(note).subjectName(subject).periodNo(period).build();
-    }
-
-    private static NotificationTemplate tpl(String id, String code, String name, String channel,
-                                            String title, String body) {
+    private static NotificationTemplate template(String id, String code, String name, String channel,
+                                                  String title, String body) {
         return NotificationTemplate.builder().id(id).code(code).name(name).channel(channel)
                 .titleTemplate(title).bodyTemplate(body).active(true).build();
     }
+
+    private static int studentCount(String classCode) {
+        return switch (classCode) {
+            case "11A1", "11A2", "12A1", "12A2" -> 4;
+            default -> 0;
+        };
+    }
+
+    private static String pad(int value, int length) {
+        return String.format("%0" + length + "d", value);
+    }
+
+    private record TeacherSeed(String id, String username, String name, String code, String subjectCode, String subjectName) {}
+    private record StudentSeed(String id, String username, String name, String code, String classId, String classCode) {}
+    private record ParentSeed(String id, String username, String name, List<String> childIds) {}
 }

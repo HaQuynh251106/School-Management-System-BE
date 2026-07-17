@@ -176,6 +176,18 @@ public class FinanceService {
 
     public List<Payment> paymentsOf(String invoiceId) { return payments.findByInvoiceId(invoiceId); }
 
+    /** Public dashboard projection; finance entities remain private to this module. */
+    public record InvoiceSummary(String studentId, String parentId, String status,
+                                 long totalAmount, long paidAmount) {}
+
+    public List<InvoiceSummary> dashboardInvoices(Set<String> studentIds) {
+        return invoices.findAll().stream()
+                .filter(invoice -> studentIds == null || studentIds.contains(invoice.getStudentId()))
+                .map(invoice -> new InvoiceSummary(invoice.getStudentId(), invoice.getParentId(), invoice.getStatus(),
+                        invoice.getTotalAmount(), invoice.getPaidAmount()))
+                .toList();
+    }
+
     /** Seed: 1 đợt thu mẫu + sinh hóa đơn cho mọi HS (để demo có dữ liệu ngay). Idempotent. */
     @Transactional
     public void seedDefaultPeriodAndInvoices() {

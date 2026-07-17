@@ -92,6 +92,19 @@ services:
       - "9001:9001"     # Console UI
     volumes: ["./infrastructure/docker/minio/data:/data"]
 
+  minio-init:
+    image: minio/mc:latest
+    container_name: sse-minio-init
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      until mc alias set local http://minio:9000 sse sse_dev_minio; do sleep 1; done;
+      mc mb --ignore-existing local/sse-files;
+      mc cors set local/sse-files /config/cors.json;
+    volumes: ["./infrastructure/docker/minio/cors.json:/config/cors.json:ro"]
+
   # ---------- Mailhog (giả lập SMTP cho dev) ----------
   mailhog:
     image: mailhog/mailhog:latest

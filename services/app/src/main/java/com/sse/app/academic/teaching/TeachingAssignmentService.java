@@ -115,6 +115,12 @@ public class TeachingAssignmentService {
                 teacherId, classId, subjectId, semesterId, "ACTIVE");
     }
 
+    /** Assignment records do not carry semester data; an active scope authorizes the teacher. */
+    public boolean teacherAssignedToClassSubject(String teacherId, String classId, String subjectId) {
+        return assignments.existsByTeacherIdAndClassIdAndSubjectIdAndStatus(
+                teacherId, classId, subjectId, "ACTIVE");
+    }
+
     @Transactional
     public int backfillFromTimetable(List<TimetableSlot> slots) {
         int created = 0;

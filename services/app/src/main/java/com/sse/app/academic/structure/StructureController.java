@@ -74,11 +74,19 @@ public class StructureController {
         return structure.createClass(r);
     }
 
-    @PostMapping("/academic/high-school-defaults/ensure")
-    public Map<String, Object> ensureHighSchoolDefaults() {
+    @PutMapping("/classes/{id}/homeroom-teacher")
+    public SchoolClass assignHomeroomTeacher(@PathVariable String id,
+                                              @RequestBody AssignHomeroomTeacherRequest r) {
         CurrentUserHolder.requireRole("ADMIN");
-        int created = structure.ensureHighSchoolDefaults();
-        return Map.of("ok", true, "createdClasses", created);
+        return structure.assignHomeroomTeacher(id, r.homeroomTeacherId());
+    }
+
+    @PostMapping("/academic/high-school-defaults/ensure")
+    public Map<String, Object> ensureHighSchoolDefaults(@RequestParam(required = false) String academicYearId) {
+        CurrentUserHolder.requireRole("ADMIN");
+        int created = structure.ensureHighSchoolDefaults(academicYearId);
+        return Map.of("ok", true, "createdClasses", created,
+                "academicYearId", academicYearId == null ? "ACTIVE" : academicYearId);
     }
 
     // ----- Môn -----

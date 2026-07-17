@@ -77,10 +77,10 @@ function Wait-NotificationCount {
 Write-Host "SSE smoke against $BaseUrl"
 
 $admin = Login "admin" "admin@123"
-$teacher1 = Login "gv.hoa" "teacher@123"
-$teacher2 = Login "gv.minh" "teacher@123"
-$student = Login "hs.an" "student@123"
-$parent = Login "ph.pham" "parent@123"
+$teacher1 = Login "gv.toan" "teacher@123"
+$teacher2 = Login "gv.van" "teacher@123"
+$student = Login "hs.minh" "student@123"
+$parent = Login "ph.nguyen" "parent@123"
 Write-Host "[OK] login for 4 roles"
 
 $refreshed = Invoke-Json POST "/auth/refresh" @{ refreshToken = $admin.refreshToken }
@@ -95,21 +95,21 @@ Write-Host "[OK] admin/teacher can list users"
 Invoke-Json POST "/academic/high-school-defaults/ensure" $null $refreshed.accessToken | Out-Null
 $teacherAssignments = As-Array (Invoke-Json GET "/me/teacher-class-subjects" $null $teacher1.accessToken)
 if ($teacherAssignments.Count -lt 1) { throw "Expected teacher assignments for teacher1" }
-$oldSmokeAssignments = As-Array (Invoke-Json GET "/teacher-class-subjects?classId=c-12a10&subjectId=sj-math&semesterId=sm-2025-1" $null $refreshed.accessToken)
+$oldSmokeAssignments = As-Array (Invoke-Json GET "/teacher-class-subjects?classId=c-10a1&subjectId=sj-math&semesterId=sm-2026-2" $null $refreshed.accessToken)
 foreach ($a in $oldSmokeAssignments) {
     if ($a.id) { Invoke-Json DELETE "/teacher-class-subjects/$($a.id)" $null $refreshed.accessToken | Out-Null }
 }
 $smokeAssignment = Invoke-Json POST "/teacher-class-subjects" @{
-    teacherId = "u-teacher-2"
-    classId = "c-12a10"
+    teacherId = "u-t-lit"
+    classId = "c-10a1"
     subjectId = "sj-math"
-    semesterId = "sm-2025-1"
+    semesterId = "sm-2026-2"
 } $refreshed.accessToken
 Invoke-Json POST "/teacher-class-subjects" @{
-    teacherId = "u-teacher-1"
-    classId = "c-12a10"
+    teacherId = "u-t-math"
+    classId = "c-10a1"
     subjectId = "sj-math"
-    semesterId = "sm-2025-1"
+    semesterId = "sm-2026-2"
 } $refreshed.accessToken @(409) | Out-Null
 $teacher2Assignments = As-Array (Invoke-Json GET "/me/teacher-class-subjects" $null $teacher2.accessToken)
 if (-not (@($teacher2Assignments | Where-Object { $_.id -eq $smokeAssignment.id }).Count)) {
@@ -119,73 +119,101 @@ Invoke-Json DELETE "/teacher-class-subjects/$($smokeAssignment.id)" $null $refre
 Write-Host "[OK] teacher-class-subject assignments"
 
 try {
-    Invoke-Json POST "/users/u-teacher-2/lock" $null $refreshed.accessToken | Out-Null
-    Invoke-Json POST "/auth/login" @{ username = "gv.minh"; password = "teacher@123" } $null @(403) | Out-Null
+    Invoke-Json POST "/users/u-t-lit/lock" $null $refreshed.accessToken | Out-Null
+    Invoke-Json POST "/auth/login" @{ username = "gv.van"; password = "teacher@123" } $null @(403) | Out-Null
     Write-Host "[OK] locked user cannot login"
 } finally {
-    Invoke-Json POST "/users/u-teacher-2/unlock" $null $refreshed.accessToken | Out-Null
+    Invoke-Json POST "/users/u-t-lit/unlock" $null $refreshed.accessToken | Out-Null
 }
 
 $children = Invoke-Json GET "/me/children" $null $parent.accessToken
 if ($children.Count -lt 1) { throw "Parent children list is empty" }
-Invoke-Json GET "/grades?studentId=u-admin-1" $null $parent.accessToken @(403) | Out-Null
+Invoke-Json GET "/grades?studentId=u-admin" $null $parent.accessToken @(403) | Out-Null
 Write-Host "[OK] parent child access control"
 
 $firstChild = (As-Array $children | Select-Object -First 1)
-$studentSlots = As-Array (Invoke-Json GET "/students/u-student-1/timetable" $null $student.accessToken)
+$studentSlots = As-Array (Invoke-Json GET "/students/u-s-minh/timetable" $null $student.accessToken)
 if ($studentSlots.Count -lt 1) { throw "Expected student timetable slots" }
 $childSlots = As-Array (Invoke-Json GET "/students/$($firstChild.id)/timetable" $null $parent.accessToken)
 if ($childSlots.Count -lt 1) { throw "Expected child timetable slots for parent" }
-Invoke-Json GET "/students/u-admin-1/timetable" $null $parent.accessToken @(403) | Out-Null
+Invoke-Json GET "/students/u-admin/timetable" $null $parent.accessToken @(403) | Out-Null
 Invoke-Json GET "/timetableSlots?classId=c-10a1" $null $parent.accessToken @(403) | Out-Null
 Write-Host "[OK] student/parent timetable access control"
 
 $conflictSlot = @{
-    classId = "c-10a1"
+    classId = "c-11a1"
     subjectId = "sj-math"
-    teacherId = "u-teacher-1"
+    teacherId = "u-t-math"
     roomCode = "P201"
     dayOfWeek = "MON"
     periodNo = 1
     startTime = "07:00"
     endTime = "07:45"
-    semesterId = "sm-2025-1"
+    semesterId = "sm-2026-1"
 }
 Invoke-Json POST "/timetableSlots" $conflictSlot $refreshed.accessToken @(409) | Out-Null
 Write-Host "[OK] timetable conflict returns 409"
 
 $badGrade = @{
     subjectId = "sj-math"
-    semesterId = "sm-2025-1"
+    semesterId = "sm-2026-1"
     category = "FINAL"
     reason = "smoke unauthorized"
-    entries = @(@{ studentId = "u-student-1"; score = 9.1; note = "should be forbidden" })
+    entries = @(@{ studentId = "u-s-minh"; score = 9.1; note = "should be forbidden" })
 }
 Invoke-Json POST "/grades/bulk" $badGrade $teacher2.accessToken @(403) | Out-Null
 Write-Host "[OK] teacher cannot grade unassigned class/subject"
 
 $goodGrade = @{
     subjectId = "sj-math"
-    semesterId = "sm-2025-1"
+    semesterId = "sm-2026-1"
     category = "FINAL"
     reason = "smoke authorized"
-    entries = @(@{ studentId = "u-student-1"; score = 8.8; note = "smoke" })
+    entries = @(@{ studentId = "u-s-minh"; score = 8.8; note = "smoke" })
 }
 Invoke-Json POST "/grades/bulk" $goodGrade $teacher1.accessToken | Out-Null
 Write-Host "[OK] assigned teacher can upsert grade"
 
+$assignmentSubmissions = As-Array (Invoke-Json GET "/assignments/asg-11a1-math/submissions" $null $teacher1.accessToken)
+$gradedSubmission = @($assignmentSubmissions | Where-Object { $_.status -eq "GRADED" }) | Select-Object -First 1
+if (-not $gradedSubmission) { throw "Expected a graded assignment submission" }
+$oldAssignmentScore = [double]$gradedSubmission.score
+$newAssignmentScore = if ($oldAssignmentScore -lt 9.9) { [Math]::Round($oldAssignmentScore + 0.1, 1) } else { [Math]::Round($oldAssignmentScore - 0.1, 1) }
+Invoke-Json POST "/submissions/$($gradedSubmission.id)/grade" @{
+    score = $newAssignmentScore
+    feedback = $gradedSubmission.feedback
+} $teacher1.accessToken @(400) | Out-Null
+$assignmentCorrectionReason = "smoke assignment grade correction"
+Invoke-Json POST "/submissions/$($gradedSubmission.id)/grade" @{
+    score = $newAssignmentScore
+    feedback = $gradedSubmission.feedback
+    reason = $assignmentCorrectionReason
+} $teacher1.accessToken | Out-Null
+$assignmentAudit = As-Array (Invoke-Json GET "/audit-logs?module=academic" $null $refreshed.accessToken)
+$assignmentAuditEntry = @($assignmentAudit | Where-Object {
+    $_.action -eq "UPDATE" -and $_.entityType -eq "assignment_submission" -and
+    $_.entityId -eq $gradedSubmission.id -and $_.detail -like "*$assignmentCorrectionReason*"
+}) | Select-Object -First 1
+if (-not $assignmentAuditEntry) { throw "Expected assignment grade correction audit entry" }
+Invoke-Json POST "/submissions/$($gradedSubmission.id)/grade" @{
+    score = $oldAssignmentScore
+    feedback = $gradedSubmission.feedback
+    reason = "restore after smoke test"
+} $teacher1.accessToken | Out-Null
+Write-Host "[OK] assignment grade correction requires reason and is audited"
+
 $parentNotificationsBeforeAttendance = (As-Array (Invoke-Json GET "/notifications" $null $parent.accessToken)).Count
 $attendance = @{
-    slotId = "tt-1"
+    slotId = "tt-11a1-math"
     date = (Get-Date -Format "yyyy-MM-dd")
-    marks = @(@{ studentId = "u-student-1"; status = "ABSENT_UNEXCUSED"; note = "smoke" })
+    marks = @(@{ studentId = "u-s-minh"; status = "ABSENT_UNEXCUSED"; note = "smoke" })
 }
 Invoke-Json POST "/attendance/bulk" $attendance $teacher1.accessToken | Out-Null
 Write-Host "[OK] attendance bulk mark"
 Wait-NotificationCount $parent.accessToken ($parentNotificationsBeforeAttendance + 1) | Out-Null
 Write-Host "[OK] async notification delivered attendance event"
 
-$invoices = Invoke-Json GET "/invoices" $null $parent.accessToken
+$invoices = As-Array (Invoke-Json GET "/invoices" $null $parent.accessToken)
 $pending = @($invoices | Where-Object { $_.status -ne "PAID" }) | Select-Object -First 1
 if ($pending) {
     Invoke-Json POST "/payments" @{ invoiceId = $pending.id; method = "VNPAY" } $parent.accessToken | Out-Null

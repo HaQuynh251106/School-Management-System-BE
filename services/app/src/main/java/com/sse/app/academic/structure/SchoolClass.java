@@ -10,7 +10,9 @@ import lombok.*;
 public class SchoolClass {
     @Id
     private String id;
-    @Column(unique = true)
+    // Mã lớp chỉ duy nhất trong một năm học: 10A1 có thể xuất hiện lại ở năm sau.
+    // Unique index (academic_year_id, code) được áp dụng bởi db/structure-schema-patch.sql.
+    @Column(nullable = false)
     private String code;            // 10A1
     private String name;            // Lớp 10A1
     private String gradeLevel;      // K10

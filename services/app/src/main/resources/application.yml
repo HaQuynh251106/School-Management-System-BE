@@ -28,6 +28,12 @@ spring:
         format_sql: false
         jdbc:
           time_zone: UTC
+    defer-datasource-initialization: true
+
+  sql:
+    init:
+      mode: always
+      data-locations: classpath:db/structure-schema-patch.sql
 
   jackson:
     default-property-inclusion: always
@@ -71,6 +77,13 @@ sse:
   notifications:
     worker:
       enabled: ${SSE_NOTIFICATION_WORKER_ENABLED:true}
+  storage:
+    minio:
+      endpoint: ${SSE_MINIO_ENDPOINT:http://localhost:9000}
+      access-key: ${SSE_MINIO_ACCESS_KEY:sse}
+      secret-key: ${SSE_MINIO_SECRET_KEY:sse_dev_minio}
+      bucket: ${SSE_MINIO_BUCKET:sse-files}
+      presign-expiry-seconds: ${SSE_MINIO_PRESIGN_EXPIRY_SECONDS:900}
 
 logging:
   level:

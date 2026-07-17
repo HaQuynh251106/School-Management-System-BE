@@ -1,5 +1,6 @@
 package com.sse.app.academic.assignment;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -23,6 +24,12 @@ public class AssignmentSubmission {
     @Column(length = 4000)
     private String content;
     private String attachmentName;
+    private String attachmentFileId;
+    @JsonIgnore
+    @Column(length = 700)
+    private String attachmentFileKey;
+    private String attachmentContentType;
+    private Long attachmentSizeBytes;
     private Instant submittedAt;
     private Double score;
     @Column(length = 2000)

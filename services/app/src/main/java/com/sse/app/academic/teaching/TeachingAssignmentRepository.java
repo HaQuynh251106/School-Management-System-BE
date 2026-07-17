@@ -12,4 +12,6 @@ public interface TeachingAssignmentRepository extends JpaRepository<TeacherClass
             String classId, String subjectId, String semesterId, String status);
     boolean existsByTeacherIdAndClassIdAndSubjectIdAndSemesterIdAndStatus(
             String teacherId, String classId, String subjectId, String semesterId, String status);
+    boolean existsByTeacherIdAndClassIdAndSubjectIdAndStatus(
+            String teacherId, String classId, String subjectId, String status);
 }

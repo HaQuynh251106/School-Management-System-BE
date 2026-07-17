@@ -1,5 +1,6 @@
 package com.sse.app.academic.assignment;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -27,6 +28,12 @@ public class Assignment {
     private String status;
     private Instant deadline;
     private boolean allowLate;
-    private String attachmentName;   // metadata file đính kèm (S4) — bản đơn giản hoá
+    private String attachmentName;
+    private String attachmentFileId;
+    @JsonIgnore
+    @Column(length = 700)
+    private String attachmentFileKey;
+    private String attachmentContentType;
+    private Long attachmentSizeBytes;
     private Instant createdAt;
 }

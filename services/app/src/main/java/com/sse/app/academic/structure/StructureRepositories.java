@@ -8,17 +8,19 @@ import java.util.Optional;
 // Repository nội bộ phân hệ academic.structure (package-private — truy cập chéo domain qua StructureService).
 
 interface AcademicYearRepository extends JpaRepository<AcademicYear, String> {
+    Optional<AcademicYear> findByCodeIgnoreCase(String code);
 }
 
 interface SemesterRepository extends JpaRepository<Semester, String> {
     List<Semester> findByAcademicYearId(String academicYearId);
+    Optional<Semester> findByAcademicYearIdAndCodeIgnoreCase(String academicYearId, String code);
 }
 
 interface SchoolClassRepository extends JpaRepository<SchoolClass, String> {
     List<SchoolClass> findByAcademicYearId(String academicYearId);
     List<SchoolClass> findByGradeLevel(String gradeLevel);
     List<SchoolClass> findByHomeroomTeacherId(String homeroomTeacherId);
-    Optional<SchoolClass> findByCode(String code);
+    Optional<SchoolClass> findByAcademicYearIdAndCode(String academicYearId, String code);
 }
 
 interface SubjectRepository extends JpaRepository<Subject, String> {

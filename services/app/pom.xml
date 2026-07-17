@@ -59,6 +59,13 @@
             <artifactId>spring-retry</artifactId>
         </dependency>
 
+        <!-- S3-compatible storage for assignment and submission files -->
+        <dependency>
+            <groupId>io.minio</groupId>
+            <artifactId>minio</artifactId>
+            <version>8.5.12</version>
+        </dependency>
+
         <!-- Excel import/export for admin bulk student onboarding -->
         <dependency>
             <groupId>org.apache.poi</groupId>
