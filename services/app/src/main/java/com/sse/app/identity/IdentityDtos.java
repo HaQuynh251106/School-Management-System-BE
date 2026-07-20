@@ -3,6 +3,7 @@ package com.sse.app.identity;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
+import jakarta.validation.constraints.Email;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -23,6 +24,14 @@ public final class IdentityDtos {
     public record ChangePasswordRequest(
             @NotBlank String currentPassword,
             @NotBlank @Size(min = 10, max = 128) String newPassword) {}
+
+    public record UpdateMyProfileRequest(
+            @Email String email,
+            @Size(max = 30) String phone,
+            @Size(max = 1000) String avatarUrl,
+            @Size(max = 1000) String address,
+            @Size(max = 255) String guardianName,
+            @Size(max = 30) String guardianPhone) {}
 
     public record CreateUserRequest(
             String id,

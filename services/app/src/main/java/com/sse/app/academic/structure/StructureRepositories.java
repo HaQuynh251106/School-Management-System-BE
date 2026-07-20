@@ -9,10 +9,14 @@ import java.util.Optional;
 
 interface AcademicYearRepository extends JpaRepository<AcademicYear, String> {
     Optional<AcademicYear> findByCode(String code);
+    List<AcademicYear> findByStatus(String status);
 }
 
 interface SemesterRepository extends JpaRepository<Semester, String> {
     List<Semester> findByAcademicYearId(String academicYearId);
+    List<Semester> findByStatus(String status);
+    Optional<Semester> findByAcademicYearIdAndCode(String academicYearId, String code);
+    Optional<Semester> findByAcademicYearIdAndSequence(String academicYearId, int sequence);
 }
 
 interface SchoolClassRepository extends JpaRepository<SchoolClass, String> {
@@ -23,12 +27,11 @@ interface SchoolClassRepository extends JpaRepository<SchoolClass, String> {
 }
 
 interface SubjectRepository extends JpaRepository<Subject, String> {
+    Optional<Subject> findByCode(String code);
 }
 
 interface RoomRepository extends JpaRepository<Room, String> {
-}
-
-interface SchoolHolidayRepository extends JpaRepository<SchoolHoliday, String> {
+    Optional<Room> findByCode(String code);
 }
 
 interface ClassEnrollmentRepository extends JpaRepository<ClassEnrollment, String> {

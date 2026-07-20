@@ -57,6 +57,10 @@ class Invoice {
     private String code;
     private String studentId;
     private String studentName;
+    /** Lớp/khối tại thời điểm phát hành, không thay đổi khi học sinh chuyển lớp. */
+    private String classId;
+    private String classCode;
+    private String gradeLevel;
     private String parentId;
     private String feePeriodId;
     private long totalAmount;

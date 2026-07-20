@@ -1,5 +1,9 @@
 package com.sse.app.notification;
 
+import com.sse.app.academic.structure.SchoolClass;
+import com.sse.app.academic.structure.StructureService;
+import com.sse.app.academic.timetable.TeachingAssignment;
+import com.sse.app.academic.timetable.TeachingAssignmentService;
 import com.sse.app.common.ApiException;
 import com.sse.app.common.Ids;
 import com.sse.app.notification.NotificationDtos.*;
@@ -8,7 +12,14 @@ import com.sse.app.identity.UserService;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.time.LocalDate;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Stream;
 
 /**
  * E2: Điều phối thông báo (bản đồng bộ, in-app). Trong kiến trúc đầy đủ, các service
@@ -21,6 +32,8 @@ public class NotificationService {
     private final NotificationTemplateRepository templates;
     private final AnnouncementRepository announcements;
     private final UserService users;
+    private final TeachingAssignmentService teachingAssignments;
+    private final StructureService structure;
     private final NotificationPreferenceRepository preferences;
     private final NotificationDeliveryLogRepository deliveryLogs;
     private final UserDeviceRepository devices;
@@ -30,6 +43,8 @@ public class NotificationService {
                                NotificationTemplateRepository templates,
                                AnnouncementRepository announcements,
                                UserService users,
+                               TeachingAssignmentService teachingAssignments,
+                               StructureService structure,
                                NotificationPreferenceRepository preferences,
                                NotificationDeliveryLogRepository deliveryLogs,
                                UserDeviceRepository devices,
@@ -38,6 +53,8 @@ public class NotificationService {
         this.templates = templates;
         this.announcements = announcements;
         this.users = users;
+        this.teachingAssignments = teachingAssignments;
+        this.structure = structure;
         this.preferences = preferences;
         this.deliveryLogs = deliveryLogs;
         this.devices = devices;
@@ -48,10 +65,18 @@ public class NotificationService {
 
     public Notification notifyUser(String recipientId, String type, String title, String body,
                                    String refType, String refId) {
+        return notifyUser(recipientId, type, "NORMAL", title, body, refType, refId);
+    }
+
+    public Notification notifyUser(String recipientId, String type, String priority, String title, String body,
+                                   String refType, String refId) {
         Notification notification = null;
-        if (channelEnabled(recipientId, "IN_APP")) {
+        // Thông báo điều hành phải luôn được lưu trong hộp thư ứng dụng. Người dùng
+        // vẫn có thể tắt email/push, nhưng không được bỏ lỡ thông báo từ nhà trường.
+        if ("ANNOUNCEMENT".equalsIgnoreCase(refType) || channelEnabled(recipientId, "IN_APP")) {
             notification = notifications.save(Notification.builder()
                     .id(Ids.gen("noti")).recipientId(recipientId).type(type)
+                    .priority(priority)
                     .title(title).body(body).read(false)
                     .refType(refType).refId(refId).createdAt(Instant.now()).build());
             deliveryLogs.save(NotificationDeliveryLog.builder().id(Ids.gen("ndl"))
@@ -67,10 +92,25 @@ public class NotificationService {
         for (String id : recipientIds) notifyUser(id, type, title, body, refType, refId);
     }
 
+    public void notifyUsers(List<String> recipientIds, String type, String priority, String title, String body,
+                            String refType, String refId) {
+        for (String id : recipientIds) notifyUser(id, type, priority, title, body, refType, refId);
+    }
+
+    public boolean hasNotification(String recipientId, String refType, String refId) {
+        return recipientId != null && notifications.existsByRecipientIdAndRefTypeAndRefId(
+                recipientId, refType, refId);
+    }
+
     /** 2.5/2.6: bắn cho tất cả phụ huynh của một học sinh. */
     public void notifyParentsOfStudent(String studentId, String type, String title, String body,
                                        String refType, String refId) {
         notifyUsers(users.parentIdsOf(studentId), type, title, body, refType, refId);
+    }
+
+    public void notifyParentsOfStudent(String studentId, String type, String priority, String title, String body,
+                                       String refType, String refId) {
+        notifyUsers(users.parentIdsOf(studentId), type, priority, title, body, refType, refId);
     }
 
     // ---------- Hộp thư in-app ----------
@@ -92,10 +132,53 @@ public class NotificationService {
         return notifications.save(n);
     }
 
+    public Notification markUnread(String id, String recipientId) {
+        Notification n = notifications.findById(id).orElseThrow(() -> ApiException.notFound("Thông báo"));
+        if (!recipientId.equals(n.getRecipientId())) throw ApiException.forbidden("Không phải thông báo của bạn");
+        n.setRead(false);
+        return notifications.save(n);
+    }
+
     public void markAllRead(String recipientId) {
         var list = notifications.findByRecipientIdAndReadIsFalseOrderByCreatedAtDesc(recipientId);
         list.forEach(n -> n.setRead(true));
         notifications.saveAll(list);
+    }
+
+    /**
+     * Đồng bộ các thông báo toàn trường/theo vai trò vào hộp thư của tài khoản.
+     * Việc này giúp giáo viên mới được tạo vẫn nhận được thông báo Admin còn lưu
+     * trong hệ thống, đồng thời không tạo bản ghi trùng khi tải lại Dashboard.
+     */
+    public synchronized void syncAnnouncementsForUser(String recipientId, String role) {
+        if (!Set.of("TEACHER", "STUDENT", "PARENT").contains(role)) return;
+        for (Announcement announcement : announcementsFor(role)) {
+            if (notifications.existsByRecipientIdAndRefTypeAndRefId(
+                    recipientId, "ANNOUNCEMENT", announcement.getId())) {
+                continue;
+            }
+            Notification notification = notifications.save(Notification.builder()
+                    .id(Ids.gen("noti"))
+                    .recipientId(recipientId)
+                    .type(announcement.getCategory() == null ? "GENERAL" : announcement.getCategory())
+                    .priority(announcement.getPriority() == null ? "NORMAL" : announcement.getPriority())
+                    .title(announcement.getTitle())
+                    .body(announcement.getBody())
+                    .read(false)
+                    .refType("ANNOUNCEMENT")
+                    .refId(announcement.getId())
+                    .createdAt(announcement.getCreatedAt() == null ? Instant.now() : announcement.getCreatedAt())
+                    .build());
+            deliveryLogs.save(NotificationDeliveryLog.builder()
+                    .id(Ids.gen("ndl"))
+                    .notificationId(notification.getId())
+                    .recipientId(recipientId)
+                    .channel("IN_APP")
+                    .status("DELIVERED")
+                    .attempts(1)
+                    .createdAt(Instant.now())
+                    .build());
+        }
     }
 
     public List<NotificationPreference> preferences(String userId) {
@@ -165,27 +248,149 @@ public class NotificationService {
     }
 
     public Announcement createAnnouncement(CreateAnnouncementRequest r, String createdBy) {
-        String audience = r.audience() == null ? "ALL" : r.audience().toUpperCase();
+        String audience = normalizeAudience(r.audience());
+        String category = r.category() == null ? "GENERAL" : r.category().toUpperCase();
+        String priority = r.priority() == null ? "NORMAL" : r.priority().toUpperCase();
+        LocalDate holidayStartDate = null;
+        LocalDate holidayEndDate = null;
+        if ("HOLIDAY".equals(category)) {
+            if (!"ALL".equals(audience)) {
+                throw ApiException.badRequest("Thông báo nghỉ lễ phải gửi tới toàn trường");
+            }
+            if (r.holidayStartDate() == null || r.holidayEndDate() == null) {
+                throw ApiException.badRequest("Cần chọn đầy đủ ngày bắt đầu và ngày kết thúc kỳ nghỉ");
+            }
+            if (r.holidayEndDate().isBefore(r.holidayStartDate())) {
+                throw ApiException.badRequest("Ngày kết thúc kỳ nghỉ không được trước ngày bắt đầu");
+            }
+            holidayStartDate = r.holidayStartDate();
+            holidayEndDate = r.holidayEndDate();
+        }
+        List<String> recipients = resolveAudience(audience).stream().distinct().toList();
         Announcement a = announcements.save(Announcement.builder()
                 .id(r.id() == null || r.id().isBlank() ? Ids.gen("an") : r.id())
-                .title(r.title()).body(r.body()).audience(audience)
+                .title(r.title().trim()).body(r.body().trim()).audience(audience)
+                .category(category).priority(priority).status("SENT")
+                .recipientCount(recipients.size())
+                .holidayStartDate(holidayStartDate).holidayEndDate(holidayEndDate)
                 .createdBy(createdBy).createdAt(Instant.now()).build());
 
         // Fan-out in-app cho đối tượng nhận (đồng bộ — bản RabbitMQ sẽ async hoá).
-        List<String> recipients = resolveAudience(audience);
-        notifyUsers(recipients, "ANNOUNCEMENT", a.getTitle(), a.getBody(), "ANNOUNCEMENT", a.getId());
+        notifyUsers(recipients, category, priority, a.getTitle(), a.getBody(), "ANNOUNCEMENT", a.getId());
         return a;
+    }
+
+    public Optional<Announcement> schoolHolidayOn(LocalDate date) {
+        if (date == null) return Optional.empty();
+        return announcements
+                .findFirstByCategoryAndAudienceAndHolidayStartDateLessThanEqualAndHolidayEndDateGreaterThanEqualOrderByCreatedAtDesc(
+                        "HOLIDAY", "ALL", date, date);
+    }
+
+    public List<Announcement> adminAnnouncements() {
+        Set<String> adminCategories = Set.of("GENERAL", "HOLIDAY", "EVENT", "PARENT_MEETING");
+        return announcements.findAllByOrderByCreatedAtDesc().stream()
+                .filter(item -> adminCategories.contains(item.getCategory() == null ? "GENERAL" : item.getCategory()))
+                .toList();
+    }
+
+    public List<Announcement> teacherAnnouncements(String teacherId) {
+        return announcements.findAllByOrderByCreatedAtDesc().stream()
+                .filter(item -> teacherId.equals(item.getCreatedBy()))
+                .toList();
+    }
+
+    public List<TeacherAnnouncementScope> teacherAnnouncementScopes(String teacherId) {
+        Map<String, String> classCodes = new LinkedHashMap<>();
+        Map<String, Set<String>> subjects = new LinkedHashMap<>();
+        Set<String> homeroomClassIds = new LinkedHashSet<>();
+
+        for (TeachingAssignment assignment : teachingAssignments.assignmentsOfTeacher(teacherId)) {
+            classCodes.putIfAbsent(assignment.getClassId(), assignment.getClassCode());
+            subjects.computeIfAbsent(assignment.getClassId(), ignored -> new LinkedHashSet<>())
+                    .add(assignment.getSubjectName());
+        }
+        for (SchoolClass schoolClass : structure.classesOfHomeroom(teacherId)) {
+            classCodes.putIfAbsent(schoolClass.getId(), schoolClass.getCode());
+            subjects.computeIfAbsent(schoolClass.getId(), ignored -> new LinkedHashSet<>());
+            homeroomClassIds.add(schoolClass.getId());
+        }
+
+        Set<String> activeParentIds = Set.copyOf(users.activeUserIdsByRole("PARENT"));
+        return classCodes.entrySet().stream()
+                .map(entry -> {
+                    List<UserDto> students = activeStudentsOfClass(entry.getKey());
+                    int parentCount = (int) students.stream()
+                            .flatMap(student -> users.parentIdsOf(student.id()).stream())
+                            .filter(activeParentIds::contains)
+                            .distinct()
+                            .count();
+                    return new TeacherAnnouncementScope(
+                            entry.getKey(), entry.getValue(), students.size(), parentCount,
+                            List.copyOf(subjects.get(entry.getKey())), homeroomClassIds.contains(entry.getKey()));
+                })
+                .sorted((left, right) -> left.classCode().compareToIgnoreCase(right.classCode()))
+                .toList();
+    }
+
+    public Map<String, Long> audienceCounts() {
+        long teachers = users.activeUserIdsByRole("TEACHER").size();
+        long students = users.activeUserIdsByRole("STUDENT").size();
+        long parents = users.activeUserIdsByRole("PARENT").size();
+        Map<String, Long> counts = new LinkedHashMap<>();
+        counts.put("ALL", teachers + students + parents);
+        counts.put("TEACHER", teachers);
+        counts.put("STUDENT", students);
+        counts.put("PARENT", parents);
+        return counts;
     }
 
     private List<String> resolveAudience(String audience) {
         if (audience.startsWith("CLASS:")) {
-            String classId = audience.substring("CLASS:".length());
-            return users.list("STUDENT", null, classId).stream().map(UserDto::id).toList();
+            return activeStudentsOfClass(audience.substring("CLASS:".length())).stream().map(UserDto::id).toList();
+        }
+        if (audience.startsWith("CLASS_STUDENTS:")) {
+            return activeStudentsOfClass(audience.substring("CLASS_STUDENTS:".length())).stream()
+                    .map(UserDto::id).toList();
+        }
+        if (audience.startsWith("CLASS_PARENTS:")) {
+            return activeParentIdsOfClass(audience.substring("CLASS_PARENTS:".length()));
+        }
+        if (audience.startsWith("CLASS_ALL:")) {
+            String classId = audience.substring("CLASS_ALL:".length());
+            return Stream.concat(
+                    activeStudentsOfClass(classId).stream().map(UserDto::id),
+                    activeParentIdsOfClass(classId).stream()).distinct().toList();
         }
         return switch (audience) {
-            case "PARENT", "STUDENT", "TEACHER", "ADMIN" -> users.userIdsByRole(audience);
-            default -> users.allUserIds();
+            case "PARENT", "STUDENT", "TEACHER" -> users.activeUserIdsByRole(audience);
+            case "ALL" -> Stream.of("TEACHER", "STUDENT", "PARENT")
+                    .flatMap(role -> users.activeUserIdsByRole(role).stream())
+                    .distinct().toList();
+            default -> List.of();
         };
+    }
+
+    private String normalizeAudience(String rawAudience) {
+        if (rawAudience == null || rawAudience.isBlank()) return "ALL";
+        int separator = rawAudience.indexOf(':');
+        if (separator < 0) return rawAudience.toUpperCase();
+        return rawAudience.substring(0, separator).toUpperCase() + rawAudience.substring(separator);
+    }
+
+    private List<UserDto> activeStudentsOfClass(String classId) {
+        return users.list("STUDENT", null, classId).stream()
+                .filter(student -> "ACTIVE".equals(student.status()))
+                .toList();
+    }
+
+    private List<String> activeParentIdsOfClass(String classId) {
+        Set<String> activeParentIds = Set.copyOf(users.activeUserIdsByRole("PARENT"));
+        return activeStudentsOfClass(classId).stream()
+                .flatMap(student -> users.parentIdsOf(student.id()).stream())
+                .filter(activeParentIds::contains)
+                .distinct()
+                .toList();
     }
 
     /** Seed raw (không fan-out) — dùng bởi DataSeeder. */

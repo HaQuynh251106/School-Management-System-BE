@@ -3,6 +3,8 @@ package com.sse.app.academic.timetable;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
+import jakarta.validation.Valid;
 
 import java.time.Instant;
 import java.util.List;
@@ -16,6 +18,20 @@ public final class TeachingAssignmentDtos {
             @NotBlank String teacherId,
             @NotBlank String semesterId,
             @Min(1) @Max(20) int weeklyPeriods
+    ) {}
+
+    public record BatchClassAssignmentRequest(
+            @NotBlank String classId,
+            @Min(1) @Max(20) int weeklyPeriods
+    ) {}
+
+    public record BatchSaveTeachingAssignmentRequest(
+            @Size(max = 50) List<@Valid BatchClassAssignmentRequest> assignments,
+            @Size(max = 50) List<@NotBlank String> classIds,
+            @NotBlank String subjectId,
+            @NotBlank String teacherId,
+            @NotBlank String semesterId,
+            @Min(1) @Max(20) Integer weeklyPeriods
     ) {}
 
     public record TeachingAssignmentResponse(

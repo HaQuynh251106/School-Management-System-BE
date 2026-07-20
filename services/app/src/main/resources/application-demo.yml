@@ -1,0 +1,29 @@
+spring:
+  flyway:
+    enabled: true
+  datasource:
+    url: jdbc:h2:file:${SSE_DEMO_DB_PATH:./data/demo-sse};MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;AUTO_SERVER=TRUE
+    username: sa
+    password: ""
+    driver-class-name: org.h2.Driver
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+    hibernate:
+      ddl-auto: validate
+
+sse:
+  attendance-reminders:
+    enabled: false
+  jwt:
+    secret: demo-only-secret-change-me-0123456789-abcdef
+  seed:
+    enabled: true
+  cors:
+    allowed-origins: http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080
+  password-reset:
+    expose-token: true
+  payments:
+    mode: sandbox
+    callback-secret: demo-sandbox-callback-secret-change-me
+  storage:
+    path: ${SSE_DEMO_STORAGE_PATH:./data/demo-uploads}

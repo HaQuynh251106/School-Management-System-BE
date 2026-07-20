@@ -3,6 +3,7 @@ package com.sse.app.academic.assignment;
 import jakarta.validation.constraints.NotBlank;
 
 import java.time.Instant;
+import jakarta.validation.constraints.NotNull;
 
 public final class AssignmentDtos {
     private AssignmentDtos() {}
@@ -14,4 +15,9 @@ public final class AssignmentDtos {
     public record SubmitRequest(String content, String attachmentFileId) {}
 
     public record GradeSubmissionRequest(Double score, String feedback) {}
+
+    public record UpdateAssignmentRequest(String title, String description, Instant deadline,
+                                          Boolean allowLate, String attachmentFileId) {}
+
+    public record ExtendDeadlineRequest(@NotNull Instant deadline) {}
 }

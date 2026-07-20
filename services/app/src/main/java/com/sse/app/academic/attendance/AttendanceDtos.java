@@ -27,4 +27,31 @@ public final class AttendanceDtos {
             Integer periodNo,
             @NotEmpty List<@Valid Mark> marks
     ) {}
+
+    public record AttendanceDayStatus(
+            boolean attendanceRequired,
+            String announcementId,
+            String title,
+            String reason,
+            LocalDate holidayStartDate,
+            LocalDate holidayEndDate
+    ) {}
+
+    public record AttendanceSessionStatus(
+            String state,
+            boolean canMark,
+            boolean requiresUnlockReason,
+            String message,
+            LocalDate date,
+            String startTime,
+            String endTime,
+            String unlockReason,
+            java.time.Instant unlockedAt
+    ) {}
+
+    public record UnlockAttendanceRequest(
+            @NotBlank String slotId,
+            @NotNull LocalDate date,
+            @NotBlank @Size(min = 10, max = 1000) String reason
+    ) {}
 }

@@ -142,13 +142,7 @@ public class DataSeeder {
                 Room.builder().id("rm-105").code("P105").name("Phòng 105").capacity(45).build(),
                 Room.builder().id("rm-lab1").code("LAB1").name("Phòng thí nghiệm 1").capacity(30).build());
 
-        var holidays = List.of(
-                SchoolHoliday.builder().id("hol-1").date(LocalDate.parse("2026-04-30"))
-                        .name("Giải phóng miền Nam").build(),
-                SchoolHoliday.builder().id("hol-2").date(LocalDate.parse("2026-05-01"))
-                        .name("Quốc tế Lao động").build());
-
-        structure.seedAll(List.of(year), sems, classes, subjects, rooms, holidays);
+        structure.seedAll(List.of(year), sems, classes, subjects, rooms);
     }
 
     // ---------- Timetable ----------
@@ -201,10 +195,12 @@ public class DataSeeder {
         var anns = List.of(
                 Announcement.builder().id("an-1").title("Lịch nghỉ lễ 30/04 - 01/05")
                         .body("Học sinh nghỉ từ thứ 4 tới chủ nhật. Quay lại trường thứ 2.")
-                        .createdAt(Instant.parse("2026-04-25T10:00:00Z")).audience("ALL").build(),
+                        .createdAt(Instant.parse("2026-04-25T10:00:00Z")).audience("ALL")
+                        .category("HOLIDAY").priority("IMPORTANT").status("SENT").build(),
                 Announcement.builder().id("an-2").title("Hội phụ huynh học kỳ 2")
                         .body("Sáng thứ 7 tuần này, tại hội trường lớn.")
-                        .createdAt(Instant.parse("2026-05-15T08:00:00Z")).audience("PARENT").build());
+                        .createdAt(Instant.parse("2026-05-15T08:00:00Z")).audience("PARENT")
+                        .category("PARENT_MEETING").priority("IMPORTANT").status("SENT").build());
 
         var tpls = List.of(
                 tpl("tpl-att", "ATTENDANCE_ABSENT", "Cảnh báo vắng", "IN_APP",

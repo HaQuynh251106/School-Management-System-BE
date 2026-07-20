@@ -9,6 +9,10 @@ import com.sse.app.finance.FinanceService;
 import com.sse.app.identity.UserService;
 import com.sse.app.academic.summary.YearEndService;
 import com.sse.app.academic.summary.StudentYearlySummary;
+import com.sse.app.academic.assignment.AssignmentService;
+import com.sse.app.academic.timetable.TeachingAssignmentService;
+import com.sse.app.identity.UserDto;
+import com.sse.app.security.CurrentUser;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -23,15 +27,20 @@ public class ReportService {
     private final UserService users;
     private final StructureService structure;
     private final YearEndService yearEnd;
+    private final AssignmentService assignments;
+    private final TeachingAssignmentService teachingAssignments;
 
     public ReportService(GradeService grades, AttendanceService attendance, FinanceService finance,
-                         UserService users, StructureService structure, YearEndService yearEnd) {
+                         UserService users, StructureService structure, YearEndService yearEnd,
+                         AssignmentService assignments, TeachingAssignmentService teachingAssignments) {
         this.grades = grades;
         this.attendance = attendance;
         this.finance = finance;
         this.users = users;
         this.structure = structure;
         this.yearEnd = yearEnd;
+        this.assignments = assignments;
+        this.teachingAssignments = teachingAssignments;
     }
 
     public Map<String, Object> overview() {
@@ -133,6 +142,79 @@ public class ReportService {
             default -> throw com.sse.app.common.ApiException.badRequest("Loại báo cáo không hợp lệ");
         }
         return csv.toString();
+    }
+
+    public Map<String, Object> personalOverview(CurrentUser actor, String childId) {
+        Set<String> studentIds = scopedStudentIds(actor, childId);
+        List<Grade> gradeRows = grades.allGrades().stream().filter(item -> studentIds.contains(item.getStudentId())).toList();
+        List<AttendanceRecord> attendanceRows = attendance.allRecords().stream().filter(item -> studentIds.contains(item.getStudentId())).toList();
+        long present = attendanceRows.stream().filter(item -> "PRESENT".equals(item.getStatus())).count();
+        long late = attendanceRows.stream().filter(item -> "LATE".equals(item.getStatus())).count();
+        long excused = attendanceRows.stream().filter(item -> "ABSENT_EXCUSED".equals(item.getStatus())).count();
+        long unexcused = attendanceRows.stream().filter(item -> "ABSENT_UNEXCUSED".equals(item.getStatus())).count();
+        double average = gradeRows.stream().filter(item -> item.getScore() != null).mapToDouble(Grade::getScore).average().orElse(0);
+        long submissions = studentIds.stream().mapToLong(id -> assignments.submissionsByStudent(id).size()).sum();
+        long gradedSubmissions = studentIds.stream().flatMap(id -> assignments.submissionsByStudent(id).stream())
+                .filter(item -> "GRADED".equals(item.getStatus())).count();
+        Map<String, Double> subjectAverages = new LinkedHashMap<>();
+        gradeRows.stream().filter(item -> item.getScore() != null)
+                .collect(java.util.stream.Collectors.groupingBy(Grade::getSubjectName, LinkedHashMap::new,
+                java.util.stream.Collectors.averagingDouble(Grade::getScore))).forEach((key, value) ->
+                subjectAverages.put(key, Math.round(value * 10) / 10.0));
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("role", actor.role());
+        result.put("studentCount", studentIds.size());
+        result.put("classCount", actor.isTeacher() ? teachingAssignments.assignmentsOfTeacher(actor.id()).stream()
+                .map(item -> item.getClassId()).distinct().count() : 1);
+        result.put("gradeCount", gradeRows.size());
+        result.put("averageScore", Math.round(average * 10) / 10.0);
+        result.put("subjectAverages", subjectAverages);
+        result.put("attendanceTotal", attendanceRows.size());
+        result.put("present", present);
+        result.put("late", late);
+        result.put("absentExcused", excused);
+        result.put("absentUnexcused", unexcused);
+        result.put("attendanceRate", attendanceRows.isEmpty() ? 0 : Math.round((present + late * 0.5) / attendanceRows.size() * 1000) / 10.0);
+        result.put("submissionCount", submissions);
+        result.put("gradedSubmissionCount", gradedSubmissions);
+        if (actor.isParent()) result.put("finance", finance.parentFinanceSummary(actor.id()));
+        return result;
+    }
+
+    public String exportPersonalCsv(CurrentUser actor, String childId) {
+        Set<String> studentIds = scopedStudentIds(actor, childId);
+        StringBuilder csv = new StringBuilder("\uFEFF");
+        csv.append("Nhóm dữ liệu,Học sinh,Môn học,Ngày,Trạng thái,Giá trị,Ghi chú\n");
+        grades.allGrades().stream().filter(item -> studentIds.contains(item.getStudentId())).forEach(item -> csv
+                .append(cell("Điểm")).append(',').append(cell(users.fullNameOf(item.getStudentId()))).append(',')
+                .append(cell(item.getSubjectName())).append(',').append(cell(item.getRecordedAt())).append(',')
+                .append(cell(item.getCategoryName())).append(',').append(cell(item.getScore())).append(',').append(cell(item.getNote())).append('\n'));
+        attendance.allRecords().stream().filter(item -> studentIds.contains(item.getStudentId())).forEach(item -> csv
+                .append(cell("Chuyên cần")).append(',').append(cell(users.fullNameOf(item.getStudentId()))).append(',')
+                .append(cell(item.getSubjectName())).append(',').append(cell(item.getDate())).append(',')
+                .append(cell(item.getStatus())).append(',').append(cell(item.getPeriodNo())).append(',').append(cell(item.getNote())).append('\n'));
+        return csv.toString();
+    }
+
+    private Set<String> scopedStudentIds(CurrentUser actor, String childId) {
+        if (actor.isStudent()) return Set.of(actor.id());
+        if (actor.isParent()) {
+            List<UserDto> children = users.childrenOf(actor.id());
+            if (childId != null && !childId.isBlank()) {
+                users.assertParentOf(actor.id(), childId);
+                return Set.of(childId);
+            }
+            return children.stream().map(UserDto::id).collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        }
+        if (actor.isTeacher()) {
+            Set<String> classIds = teachingAssignments.assignmentsOfTeacher(actor.id()).stream()
+                    .map(item -> item.getClassId()).collect(java.util.stream.Collectors.toSet());
+            structure.classesOfHomeroom(actor.id()).forEach(item -> classIds.add(item.getId()));
+            return classIds.stream().flatMap(classId -> users.list("STUDENT", null, classId).stream())
+                    .map(UserDto::id).collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        }
+        throw com.sse.app.common.ApiException.forbidden("Báo cáo cá nhân chỉ dành cho giáo viên, học sinh và phụ huynh");
     }
 
     private String cell(Object value) {

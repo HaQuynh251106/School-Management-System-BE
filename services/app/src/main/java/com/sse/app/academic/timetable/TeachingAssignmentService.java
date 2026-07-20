@@ -4,6 +4,8 @@ import com.sse.app.academic.structure.SchoolClass;
 import com.sse.app.academic.structure.Semester;
 import com.sse.app.academic.structure.StructureService;
 import com.sse.app.academic.timetable.TeachingAssignmentDtos.SaveTeachingAssignmentRequest;
+import com.sse.app.academic.timetable.TeachingAssignmentDtos.BatchSaveTeachingAssignmentRequest;
+import com.sse.app.academic.timetable.TeachingAssignmentDtos.BatchClassAssignmentRequest;
 import com.sse.app.academic.timetable.TeachingAssignmentDtos.TeacherClassAssignmentResponse;
 import com.sse.app.academic.timetable.TeachingAssignmentDtos.TeachingAssignmentResponse;
 import com.sse.app.academic.timetable.TeachingAssignmentDtos.TeacherWorkloadResponse;
@@ -15,10 +17,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 @Service
 public class TeachingAssignmentService {
@@ -94,22 +99,58 @@ public class TeachingAssignmentService {
                 .ifPresent(existing -> {
                     throw ApiException.conflict("Lớp đã có giáo viên phụ trách môn này trong học kỳ đã chọn");
                 });
-        Instant now = Instant.now();
-        TeachingAssignment created = assignments.save(TeachingAssignment.builder()
-                .id(Ids.gen("ta"))
-                .classId(scope.schoolClass().getId())
-                .classCode(scope.schoolClass().getCode())
-                .subjectId(request.subjectId())
-                .subjectName(scope.subjectName())
-                .teacherId(scope.teacher().getId())
-                .teacherName(scope.teacher().getFullName())
-                .semesterId(scope.semester().getId())
-                .weeklyPeriods(request.weeklyPeriods())
-                .assignedAt(now)
-                .assignedBy(actorId)
-                .updatedAt(now)
-                .build());
+        TeachingAssignment created = assignments.save(newAssignment(request, scope, actorId, Instant.now()));
         return response(created, null, null);
+    }
+
+    @Transactional
+    public List<TeachingAssignmentResponse> createBatch(BatchSaveTeachingAssignmentRequest request,
+                                                         String actorId) {
+        List<BatchClassAssignmentRequest> batchItems;
+        if (request.assignments() != null && !request.assignments().isEmpty()) {
+            batchItems = request.assignments();
+        } else if (request.classIds() != null && !request.classIds().isEmpty()
+                && request.weeklyPeriods() != null) {
+            batchItems = request.classIds().stream()
+                    .map(classId -> new BatchClassAssignmentRequest(classId, request.weeklyPeriods()))
+                    .toList();
+        } else {
+            throw ApiException.badRequest("Vui lòng chọn ít nhất một lớp và số tiết/tuần tương ứng");
+        }
+
+        Set<String> uniqueClassIds = batchItems.stream()
+                .map(BatchClassAssignmentRequest::classId)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        if (uniqueClassIds.size() != batchItems.size()) {
+            throw ApiException.badRequest("Mỗi lớp chỉ được chọn một lần trong cùng đợt phân công");
+        }
+
+        List<SaveTeachingAssignmentRequest> requests = batchItems.stream()
+                .map(item -> new SaveTeachingAssignmentRequest(item.classId(), request.subjectId(),
+                        request.teacherId(), request.semesterId(), item.weeklyPeriods()))
+                .toList();
+        List<AssignmentScope> scopes = requests.stream().map(this::validateScope).toList();
+        List<String> conflicts = new ArrayList<>();
+        for (int index = 0; index < requests.size(); index++) {
+            SaveTeachingAssignmentRequest item = requests.get(index);
+            if (assignments.findByClassIdAndSubjectIdAndSemesterId(
+                    item.classId(), item.subjectId(), item.semesterId()).isPresent()) {
+                conflicts.add(scopes.get(index).schoolClass().getCode());
+            }
+        }
+        if (!conflicts.isEmpty()) {
+            throw ApiException.conflict("Các lớp đã có giáo viên phụ trách môn này trong học kỳ đã chọn: "
+                    + String.join(", ", conflicts));
+        }
+
+        Instant now = Instant.now();
+        List<TeachingAssignment> created = new ArrayList<>();
+        for (int index = 0; index < requests.size(); index++) {
+            created.add(newAssignment(requests.get(index), scopes.get(index), actorId, now));
+        }
+        return assignments.saveAll(created).stream()
+                .map(item -> response(item, null, null))
+                .toList();
     }
 
     @Transactional
@@ -233,6 +274,24 @@ public class TeachingAssignmentService {
             throw ApiException.badRequest("Chỉ có thể phân công giáo viên đang hoạt động");
         }
         return new AssignmentScope(schoolClass, semester, subjectName, teacher);
+    }
+
+    private TeachingAssignment newAssignment(SaveTeachingAssignmentRequest request, AssignmentScope scope,
+                                              String actorId, Instant now) {
+        return TeachingAssignment.builder()
+                .id(Ids.gen("ta"))
+                .classId(scope.schoolClass().getId())
+                .classCode(scope.schoolClass().getCode())
+                .subjectId(request.subjectId())
+                .subjectName(scope.subjectName())
+                .teacherId(scope.teacher().getId())
+                .teacherName(scope.teacher().getFullName())
+                .semesterId(scope.semester().getId())
+                .weeklyPeriods(request.weeklyPeriods())
+                .assignedAt(now)
+                .assignedBy(actorId)
+                .updatedAt(now)
+                .build();
     }
 
     private TeachingAssignmentResponse response(TeachingAssignment item, String dayOfWeek, Integer periodNo) {

@@ -1,20 +1,32 @@
 # School Management System — Backend
 
-Backend hiện tại là một **modular monolith** chạy bằng Java 17, Spring Boot 3 và Maven. Các phân hệ danh tính, cơ cấu đào tạo, thời khóa biểu, điểm danh, điểm số, bài tập, tài chính, thông báo, chat, ngoại khóa và báo cáo nằm trong cùng ứng dụng `services/app`, mặc định phục vụ tại `http://localhost:4000`.
+Backend hiện tại là một **modular monolith** chạy bằng Java 17, Spring Boot 3 và Maven. Các phân hệ danh tính, cơ cấu đào tạo, thời khóa biểu, điểm danh, điểm số, bài tập, tài chính, thông báo, chat và báo cáo nằm trong cùng ứng dụng `services/app`, mặc định phục vụ tại `http://localhost:4000`.
 
-## Chạy cục bộ
+## Chạy cục bộ với PostgreSQL
 
-Yêu cầu: JDK 17+ và Maven 3.9+.
+Yêu cầu: JDK 17+, Maven 3.9+ và PostgreSQL 17 (hoặc PostgreSQL 16+).
 
 ```powershell
-mvn -pl services/app -am spring-boot:run -Dspring-boot.run.profiles=local
+Copy-Item .env.local.example .env.local
+# Điền mật khẩu PostgreSQL và các khóa local trong .env.local
+mvn -pl services/app -am package
+.\scripts\start-postgres-local.ps1
 ```
 
-Profile `local` sử dụng H2 lưu trên đĩa, không xóa dữ liệu khi dừng Backend:
+Profile `local` sử dụng PostgreSQL thật tại `127.0.0.1:5432/sse_db`. Script sẽ:
 
-- Cơ sở dữ liệu: `services/app/data/sse.mv.db`
-- Tệp tải lên: `services/app/data/uploads`
-- Có thể đổi vị trí bằng `SSE_LOCAL_DB_PATH` và `SSE_LOCAL_STORAGE_PATH`.
+- đọc thông tin kết nối từ `.env.local` không được đưa vào Git;
+- khởi tạo cụm PostgreSQL riêng trong `data/postgres` nếu chưa tồn tại;
+- tạo `sse_db`, chạy toàn bộ migration Flyway rồi khởi động Backend;
+- chỉ seed khi database còn trống, không ghi đè dữ liệu đã nhập.
+
+Nếu chỉ cần bản demo H2, chạy profile `demo`:
+
+```powershell
+mvn -pl services/app spring-boot:run -Dspring-boot.run.profiles=demo
+```
+
+H2 không còn là nguồn dữ liệu của profile `local`.
 
 Kiểm tra trạng thái tại `http://localhost:4000/actuator/health`; OpenAPI tại `http://localhost:4000/swagger-ui.html`.
 
@@ -47,8 +59,12 @@ Compose khởi động một PostgreSQL 16 và một Backend. Dữ liệu Postgr
 | `SSE_SEED_ENABLED` | Chỉ bật dữ liệu mẫu ở môi trường phát triển |
 | `SSE_STORAGE_PATH` | Thư mục lưu tệp upload |
 | `SSE_MAIL_*` | SMTP cho email reset mật khẩu/thông báo |
-| `SSE_PAYMENT_MODE` | Mặc định `disabled`; `sandbox` chỉ dùng local |
-| `SSE_PAYMENT_CALLBACK_SECRET` | Khóa HMAC callback thanh toán, tối thiểu 32 ký tự |
+| `SSE_PAYMENT_MODE` | `disabled`, `sandbox` (local) hoặc `vnpay`/`production` |
+| `SSE_PAYMENT_CALLBACK_SECRET` | Khóa HMAC callback sandbox, tối thiểu 32 ký tự |
+| `SSE_VNPAY_TMN_CODE` | Mã website do VNPAY cấp |
+| `SSE_VNPAY_HASH_SECRET` | Khóa bí mật ký HMAC-SHA512 do VNPAY cấp |
+| `SSE_VNPAY_PAYMENT_URL` | URL cổng thanh toán VNPAY (HTTPS ở production) |
+| `SSE_VNPAY_RETURN_URL` | URL HTTPS đưa người dùng về giao diện sau thanh toán |
 
 ## Quy tắc an toàn đã áp dụng
 

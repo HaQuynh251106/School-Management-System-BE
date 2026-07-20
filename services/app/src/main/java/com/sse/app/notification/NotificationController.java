@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** C5/D2/E2: Hộp thư in-app, announcement broadcast, cấu hình template. */
 @RestController
@@ -29,17 +30,26 @@ public class NotificationController {
 
     @GetMapping("/notifications")
     public List<Notification> inbox(@RequestParam(required = false, defaultValue = "false") boolean unread) {
-        return notifications.inbox(CurrentUserHolder.require().id(), unread);
+        CurrentUser user = CurrentUserHolder.require();
+        notifications.syncAnnouncementsForUser(user.id(), user.role());
+        return notifications.inbox(user.id(), unread);
     }
 
     @GetMapping("/notifications/unread-count")
     public Map<String, Object> unreadCount() {
-        return Map.of("count", notifications.unreadCount(CurrentUserHolder.require().id()));
+        CurrentUser user = CurrentUserHolder.require();
+        notifications.syncAnnouncementsForUser(user.id(), user.role());
+        return Map.of("count", notifications.unreadCount(user.id()));
     }
 
     @PostMapping("/notifications/{id}/read")
     public Notification markRead(@PathVariable String id) {
         return notifications.markRead(id, CurrentUserHolder.require().id());
+    }
+
+    @PostMapping("/notifications/{id}/unread")
+    public Notification markUnread(@PathVariable String id) {
+        return notifications.markUnread(id, CurrentUserHolder.require().id());
     }
 
     @PostMapping("/notifications/read-all")
@@ -91,8 +101,38 @@ public class NotificationController {
     public Announcement createAnnouncement(@Valid @RequestBody CreateAnnouncementRequest r) {
         CurrentUser me = CurrentUserHolder.require();
         CurrentUserHolder.requireRole("ADMIN", "TEACHER");
-        if (me.isTeacher()) assertTeacherAudience(me.id(), r.audience());
+        if (me.isTeacher()) {
+            assertTeacherAnnouncement(me.id(), r);
+        } else {
+            assertAdminAnnouncement(r);
+        }
         return notifications.createAnnouncement(r, me.id());
+    }
+
+    @GetMapping("/admin/announcements")
+    public List<Announcement> adminAnnouncements() {
+        CurrentUserHolder.requireRole("ADMIN");
+        return notifications.adminAnnouncements();
+    }
+
+    @GetMapping("/admin/announcements/audience-counts")
+    public Map<String, Long> announcementAudienceCounts() {
+        CurrentUserHolder.requireRole("ADMIN");
+        return notifications.audienceCounts();
+    }
+
+    @GetMapping("/teacher/announcements")
+    public List<Announcement> teacherAnnouncements() {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("TEACHER");
+        return notifications.teacherAnnouncements(me.id());
+    }
+
+    @GetMapping("/teacher/announcements/scopes")
+    public List<TeacherAnnouncementScope> teacherAnnouncementScopes() {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("TEACHER");
+        return notifications.teacherAnnouncementScopes(me.id());
     }
 
     // ----- Templates -----
@@ -108,13 +148,37 @@ public class NotificationController {
         return notifications.createTemplate(r);
     }
 
-    private void assertTeacherAudience(String teacherId, String audience) {
-        if (audience == null || !audience.toUpperCase().startsWith("CLASS:")) {
-            throw ApiException.forbidden("Giáo viên chỉ được gửi thông báo tới lớp mình phụ trách");
+    private void assertAdminAnnouncement(CreateAnnouncementRequest request) {
+        String category = request.category() == null ? "GENERAL" : request.category().toUpperCase();
+        if (!Set.of("GENERAL", "HOLIDAY", "EVENT", "PARENT_MEETING").contains(category)) {
+            throw ApiException.forbidden("Quản trị viên chỉ gửi thông báo chung, nghỉ lễ, sự kiện và họp phụ huynh");
         }
-        String classId = audience.substring("CLASS:".length());
+        String audience = normalizeAudience(request.audience());
+        if (audience.startsWith("CLASS")) {
+            throw ApiException.forbidden("Thông báo theo lớp thuộc trách nhiệm của giáo viên phụ trách");
+        }
+    }
+
+    private void assertTeacherAnnouncement(String teacherId, CreateAnnouncementRequest request) {
+        String category = request.category() == null ? "GENERAL" : request.category().toUpperCase();
+        if (!"STUDENT_STATUS".equals(category)) {
+            throw ApiException.forbidden("Điểm số và điểm danh được hệ thống thông báo tự động; giáo viên chỉ cần gửi thủ công tình hình lớp học");
+        }
+        String audience = normalizeAudience(request.audience());
+        if (!(audience.startsWith("CLASS:") || audience.startsWith("CLASS_STUDENTS:")
+                || audience.startsWith("CLASS_PARENTS:") || audience.startsWith("CLASS_ALL:"))) {
+            throw ApiException.forbidden("Giáo viên chỉ được gửi thông báo tới học sinh và phụ huynh của lớp mình phụ trách");
+        }
+        String classId = audience.substring(audience.indexOf(':') + 1);
         boolean teaches = teachingAssignments.isAssigned(teacherId, classId);
         boolean homeroom = teacherId.equals(structure.getClass(classId).getHomeroomTeacherId());
         if (!teaches && !homeroom) throw ApiException.forbidden("Giáo viên không phụ trách lớp nhận thông báo");
+    }
+
+    private String normalizeAudience(String rawAudience) {
+        if (rawAudience == null || rawAudience.isBlank()) return "ALL";
+        int separator = rawAudience.indexOf(':');
+        if (separator < 0) return rawAudience.toUpperCase();
+        return rawAudience.substring(0, separator).toUpperCase() + rawAudience.substring(separator);
     }
 }

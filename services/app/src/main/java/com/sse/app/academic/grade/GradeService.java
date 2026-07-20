@@ -221,12 +221,17 @@ public class GradeService {
     }
 
     private void notifyGrade(Grade grade, ExamCategory category, boolean changed) {
+        String studentName = users.fullNameOf(grade.getStudentId());
         String title = changed ? "Điểm được cập nhật" : "Có điểm mới";
         String label = category.getRequiredCount() > 1
                 ? category.getName() + " " + grade.getAssessmentIndex() : category.getName();
-        String body = String.format("Môn %s — %s: %.1f", grade.getSubjectName(), label, grade.getScore());
-        notifications.notifyUser(grade.getStudentId(), "GRADE", title, body, "GRADE", grade.getId());
-        notifications.notifyParentsOfStudent(grade.getStudentId(), "GRADE", title, body, "GRADE", grade.getId());
+        String scoreDetail = String.format("Môn %s — %s: %.1f", grade.getSubjectName(), label, grade.getScore());
+        notifications.notifyUser(grade.getStudentId(), "GRADE", "IMPORTANT", title,
+                scoreDetail, "GRADE", grade.getId());
+        notifications.notifyParentsOfStudent(grade.getStudentId(), "GRADE", "IMPORTANT",
+                changed ? "Điểm của học sinh được cập nhật" : "Học sinh có điểm mới",
+                String.format("%s — %s", studentName == null ? "Học sinh" : studentName, scoreDetail),
+                "GRADE", grade.getId());
     }
 
     public List<GradeChangeLog> changeLogs(String gradeId) {

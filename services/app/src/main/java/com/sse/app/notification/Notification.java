@@ -14,6 +14,7 @@ public class Notification {
     private String id;
     private String recipientId;
     private String type;        // ATTENDANCE_ALERT | GRADE | INVOICE | ANNOUNCEMENT | ASSIGNMENT
+    private String priority;    // NORMAL | IMPORTANT | URGENT
     private String title;
     @Column(length = 2000)
     private String body;

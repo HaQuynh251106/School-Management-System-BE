@@ -5,6 +5,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 
 import java.time.LocalDate;
+import java.time.Instant;
 
 public final class FinanceDtos {
     private FinanceDtos() {}
@@ -13,9 +14,25 @@ public final class FinanceDtos {
             String id, @NotBlank String code, String name, String academicYearId,
             String applyToGrades, LocalDate dueDate) {}
 
+    public record UpdateFeePeriodRequest(
+            @NotBlank String name, String academicYearId,
+            String applyToGrades, LocalDate dueDate) {}
+
     public record AddFeeItemRequest(String id, @NotBlank String name, @NotNull @Positive Long amount, String gradeLevel) {}
 
     public record PayRequest(@NotBlank String invoiceId, String method) {}
+
+    public record CashPaymentRequest(@NotBlank String invoiceId, @Positive Long amount) {}
+
+    /** Tổng hợp công nợ theo lớp để Admin điều hành và GVCN theo dõi lớp mình. */
+    public record FinanceClassSummary(
+            String classId, String classCode, String gradeLevel,
+            String homeroomTeacherId, String homeroomTeacherName,
+            int invoiceCount, int paidCount, int partialCount, int overdueCount,
+            long totalAmount, long paidAmount, long outstanding,
+            double collectionRate, boolean completed, boolean completionNotified) {}
+
+    public record ClassReminderResult(int invoiceCount, int recipientCount, Instant sentAt) {}
 
     public record PaymentCallbackRequest(
             @NotBlank String txnRef,

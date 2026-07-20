@@ -124,6 +124,13 @@ public class UserService {
         return users.findByRole(role).stream().map(User::getId).toList();
     }
 
+    public List<String> activeUserIdsByRole(String role) {
+        return users.findByRole(role).stream()
+                .filter(user -> "ACTIVE".equals(user.getStatus()))
+                .map(User::getId)
+                .toList();
+    }
+
     public List<String> allUserIds() {
         return users.findAll().stream().map(User::getId).toList();
     }
@@ -188,13 +195,26 @@ public class UserService {
 
     private List<User> filteredUsers(String role, String q, String classId) {
         List<User> base;
-        if (role != null && !role.isBlank()) base = users.findByRole(role);
+        boolean filterParentsByClass = "PARENT".equalsIgnoreCase(role)
+                && classId != null && !classId.isBlank();
+        if (filterParentsByClass) {
+            Set<String> studentIds = users.findByClassId(classId).stream()
+                    .filter(user -> "STUDENT".equals(user.getRole()))
+                    .map(User::getId)
+                    .collect(java.util.stream.Collectors.toSet());
+            Set<String> parentIds = relations.findAll().stream()
+                    .filter(relation -> studentIds.contains(relation.getStudentId()))
+                    .map(ParentStudent::getParentId)
+                    .collect(java.util.stream.Collectors.toSet());
+            base = users.findAllById(parentIds);
+        } else if (role != null && !role.isBlank()) base = users.findByRole(role);
         else if (classId != null && !classId.isBlank()) base = users.findByClassId(classId);
         else base = users.findAll();
 
         String needle = q == null ? null : q.trim().toLowerCase();
         return base.stream()
-                .filter(u -> classId == null || classId.isBlank() || classId.equals(u.getClassId()))
+                .filter(u -> filterParentsByClass || classId == null || classId.isBlank()
+                        || classId.equals(u.getClassId()))
                 .filter(u -> needle == null || needle.isEmpty() || matches(u, needle))
                 .toList();
     }
@@ -327,6 +347,24 @@ public class UserService {
                 .expiresAt(Instant.now().plus(30, ChronoUnit.MINUTES))
                 .build());
         return new PasswordResetIssue(raw, found.get().getEmail());
+    }
+
+    @Transactional
+    public UserDto updateMyProfile(String id, UpdateMyProfileRequest request) {
+        User user = getById(id);
+        if (request.email() != null) user.setEmail(cleanProfileValue(request.email()));
+        if (request.phone() != null) user.setPhone(cleanProfileValue(request.phone()));
+        if (request.avatarUrl() != null) user.setAvatarUrl(cleanProfileValue(request.avatarUrl()));
+        if (request.address() != null) user.setAddress(cleanProfileValue(request.address()));
+        if ("STUDENT".equals(user.getRole())) {
+            if (request.guardianName() != null) user.setGuardianName(cleanProfileValue(request.guardianName()));
+            if (request.guardianPhone() != null) user.setGuardianPhone(cleanProfileValue(request.guardianPhone()));
+        }
+        return toDto(users.save(user));
+    }
+
+    private String cleanProfileValue(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     public record PasswordResetIssue(String token, String email) {}

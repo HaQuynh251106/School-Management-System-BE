@@ -2,11 +2,13 @@ package com.sse.app.finance;
 
 import com.sse.app.common.ApiException;
 import com.sse.app.finance.FinanceDtos.*;
+import com.sse.app.academic.structure.StructureService;
 import com.sse.app.identity.UserService;
 import com.sse.app.security.CurrentUser;
 import com.sse.app.security.CurrentUserHolder;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
+import jakarta.servlet.http.HttpServletRequest;
 
 import java.util.List;
 import java.util.Map;
@@ -17,16 +19,18 @@ public class FinanceController {
 
     private final FinanceService finance;
     private final UserService users;
+    private final StructureService structure;
 
-    public FinanceController(FinanceService finance, UserService users) {
+    public FinanceController(FinanceService finance, UserService users, StructureService structure) {
         this.finance = finance;
         this.users = users;
+        this.structure = structure;
     }
 
     // ----- Đợt thu (ADMIN) -----
     @GetMapping("/fee-periods")
     public List<FeePeriod> periods() {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "TEACHER");
         return finance.listPeriods();
     }
 
@@ -34,6 +38,19 @@ public class FinanceController {
     public FeePeriod createPeriod(@Valid @RequestBody CreateFeePeriodRequest r) {
         CurrentUserHolder.requireRole("ADMIN");
         return finance.createPeriod(r);
+    }
+
+    @PutMapping("/fee-periods/{id}")
+    public FeePeriod updatePeriod(@PathVariable String id,
+                                  @Valid @RequestBody UpdateFeePeriodRequest request) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return finance.updatePeriod(id, request);
+    }
+
+    @DeleteMapping("/fee-periods/{id}")
+    public void deletePeriod(@PathVariable String id) {
+        CurrentUserHolder.requireRole("ADMIN");
+        finance.deletePeriod(id);
     }
 
     @GetMapping("/fee-periods/{id}/items")
@@ -48,10 +65,22 @@ public class FinanceController {
         return finance.addItem(id, r);
     }
 
+    @DeleteMapping("/fee-periods/{periodId}/items/{itemId}")
+    public void deleteItem(@PathVariable String periodId, @PathVariable String itemId) {
+        CurrentUserHolder.requireRole("ADMIN");
+        finance.deleteItem(periodId, itemId);
+    }
+
     @PostMapping("/fee-periods/{id}/open")
     public FeePeriod open(@PathVariable String id) {
         CurrentUserHolder.requireRole("ADMIN");
         return finance.open(id);
+    }
+
+    @PostMapping("/fee-periods/{id}/close")
+    public FeePeriod close(@PathVariable String id) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return finance.close(id);
     }
 
     @PostMapping("/fee-periods/{id}/generate-invoices")
@@ -64,16 +93,54 @@ public class FinanceController {
     @GetMapping("/invoices")
     public List<Invoice> invoices(@RequestParam(required = false) String studentId,
                                   @RequestParam(required = false) String parentId,
-                                  @RequestParam(required = false) String status) {
+                                  @RequestParam(required = false) String status,
+                                  @RequestParam(required = false) String periodId,
+                                  @RequestParam(required = false, name = "q") String query,
+                                  @RequestParam(required = false) String classId,
+                                  @RequestParam(required = false) String gradeLevel) {
         CurrentUser me = CurrentUserHolder.require();
-        CurrentUserHolder.requireRole("ADMIN", "PARENT", "STUDENT");
+        CurrentUserHolder.requireRole("ADMIN", "TEACHER", "PARENT", "STUDENT");
         if (me.isParent()) {
             if (studentId != null) { users.assertParentOf(me.id(), studentId); }
             else parentId = me.id();
         } else if (me.isStudent()) {
             studentId = me.id();
+        } else if (me.isTeacher()) {
+            assertHomeroomClass(me.id(), classId);
         }
-        return finance.listInvoices(studentId, parentId, status);
+        return finance.listInvoices(studentId, parentId, status, periodId, query, classId, gradeLevel);
+    }
+
+    @GetMapping("/finance/classes")
+    public List<FinanceClassSummary> classSummaries(@RequestParam(required = false) String periodId) {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("ADMIN", "TEACHER");
+        if (me.isAdmin()) return finance.classSummaries(periodId, null);
+        var classIds = structure.classesOfHomeroom(me.id()).stream()
+                .map(com.sse.app.academic.structure.SchoolClass::getId)
+                .collect(java.util.stream.Collectors.toSet());
+        return finance.classSummaries(periodId, classIds);
+    }
+
+    @PostMapping("/finance/classes/{classId}/notify-completion")
+    public void notifyCompletion(@PathVariable String classId,
+                                 @RequestParam(required = false) String periodId) {
+        CurrentUserHolder.requireRole("ADMIN");
+        finance.notifyHomeroomCompletion(classId, periodId);
+    }
+
+    @PostMapping("/finance/homeroom/classes/{classId}/remind")
+    public ClassReminderResult remindHomeroomClass(@PathVariable String classId,
+                                                    @RequestParam(required = false) String periodId) {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("TEACHER");
+        return finance.remindHomeroomClass(me.id(), classId, periodId);
+    }
+
+    @GetMapping("/finance/overview")
+    public Map<String, Object> overview() {
+        CurrentUserHolder.requireRole("ADMIN");
+        return finance.financeOverview();
     }
 
     @GetMapping("/invoices/{id}")
@@ -91,26 +158,39 @@ public class FinanceController {
 
     // ----- Thanh toán -----
     @PostMapping("/payments")
-    public Map<String, Object> pay(@Valid @RequestBody PayRequest r) {
+    public Map<String, Object> pay(@Valid @RequestBody PayRequest r, HttpServletRequest request) {
         CurrentUser me = CurrentUserHolder.require();
         CurrentUserHolder.requireRole("PARENT", "ADMIN");
         Invoice inv = finance.getInvoice(r.invoiceId());
         if (me.isParent() && !me.id().equals(inv.getParentId())) {
             users.assertParentOf(me.id(), inv.getStudentId());
         }
-        return finance.pay(r);
+        String forwarded = request.getHeader("X-Forwarded-For");
+        String clientIp = forwarded == null || forwarded.isBlank() ? request.getRemoteAddr() : forwarded.split(",")[0].trim();
+        return finance.pay(r, clientIp);
     }
 
     @PostMapping("/payments/cash")
-    public Map<String, Object> recordCash(@Valid @RequestBody PayRequest request) {
+    public Map<String, Object> recordCash(@Valid @RequestBody CashPaymentRequest request) {
         CurrentUserHolder.requireRole("ADMIN");
-        return finance.recordCashPayment(request.invoiceId());
+        return finance.recordCashPayment(request.invoiceId(), request.amount());
+    }
+
+    @PostMapping("/invoices/{id}/remind")
+    public void remindInvoice(@PathVariable String id) {
+        CurrentUserHolder.requireRole("ADMIN");
+        finance.remindInvoice(id);
     }
 
     @PostMapping("/payments/callback/{gateway}")
     public Map<String, Object> paymentCallback(@PathVariable String gateway,
                                                @Valid @RequestBody PaymentCallbackRequest request) {
         return finance.completeGatewayPayment(gateway, request);
+    }
+
+    @GetMapping("/payments/vnpay/ipn")
+    public Map<String, Object> vnpayIpn(@RequestParam Map<String, String> params) {
+        return finance.completeVnpay(params);
     }
 
     @GetMapping("/payments")
@@ -124,5 +204,14 @@ public class FinanceController {
             throw ApiException.forbidden("Không phải hóa đơn của bạn");
         }
         return finance.paymentsOf(invoiceId);
+    }
+
+    private void assertHomeroomClass(String teacherId, String classId) {
+        if (classId == null || classId.isBlank()) {
+            throw ApiException.badRequest("Giáo viên cần chọn lớp chủ nhiệm để xem công nợ");
+        }
+        if (!teacherId.equals(structure.getClass(classId).getHomeroomTeacherId())) {
+            throw ApiException.forbidden("Bạn chỉ được xem công nợ lớp mình chủ nhiệm");
+        }
     }
 }

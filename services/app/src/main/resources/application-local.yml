@@ -2,14 +2,15 @@ spring:
   flyway:
     enabled: true
   datasource:
-    # Lưu trên đĩa để dữ liệu và lịch sử migration không mất khi Backend dừng.
-    url: jdbc:h2:file:${SSE_LOCAL_DB_PATH:./data/sse};MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;AUTO_SERVER=TRUE
-    username: sa
-    password: ""
-    driver-class-name: org.h2.Driver
+    # Profile local sử dụng PostgreSQL thật. Thông tin kết nối được đọc từ .env.local
+    # qua scripts/start-postgres-local.ps1, không lưu mật khẩu trong mã nguồn.
+    url: ${SSE_DB_URL:jdbc:postgresql://127.0.0.1:5432/sse_db}
+    username: ${SSE_DB_USER:sse}
+    password: ${SSE_DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
 
   jpa:
-    database-platform: org.hibernate.dialect.H2Dialect
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
       ddl-auto: validate
 
@@ -17,7 +18,8 @@ sse:
   jwt:
     secret: local-only-secret-change-me-0123456789-abcdef
   seed:
-    enabled: true
+    # Chỉ tạo dữ liệu khởi tạo khi database còn trống; các lần chạy sau không ghi đè dữ liệu thật.
+    enabled: ${SSE_SEED_ENABLED:false}
   cors:
     allowed-origins: http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080
   password-reset:

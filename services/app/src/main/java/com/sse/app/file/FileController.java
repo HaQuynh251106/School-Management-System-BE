@@ -1,6 +1,7 @@
 package com.sse.app.file;
 
 import com.sse.app.academic.assignment.AssignmentService;
+import com.sse.app.chat.ChatService;
 import com.sse.app.security.CurrentUserHolder;
 import org.springframework.core.io.Resource;
 import org.springframework.http.ContentDisposition;
@@ -22,10 +23,12 @@ import java.nio.charset.StandardCharsets;
 public class FileController {
     private final FileStorageService storage;
     private final AssignmentService assignments;
+    private final ChatService chat;
 
-    public FileController(FileStorageService storage, AssignmentService assignments) {
+    public FileController(FileStorageService storage, AssignmentService assignments, ChatService chat) {
         this.storage = storage;
         this.assignments = assignments;
+        this.chat = chat;
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -36,14 +39,14 @@ public class FileController {
     @GetMapping("/{id}")
     public StoredFile metadata(@PathVariable String id) {
         StoredFile file = storage.metadata(id);
-        assignments.assertCanAccessFile(file, CurrentUserHolder.require());
+        if (!chat.canAccessFile(id, CurrentUserHolder.require())) assignments.assertCanAccessFile(file, CurrentUserHolder.require());
         return file;
     }
 
     @GetMapping("/{id}/content")
     public ResponseEntity<Resource> content(@PathVariable String id) {
         StoredFile file = storage.metadata(id);
-        assignments.assertCanAccessFile(file, CurrentUserHolder.require());
+        if (!chat.canAccessFile(id, CurrentUserHolder.require())) assignments.assertCanAccessFile(file, CurrentUserHolder.require());
         MediaType type;
         try { type = MediaType.parseMediaType(file.getContentType()); }
         catch (Exception ignored) { type = MediaType.APPLICATION_OCTET_STREAM; }

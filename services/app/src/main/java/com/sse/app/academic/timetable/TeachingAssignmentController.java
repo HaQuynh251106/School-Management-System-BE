@@ -1,6 +1,7 @@
 package com.sse.app.academic.timetable;
 
 import com.sse.app.academic.timetable.TeachingAssignmentDtos.SaveTeachingAssignmentRequest;
+import com.sse.app.academic.timetable.TeachingAssignmentDtos.BatchSaveTeachingAssignmentRequest;
 import com.sse.app.academic.timetable.TeachingAssignmentDtos.TeachingAssignmentResponse;
 import com.sse.app.academic.timetable.TeachingAssignmentDtos.TeacherWorkloadResponse;
 import com.sse.app.common.ApiException;
@@ -65,6 +66,13 @@ public class TeachingAssignmentController {
     public TeachingAssignmentResponse create(@Valid @RequestBody SaveTeachingAssignmentRequest request) {
         CurrentUserHolder.requireRole("ADMIN");
         return assignments.create(request, CurrentUserHolder.require().id());
+    }
+
+    @PostMapping("/teaching-assignments/batch")
+    public List<TeachingAssignmentResponse> createBatch(
+            @Valid @RequestBody BatchSaveTeachingAssignmentRequest request) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return assignments.createBatch(request, CurrentUserHolder.require().id());
     }
 
     @PutMapping("/teaching-assignments/{id}")

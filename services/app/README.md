@@ -8,14 +8,13 @@ com.sse.app
  ├─ common/          ApiException, GlobalExceptionHandler, Ids, Health
  ├─ identity/        E1+A1: auth, users, parent-student, reset password
  ├─ academic
- │   ├─ structure/   A2: năm học, học kỳ, lớp, môn, phòng, ngày nghỉ
+ │   ├─ structure/   A2: năm học, học kỳ, lớp, môn, phòng
  │   ├─ timetable/   A3/B2/C2: TKB + conflict resolution
  │   ├─ attendance/  B3/C3/D2: điểm danh + cảnh báo vắng cho PH
  │   ├─ grade/       B4/C2/A4: điểm + log sửa + loại điểm/hệ số
  │   └─ assignment/  B5/C4: bài tập + nộp + chấm
- ├─ finance/         A7/D4: đợt thu, hóa đơn, thanh toán (sandbox)
+ ├─ finance/         A7/D4: đợt thu, hóa đơn, thanh toán sandbox/VNPAY
  ├─ notification/    E2/C5: thông báo in-app, announcement, template
- ├─ extracurricular/ A5/C6/D5: CLB ngoại khóa + đăng ký
  └─ seed/            Seed dữ liệu mẫu khớp mock-server
 ```
 
@@ -71,7 +70,7 @@ curl -X POST localhost:4000/auth/login -H 'Content-Type: application/json' \
 `GET/POST /users` · `GET/PUT /users/{id}` · `POST /users/{id}/lock|unlock|reset-password` (ADMIN)
 
 **Cơ cấu đào tạo (A2)**
-`GET/POST /academicYears` · `/semesters` · `/classes` · `/subjects` · `/rooms` · `/school-holidays`
+`GET/POST /academicYears` · `/semesters` · `/classes` · `/subjects` · `/rooms`
 `GET /classes/{id}` · `GET /classes/{id}/students`
 
 **Thời khóa biểu (A3/B2/C2)**
@@ -90,14 +89,11 @@ curl -X POST localhost:4000/auth/login -H 'Content-Type: application/json' \
 
 **Tài chính (A7/D4)**
 `GET/POST /fee-periods` · `GET/POST /fee-periods/{id}/items` · `POST /fee-periods/{id}/open`
-`POST /fee-periods/{id}/generate-invoices` · `GET /invoices` · `GET /invoices/{id}` · `POST /payments` · `GET /payments?invoiceId`
+`POST /fee-periods/{id}/generate-invoices` · `GET /invoices` · `GET /invoices/{id}` · `POST /payments` · `GET /payments?invoiceId` · `GET /payments/vnpay/ipn`
 
 **Thông báo (E2/C5)**
 `GET /notifications?unread` · `GET /notifications/unread-count` · `POST /notifications/{id}/read` · `/notifications/read-all`
 `GET/POST /announcements` · `GET/POST /notification-templates`
-
-**Ngoại khóa (A5/C6/D5)**
-`GET/POST /clubs` · `GET /clubs/{id}/registrations` · `POST /clubs/{id}/register` · `GET /me/club-registrations` · `POST /club-registrations/{id}/cancel`
 
 ## RBAC & ràng buộc nghiệp vụ
 - JWT bắt buộc cho mọi route trừ `/auth/**`, `/health`.
@@ -109,7 +105,7 @@ curl -X POST localhost:4000/auth/login -H 'Content-Type: application/json' \
 ## Đơn giản hóa so với kiến trúc đầy đủ (để chạy nhanh GĐ1)
 - **1 PostgreSQL** + `ddl-auto=update` (Hibernate sinh schema) thay cho 4 DB + Flyway. DDL/Flyway có thể bổ sung sau (đã có thiết kế trong plan).
 - **Thông báo đồng bộ** (gọi trực tiếp) thay cho RabbitMQ async; chưa tích hợp FCM/SendGrid thật (mới có in-app + log).
-- **Thanh toán sandbox tự `SUCCESS`** thay cho gọi cổng VNPAY/MoMo + verify HMAC.
+- **Thanh toán** có sandbox cho local và tích hợp VNPAY 2.1.0 cho production; IPN được kiểm tra HMAC-SHA512, số tiền và trạng thái trước khi ghi nhận.
 - **File đính kèm** mới lưu *metadata tên file* (chưa nối MinIO presigned upload).
 - Mongo (audit/chat) chưa dùng.
 
@@ -137,6 +133,6 @@ Các điểm vận hành:
 - OpenAPI JSON: `/v3/api-docs`; Swagger UI: `/swagger-ui.html`.
 - File: `POST /files` multipart field `file`, tối đa 10 MB; `GET /files/{id}/content`.
 - Refresh token được lưu dạng hash, xoay vòng và bị thu hồi khi logout.
-- `SSE_PAYMENT_MODE=disabled` là mặc định production. Chỉ profile `local` dùng sandbox; hệ thống không ghi nhận thanh toán giả ở production.
+- `SSE_PAYMENT_MODE=disabled` là mặc định production. Dùng `vnpay` hoặc `production` cùng `SSE_VNPAY_TMN_CODE`, `SSE_VNPAY_HASH_SECRET`, `SSE_VNPAY_PAYMENT_URL`, `SSE_VNPAY_RETURN_URL` để bật VNPAY; IPN cấu hình tại cổng thanh toán trỏ tới `GET /payments/vnpay/ipn`.
 - Bật email reset bằng `SSE_MAIL_ENABLED=true` và cấu hình SMTP trong `.env.example`.
 - Dữ liệu upload và PostgreSQL được gắn persistent Docker volume.

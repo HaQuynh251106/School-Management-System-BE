@@ -12,6 +12,7 @@ interface FeePeriodRepository extends JpaRepository<FeePeriod, String> {
 
 interface FeePeriodItemRepository extends JpaRepository<FeePeriodItem, String> {
     List<FeePeriodItem> findByFeePeriodId(String feePeriodId);
+    void deleteByFeePeriodId(String feePeriodId);
 }
 
 interface InvoiceRepository extends JpaRepository<Invoice, String> {
@@ -19,6 +20,7 @@ interface InvoiceRepository extends JpaRepository<Invoice, String> {
     List<Invoice> findByParentId(String parentId);
     List<Invoice> findByFeePeriodId(String feePeriodId);
     Optional<Invoice> findByFeePeriodIdAndStudentId(String feePeriodId, String studentId);
+    boolean existsByFeePeriodId(String feePeriodId);
 }
 
 interface InvoiceItemRepository extends JpaRepository<InvoiceItem, String> {

@@ -30,6 +30,7 @@ public class Assignment {
     private String attachmentFileId;
     private String attachmentName;
     private Instant createdAt;
+    private Instant updatedAt;
     @Transient
     private int submissionCount;
     @Transient

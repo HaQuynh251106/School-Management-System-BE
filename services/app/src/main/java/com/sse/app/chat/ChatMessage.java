@@ -21,6 +21,9 @@ public class ChatMessage {
     private String recipientName;
     @Column(length = 2000)
     private String body;
+    private String attachmentFileId;
+    private String attachmentName;
     private boolean readFlag;
+    private Instant readAt;
     private Instant createdAt;
 }

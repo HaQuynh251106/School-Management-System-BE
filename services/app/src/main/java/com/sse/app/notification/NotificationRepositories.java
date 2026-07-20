@@ -4,11 +4,13 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.List;
 import java.util.Optional;
+import java.time.LocalDate;
 
 interface NotificationRepository extends JpaRepository<Notification, String> {
     List<Notification> findByRecipientIdOrderByCreatedAtDesc(String recipientId);
     List<Notification> findByRecipientIdAndReadIsFalseOrderByCreatedAtDesc(String recipientId);
     long countByRecipientIdAndReadIsFalse(String recipientId);
+    boolean existsByRecipientIdAndRefTypeAndRefId(String recipientId, String refType, String refId);
 }
 
 interface NotificationTemplateRepository extends JpaRepository<NotificationTemplate, String> {
@@ -16,6 +18,8 @@ interface NotificationTemplateRepository extends JpaRepository<NotificationTempl
 
 interface AnnouncementRepository extends JpaRepository<Announcement, String> {
     List<Announcement> findAllByOrderByCreatedAtDesc();
+    Optional<Announcement> findFirstByCategoryAndAudienceAndHolidayStartDateLessThanEqualAndHolidayEndDateGreaterThanEqualOrderByCreatedAtDesc(
+            String category, String audience, LocalDate dateAtOrAfterStart, LocalDate dateAtOrBeforeEnd);
 }
 
 interface NotificationPreferenceRepository extends JpaRepository<NotificationPreference, String> {

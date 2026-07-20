@@ -40,4 +40,9 @@ public class MeController {
         users.changePassword(CurrentUserHolder.require().id(), request.currentPassword(), request.newPassword());
         return Map.of("ok", true, "reauthenticationRequired", true);
     }
+
+    @PutMapping("/me/profile")
+    public UserDto updateProfile(@Valid @RequestBody IdentityDtos.UpdateMyProfileRequest request) {
+        return users.updateMyProfile(CurrentUserHolder.require().id(), request);
+    }
 }

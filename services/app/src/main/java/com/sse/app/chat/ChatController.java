@@ -1,11 +1,12 @@
 package com.sse.app.chat;
 
-import com.sse.app.common.ApiException;
 import com.sse.app.security.CurrentUser;
 import com.sse.app.security.CurrentUserHolder;
 import com.sse.app.identity.UserService;
 import com.sse.app.identity.UserDto;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -24,11 +25,15 @@ public class ChatController {
         this.users = users;
     }
 
-    public record SendMessageRequest(@NotBlank String toUserId, @NotBlank String body) {}
+    public record SendMessageRequest(
+            @NotBlank(message = "Thiếu người nhận") String toUserId,
+            @Size(max = 2000, message = "Tin nhắn không được vượt quá 2.000 ký tự") String body,
+            String attachmentFileId
+    ) {}
 
     @GetMapping("/threads")
     public List<Map<String, Object>> threads() {
-        return chat.threads(CurrentUserHolder.require().id());
+        return chat.threads(CurrentUserHolder.require());
     }
 
     @GetMapping("/contacts")
@@ -44,12 +49,10 @@ public class ChatController {
     }
 
     @PostMapping("/messages")
-    public ChatMessage send(@RequestBody SendMessageRequest req) {
+    public ChatMessage send(@Valid @RequestBody SendMessageRequest req) {
         CurrentUser me = CurrentUserHolder.require();
-        if (req == null || req.toUserId() == null || req.body() == null)
-            throw ApiException.badRequest("Thiếu người nhận hoặc nội dung");
         chat.assertCanContact(me, req.toUserId());
         String meName = users.fullNameOf(me.id());
-        return chat.send(me.id(), meName, req.toUserId(), req.body());
+        return chat.send(me.id(), meName, req.toUserId(), req.body(), req.attachmentFileId());
     }
 }

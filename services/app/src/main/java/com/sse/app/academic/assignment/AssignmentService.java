@@ -56,7 +56,7 @@ public class AssignmentService {
         Map<String, Integer> classSizes = new HashMap<>();
         return base.stream()
                 .filter(a -> status == null || status.equals(a.getStatus()))
-                .filter(a -> !onlyPublished || "PUBLISHED".equals(a.getStatus()))
+                .filter(a -> !onlyPublished || !"DRAFT".equals(a.getStatus()))
                 .peek(a -> {
                     a.setSubmissionCount((int) submissions.countByAssignmentId(a.getId()));
                     a.setStudentCount(classSizes.computeIfAbsent(a.getClassId(), id ->
@@ -89,7 +89,7 @@ public class AssignmentService {
                 .deadline(request.deadline()).allowLate(Boolean.TRUE.equals(request.allowLate()))
                 .attachmentFileId(attachment == null ? null : attachment.getId())
                 .attachmentName(attachment == null ? null : attachment.getOriginalName())
-                .createdAt(Instant.now()).build());
+                .createdAt(Instant.now()).updatedAt(Instant.now()).build());
         if (publish) notifyClass(assignment);
         return assignment;
     }
@@ -103,8 +103,80 @@ public class AssignmentService {
             throw ApiException.badRequest("Không thể phát hành bài tập đã quá hạn");
         }
         assignment.setStatus("PUBLISHED");
+        assignment.setUpdatedAt(Instant.now());
         assignments.save(assignment);
         notifyClass(assignment);
+        return assignment;
+    }
+
+    @Transactional
+    public Assignment update(String id, UpdateAssignmentRequest request, String actorId, String actorRole) {
+        Assignment assignment = get(id);
+        assertCanManage(assignment, actorId, actorRole);
+        if ("CLOSED".equals(assignment.getStatus())) throw ApiException.badRequest("Hãy mở lại bài tập trước khi chỉnh sửa");
+        if (request.title() != null) {
+            if (request.title().isBlank()) throw ApiException.badRequest("Tiêu đề không được để trống");
+            assignment.setTitle(request.title().trim());
+        }
+        if (request.description() != null) assignment.setDescription(clean(request.description()));
+        if (request.deadline() != null) {
+            if (!request.deadline().isAfter(Instant.now())) throw ApiException.badRequest("Hạn nộp phải ở tương lai");
+            assignment.setDeadline(request.deadline());
+        }
+        if (request.allowLate() != null) assignment.setAllowLate(request.allowLate());
+        if (request.attachmentFileId() != null) {
+            if (request.attachmentFileId().isBlank()) {
+                assignment.setAttachmentFileId(null);
+                assignment.setAttachmentName(null);
+            } else {
+                StoredFile file = ownedFile(request.attachmentFileId(), actorId);
+                assignment.setAttachmentFileId(file.getId());
+                assignment.setAttachmentName(file.getOriginalName());
+            }
+        }
+        assignment.setUpdatedAt(Instant.now());
+        assignments.save(assignment);
+        if ("PUBLISHED".equals(assignment.getStatus())) notifyAssignmentChanged(assignment, "Bài tập đã được cập nhật");
+        return assignment;
+    }
+
+    @Transactional
+    public void delete(String id, String actorId, String actorRole) {
+        Assignment assignment = get(id);
+        assertCanManage(assignment, actorId, actorRole);
+        if (submissions.countByAssignmentId(id) > 0) {
+            throw ApiException.badRequest("Không thể xóa bài tập đã có bài nộp; hãy đóng bài tập để lưu lịch sử");
+        }
+        assignments.delete(assignment);
+    }
+
+    @Transactional
+    public Assignment extend(String id, Instant deadline, String actorId, String actorRole) {
+        Assignment assignment = get(id);
+        assertCanManage(assignment, actorId, actorRole);
+        if (deadline == null || !deadline.isAfter(Instant.now())) throw ApiException.badRequest("Hạn mới phải ở tương lai");
+        if (assignment.getDeadline() != null && !deadline.isAfter(assignment.getDeadline())) {
+            throw ApiException.badRequest("Hạn mới phải muộn hơn hạn hiện tại");
+        }
+        assignment.setDeadline(deadline);
+        assignment.setStatus("PUBLISHED");
+        assignment.setUpdatedAt(Instant.now());
+        assignments.save(assignment);
+        notifyAssignmentChanged(assignment, "Bài tập đã được gia hạn");
+        return assignment;
+    }
+
+    @Transactional
+    public Assignment setOpen(String id, boolean open, String actorId, String actorRole) {
+        Assignment assignment = get(id);
+        assertCanManage(assignment, actorId, actorRole);
+        if (open && assignment.getDeadline() != null && !assignment.getDeadline().isAfter(Instant.now())) {
+            throw ApiException.badRequest("Cần gia hạn trước khi mở lại bài tập đã quá hạn");
+        }
+        assignment.setStatus(open ? "PUBLISHED" : "CLOSED");
+        assignment.setUpdatedAt(Instant.now());
+        assignments.save(assignment);
+        if (open) notifyAssignmentChanged(assignment, "Bài tập đã được mở lại");
         return assignment;
     }
 
@@ -127,7 +199,7 @@ public class AssignmentService {
         if (assignment.isPresent()) {
             Assignment item = assignment.get();
             if (actor.isTeacher() && actor.id().equals(item.getTeacherId())) return;
-            if ("PUBLISHED".equals(item.getStatus())) {
+            if (!"DRAFT".equals(item.getStatus())) {
                 if (actor.isStudent() && belongsToClass(actor.id(), item.getClassId())) return;
                 if (actor.isParent() && users.childrenOf(actor.id()).stream()
                         .anyMatch(child -> item.getClassId().equals(child.classId()))) return;
@@ -171,9 +243,10 @@ public class AssignmentService {
 
         AssignmentSubmission submission = submissions.findByAssignmentIdAndStudentId(assignmentId, studentId)
                 .orElseGet(() -> AssignmentSubmission.builder().id(Ids.gen("sub")).build());
-        if ("GRADED".equals(submission.getStatus())) {
+        if ("GRADED".equals(submission.getStatus()) && !submission.isResubmissionAllowed()) {
             throw ApiException.badRequest("Bài đã được chấm, không thể nộp lại");
         }
+        boolean resubmitting = submission.getId() != null && submission.isResubmissionAllowed();
         submission.setAssignmentId(assignmentId);
         submission.setStudentId(studentId);
         submission.setStudentName(student.getFullName());
@@ -182,6 +255,14 @@ public class AssignmentService {
         submission.setAttachmentFileId(attachment == null ? null : attachment.getId());
         submission.setAttachmentName(attachment == null ? null : attachment.getOriginalName());
         submission.setSubmittedAt(Instant.now());
+        submission.setResubmissionAllowed(false);
+        if (resubmitting) {
+            submission.setAttemptNumber(Math.max(1, submission.getAttemptNumber()) + 1);
+            submission.setScore(null);
+            submission.setFeedback(null);
+            submission.setGradedBy(null);
+            submission.setGradedAt(null);
+        }
         AssignmentSubmission saved = submissions.save(submission);
 
         notifications.notifyUser(assignment.getTeacherId(), "ASSIGNMENT", "Có bài nộp mới",
@@ -211,6 +292,23 @@ public class AssignmentService {
         return submission;
     }
 
+    @Transactional
+    public AssignmentSubmission allowResubmit(String submissionId, String actorId, String actorRole) {
+        AssignmentSubmission submission = submissions.findById(submissionId)
+                .orElseThrow(() -> ApiException.notFound("Bài nộp"));
+        Assignment assignment = get(submission.getAssignmentId());
+        assertCanManage(assignment, actorId, actorRole);
+        if (!"GRADED".equals(submission.getStatus())) throw ApiException.badRequest("Chỉ cấp nộp lại cho bài đã chấm");
+        if (!"PUBLISHED".equals(assignment.getStatus())) throw ApiException.badRequest("Hãy mở lại bài tập trước khi cho nộp lại");
+        submission.setStatus("RESUBMISSION_ALLOWED");
+        submission.setResubmissionAllowed(true);
+        submissions.save(submission);
+        notifications.notifyUser(submission.getStudentId(), "ASSIGNMENT", "IMPORTANT", "Giáo viên cho phép nộp lại",
+                assignment.getTitle() + " · Lần nộp tiếp theo: " + (Math.max(1, submission.getAttemptNumber()) + 1),
+                "SUBMISSION", submission.getId());
+        return submission;
+    }
+
     public List<AssignmentSubmission> submissionsOf(String assignmentId, String actorId, String actorRole) {
         assertCanManage(get(assignmentId), actorId, actorRole);
         return submissions.findByAssignmentId(assignmentId).stream()
@@ -228,6 +326,15 @@ public class AssignmentService {
         boolean assigned = teachingAssignments.assignmentsOfTeacher(actorId).stream().anyMatch(item ->
                 classId.equals(item.getClassId()) && subjectId.equals(item.getSubjectId()));
         if (!assigned) throw ApiException.forbidden("Giáo viên không được phân công môn/lớp này");
+    }
+
+    private void notifyAssignmentChanged(Assignment assignment, String title) {
+        List<String> studentIds = users.list("STUDENT", null, assignment.getClassId()).stream().map(UserDto::id).toList();
+        LinkedHashSet<String> recipients = new LinkedHashSet<>(studentIds);
+        studentIds.forEach(studentId -> recipients.addAll(users.parentIdsOf(studentId)));
+        notifications.notifyUsers(recipients.stream().toList(), "ASSIGNMENT", "IMPORTANT", title,
+                assignment.getTitle() + (assignment.getDeadline() == null ? "" : " · Hạn " + assignment.getDeadline()),
+                "ASSIGNMENT", assignment.getId());
     }
 
     private void assertCanManage(Assignment assignment, String actorId, String actorRole) {

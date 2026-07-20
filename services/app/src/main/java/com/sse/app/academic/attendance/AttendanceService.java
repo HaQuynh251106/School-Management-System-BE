@@ -10,11 +10,16 @@ import com.sse.app.common.ApiException;
 import com.sse.app.identity.User;
 import com.sse.app.identity.UserService;
 import com.sse.app.notification.NotificationService;
+import com.sse.app.notification.Announcement;
 import com.sse.app.security.CurrentUser;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -25,20 +30,24 @@ import java.util.Set;
 @Service
 public class AttendanceService {
 
+    private static final ZoneId SCHOOL_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
+
     private final AttendanceRepository records;
     private final TimetableService timetable;
     private final UserService users;
     private final NotificationService notifications;
     private final StructureService structure;
+    private final AttendanceSessionAccessRepository sessionAccesses;
 
     public AttendanceService(AttendanceRepository records, TimetableService timetable,
                              UserService users, NotificationService notifications,
-                             StructureService structure) {
+                             StructureService structure, AttendanceSessionAccessRepository sessionAccesses) {
         this.records = records;
         this.timetable = timetable;
         this.users = users;
         this.notifications = notifications;
         this.structure = structure;
+        this.sessionAccesses = sessionAccesses;
     }
 
     public List<AttendanceRecord> list(String studentId, String classId, String slotId, LocalDate date) {
@@ -70,6 +79,78 @@ public class AttendanceService {
                 throw ApiException.forbidden("Giáo viên chỉ được điểm danh các tiết đúng môn chuyên ngành của mình");
             }
         }
+    }
+
+    public AttendanceDayStatus dayStatus(LocalDate date) {
+        return notifications.schoolHolidayOn(date)
+                .map(holiday -> new AttendanceDayStatus(false, holiday.getId(), holiday.getTitle(), holiday.getBody(),
+                        holiday.getHolidayStartDate(), holiday.getHolidayEndDate()))
+                .orElseGet(() -> new AttendanceDayStatus(true, null, null, null, null, null));
+    }
+
+    public AttendanceSessionStatus sessionStatus(String slotId, LocalDate date) {
+        return sessionStatus(requireSlot(slotId), date, ZonedDateTime.now(SCHOOL_ZONE));
+    }
+
+    @Transactional
+    public AttendanceSessionStatus unlockLateAttendance(UnlockAttendanceRequest request, CurrentUser actor) {
+        TimetableSlot slot = requireSlot(request.slotId());
+        assertCanManageSlot(actor, slot.getId());
+        AttendanceSessionStatus current = sessionStatus(slot, request.date(), ZonedDateTime.now(SCHOOL_ZONE));
+        if ("LATE_UNLOCKED".equals(current.state()) || "COMPLETED_LATE".equals(current.state())) {
+            return current;
+        }
+        if (!"LOCKED_REASON_REQUIRED".equals(current.state())) {
+            throw ApiException.badRequest(current.message());
+        }
+
+        AttendanceSessionAccess access = accessFor(slot, request.date());
+        access.setUnlockReason(request.reason().trim());
+        access.setUnlockedAt(java.time.Instant.now());
+        access.setUnlockedBy(actor.id());
+        sessionAccesses.save(access);
+
+        String classCode = structure.getClass(slot.getClassId()).getCode();
+        String teacherName = users.fullNameOf(actor.id());
+        String body = (teacherName == null ? "Giáo viên" : teacherName)
+                + " đã mở khóa điểm danh muộn môn " + slot.getSubjectName()
+                + " tại lớp " + classCode + ", tiết " + slot.getPeriodNo()
+                + " ngày " + request.date() + ". Lý do: " + access.getUnlockReason();
+        notifications.notifyUsers(users.userIdsByRole("ADMIN"), "ATTENDANCE_UNLOCK", "IMPORTANT",
+                "Mở khóa điểm danh muộn", body, "ATTENDANCE_SESSION", access.getId());
+        return sessionStatus(slot, request.date(), ZonedDateTime.now(SCHOOL_ZONE));
+    }
+
+    @Transactional
+    public synchronized int sendDueReminders(ZonedDateTime now) {
+        ZonedDateTime schoolNow = now.withZoneSameInstant(SCHOOL_ZONE);
+        LocalDate date = schoolNow.toLocalDate();
+        if (notifications.schoolHolidayOn(date).isPresent()) return 0;
+        String day = date.getDayOfWeek().name().substring(0, 3);
+        int sent = 0;
+        for (TimetableSlot slot : timetable.list(null, null, null, day)) {
+            if (!isScheduledOccurrence(slot, date)) continue;
+            LocalTime start = parseTime(slot.getStartTime());
+            LocalTime end = parseTime(slot.getEndTime());
+            if (start == null || end == null || schoolNow.toLocalTime().isBefore(start)
+                    || !schoolNow.toLocalTime().isBefore(end)) continue;
+            if (records.existsBySlotIdAndDate(slot.getId(), date)) continue;
+
+            AttendanceSessionAccess access = accessFor(slot, date);
+            if (access.getReminderSentAt() != null) continue;
+            access.setReminderSentAt(java.time.Instant.now());
+            sessionAccesses.save(access);
+
+            String classCode = structure.getClass(slot.getClassId()).getCode();
+            notifications.notifyUser(slot.getTeacherId(), "ATTENDANCE_REMINDER", "IMPORTANT",
+                    "Đến giờ điểm danh tiết " + slot.getPeriodNo(),
+                    "Môn " + slot.getSubjectName() + " · Lớp " + classCode + " · "
+                            + slot.getStartTime() + "–" + slot.getEndTime()
+                            + ". Thầy/cô vui lòng mở sổ điểm danh.",
+                    "ATTENDANCE_SESSION", slot.getId() + ":" + date);
+            sent++;
+        }
+        return sent;
     }
 
     @Transactional
@@ -108,10 +189,16 @@ public class AttendanceService {
             rec.setPeriodNo(slot.getPeriodNo());
             saved.add(records.save(rec));
 
-            if (isAbsentOrLate(m.status()) && !Objects.equals(previousStatus, m.status())) {
-                alertParents(rec);
+            if (!Objects.equals(previousStatus, m.status())) {
+                notifyAttendanceStatus(rec);
             }
         }
+        sessionAccesses.findBySlotIdAndSessionDate(slot.getId(), req.date()).ifPresent(access -> {
+            if (access.getUnlockReason() != null && access.getLateAttendanceSavedAt() == null) {
+                access.setLateAttendanceSavedAt(java.time.Instant.now());
+                sessionAccesses.save(access);
+            }
+        });
         return saved;
     }
 
@@ -122,21 +209,75 @@ public class AttendanceService {
     }
 
     private void validateOccurrence(TimetableSlot slot, LocalDate date) {
-        if (date.isAfter(LocalDate.now())) {
-            throw ApiException.badRequest("Không thể điểm danh cho ngày trong tương lai");
+        AttendanceSessionStatus status = sessionStatus(slot, date, ZonedDateTime.now(SCHOOL_ZONE));
+        if (!status.canMark()) throw ApiException.badRequest(status.message());
+    }
+
+    private AttendanceSessionStatus sessionStatus(TimetableSlot slot, LocalDate date, ZonedDateTime now) {
+        Announcement holiday = notifications.schoolHolidayOn(date).orElse(null);
+        if (holiday != null) {
+            return status("HOLIDAY", false, false, "Không cần điểm danh ngày nghỉ: " + holiday.getTitle(),
+                    slot, date, null);
         }
+        if (!isScheduledOccurrence(slot, date)) {
+            return status("INVALID", false, false,
+                    "Ngày đã chọn không thuộc lịch học của tiết này hoặc nằm ngoài học kỳ", slot, date, null);
+        }
+
+        LocalTime start = parseTime(slot.getStartTime());
+        LocalTime end = parseTime(slot.getEndTime());
+        if (start == null || end == null) {
+            return status("INVALID", false, false, "Tiết học chưa được cấu hình thời gian hợp lệ", slot, date, null);
+        }
+
+        AttendanceSessionAccess access = sessionAccesses.findBySlotIdAndSessionDate(slot.getId(), date).orElse(null);
+        boolean hasAttendance = records.existsBySlotIdAndDate(slot.getId(), date);
+        if (date.isAfter(now.toLocalDate()) || (date.equals(now.toLocalDate()) && now.toLocalTime().isBefore(start))) {
+            return status("UPCOMING", false, false, "Tiết học chưa bắt đầu", slot, date, access);
+        }
+        if (date.equals(now.toLocalDate()) && now.toLocalTime().isBefore(end)) {
+            return status("OPEN", true, false, "Tiết học đang diễn ra — sổ điểm danh đang mở", slot, date, access);
+        }
+        if (hasAttendance) {
+            String state = access != null && access.getUnlockReason() != null ? "COMPLETED_LATE" : "COMPLETED";
+            return status(state, true, false,
+                    "COMPLETED_LATE".equals(state) ? "Điểm danh muộn đã được ghi nhận" : "Sổ điểm danh đã được lưu",
+                    slot, date, access);
+        }
+        if (access != null && access.getUnlockReason() != null) {
+            return status("LATE_UNLOCKED", true, false,
+                    "Đã mở khóa điểm danh muộn — vui lòng hoàn tất và lưu sổ", slot, date, access);
+        }
+        return status("LOCKED_REASON_REQUIRED", false, true,
+                "Tiết học đã kết thúc. Cần ghi rõ lý do quên điểm danh để mở khóa", slot, date, access);
+    }
+
+    private AttendanceSessionStatus status(String state, boolean canMark, boolean requiresReason, String message,
+                                           TimetableSlot slot, LocalDate date, AttendanceSessionAccess access) {
+        return new AttendanceSessionStatus(state, canMark, requiresReason, message, date,
+                slot.getStartTime(), slot.getEndTime(), access == null ? null : access.getUnlockReason(),
+                access == null ? null : access.getUnlockedAt());
+    }
+
+    private boolean isScheduledOccurrence(TimetableSlot slot, LocalDate date) {
+        if (date == null) return false;
         Semester semester = structure.getSemester(slot.getSemesterId());
         if ((semester.getStartDate() != null && date.isBefore(semester.getStartDate()))
-                || (semester.getEndDate() != null && date.isAfter(semester.getEndDate()))) {
-            throw ApiException.badRequest("Ngày điểm danh nằm ngoài thời gian của học kỳ");
-        }
-        String actualDay = date.getDayOfWeek().name().substring(0, 3);
-        if (!actualDay.equalsIgnoreCase(slot.getDayOfWeek())) {
-            throw ApiException.badRequest("Ngày điểm danh không đúng thứ của tiết học trong thời khóa biểu");
-        }
-        if (structure.isHoliday(date)) {
-            throw ApiException.badRequest("Không thể điểm danh vào ngày nghỉ của trường");
-        }
+                || (semester.getEndDate() != null && date.isAfter(semester.getEndDate()))) return false;
+        return date.getDayOfWeek().name().substring(0, 3).equalsIgnoreCase(slot.getDayOfWeek());
+    }
+
+    private LocalTime parseTime(String value) {
+        if (value == null || value.isBlank()) return null;
+        try { return LocalTime.parse(value.trim()); }
+        catch (DateTimeParseException ignored) { return null; }
+    }
+
+    private AttendanceSessionAccess accessFor(TimetableSlot slot, LocalDate date) {
+        return sessionAccesses.findBySlotIdAndSessionDate(slot.getId(), date)
+                .orElseGet(() -> AttendanceSessionAccess.builder()
+                        .id(Ids.gen("ats")).slotId(slot.getId()).sessionDate(date)
+                        .teacherId(slot.getTeacherId()).classId(slot.getClassId()).build());
     }
 
     private String normalizeNote(String note) {
@@ -154,16 +295,21 @@ public class AttendanceService {
                 || (subjectName != null && subjectName.trim().equalsIgnoreCase(mainSubject));
     }
 
-    private void alertParents(AttendanceRecord rec) {
+    private void notifyAttendanceStatus(AttendanceRecord rec) {
         String studentName = users.fullNameOf(rec.getStudentId());
-        String title = "Cảnh báo chuyên cần";
-        String body = String.format("%s %s môn %s ngày %s",
-                studentName == null ? "Học sinh" : studentName,
+        String priority = attendancePriority(rec.getStatus());
+        String title = isAbsentOrLate(rec.getStatus()) ? "Cảnh báo chuyên cần" : "Điểm danh đã cập nhật";
+        String detail = String.format("%s môn %s, tiết %d ngày %s%s",
                 statusLabel(rec.getStatus()),
                 rec.getSubjectName() == null ? "" : rec.getSubjectName(),
-                rec.getDate());
-        notifications.notifyParentsOfStudent(rec.getStudentId(), "ATTENDANCE_ALERT",
-                title, body.trim(), "ATTENDANCE", rec.getId());
+                rec.getPeriodNo() == null ? 0 : rec.getPeriodNo(),
+                rec.getDate(),
+                rec.getNote() == null ? "" : ". Ghi chú: " + rec.getNote());
+        notifications.notifyUser(rec.getStudentId(), "ATTENDANCE", priority,
+                title, "Bạn " + detail, "ATTENDANCE", rec.getId());
+        notifications.notifyParentsOfStudent(rec.getStudentId(), "ATTENDANCE", priority,
+                title, (studentName == null ? "Học sinh" : studentName) + " " + detail,
+                "ATTENDANCE", rec.getId());
     }
 
     /** Seed raw (không bắn cảnh báo) — dùng bởi DataSeeder. */
@@ -178,8 +324,15 @@ public class AttendanceService {
         return status != null && (status.startsWith("ABSENT") || "LATE".equals(status));
     }
 
+    private String attendancePriority(String status) {
+        if (status != null && status.startsWith("ABSENT")) return "URGENT";
+        if ("LATE".equals(status)) return "IMPORTANT";
+        return "NORMAL";
+    }
+
     private String statusLabel(String status) {
         return switch (status) {
+            case "PRESENT" -> "có mặt";
             case "ABSENT_UNEXCUSED" -> "vắng không phép";
             case "ABSENT_EXCUSED" -> "vắng có phép";
             case "LATE" -> "đi muộn";

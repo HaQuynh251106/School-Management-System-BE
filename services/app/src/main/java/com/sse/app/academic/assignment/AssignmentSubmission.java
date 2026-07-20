@@ -18,8 +18,14 @@ public class AssignmentSubmission {
     private String assignmentId;
     private String studentId;
     private String studentName;
-    /** SUBMITTED | LATE | GRADED */
+    /** SUBMITTED | LATE | GRADED | RESUBMISSION_ALLOWED */
     private String status;
+    @Builder.Default
+    @Column(nullable = false)
+    private boolean resubmissionAllowed = false;
+    @Builder.Default
+    @Column(nullable = false)
+    private int attemptNumber = 1;
     @Column(length = 4000)
     private String content;
     private String attachmentFileId;

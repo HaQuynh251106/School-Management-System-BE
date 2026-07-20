@@ -1,6 +1,9 @@
 package com.sse.app.academic.attendance;
 
 import com.sse.app.academic.attendance.AttendanceDtos.BulkAttendanceRequest;
+import com.sse.app.academic.attendance.AttendanceDtos.AttendanceDayStatus;
+import com.sse.app.academic.attendance.AttendanceDtos.AttendanceSessionStatus;
+import com.sse.app.academic.attendance.AttendanceDtos.UnlockAttendanceRequest;
 import com.sse.app.common.ApiException;
 import com.sse.app.identity.UserService;
 import com.sse.app.security.CurrentUser;
@@ -49,5 +52,29 @@ public class AttendanceController {
     public List<AttendanceRecord> bulk(@Valid @RequestBody BulkAttendanceRequest req) {
         CurrentUserHolder.requireRole("TEACHER", "ADMIN");
         return attendance.bulkMark(req, CurrentUserHolder.require());
+    }
+
+    @GetMapping("/attendance/day-status")
+    public AttendanceDayStatus dayStatus(
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
+        CurrentUserHolder.require();
+        return attendance.dayStatus(date);
+    }
+
+    @GetMapping("/attendance/session-status")
+    public AttendanceSessionStatus sessionStatus(
+            @RequestParam String slotId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
+        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        CurrentUser me = CurrentUserHolder.require();
+        attendance.assertCanManageSlot(me, slotId);
+        return attendance.sessionStatus(slotId, date);
+    }
+
+    @PostMapping("/attendance/unlock")
+    public AttendanceSessionStatus unlock(@Valid @RequestBody UnlockAttendanceRequest request) {
+        CurrentUserHolder.requireRole("TEACHER");
+        CurrentUser me = CurrentUserHolder.require();
+        return attendance.unlockLateAttendance(request, me);
     }
 }

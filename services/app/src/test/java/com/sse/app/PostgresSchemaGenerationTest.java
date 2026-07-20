@@ -18,7 +18,7 @@ import org.springframework.test.context.ActiveProfiles;
         "spring.jpa.properties.jakarta.persistence.schema-generation.create-source=metadata",
         "spring.jpa.properties.jakarta.persistence.schema-generation.scripts.create-target=target/postgresql-schema.sql"
 })
-@ActiveProfiles("local")
+@ActiveProfiles("demo")
 class PostgresSchemaGenerationTest {
     @Test
     void mappedEntitiesProduceAPostgresSchema() {
