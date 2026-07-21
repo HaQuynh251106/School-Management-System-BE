@@ -73,7 +73,8 @@ public class NotificationService {
         Notification notification = null;
         // Thông báo điều hành phải luôn được lưu trong hộp thư ứng dụng. Người dùng
         // vẫn có thể tắt email/push, nhưng không được bỏ lỡ thông báo từ nhà trường.
-        if ("ANNOUNCEMENT".equalsIgnoreCase(refType) || channelEnabled(recipientId, "IN_APP")) {
+        if ("ANNOUNCEMENT".equalsIgnoreCase(refType) || "EXAM_PERIOD".equalsIgnoreCase(refType)
+                || channelEnabled(recipientId, "IN_APP")) {
             notification = notifications.save(Notification.builder()
                     .id(Ids.gen("noti")).recipientId(recipientId).type(type)
                     .priority(priority)
