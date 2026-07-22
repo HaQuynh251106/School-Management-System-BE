@@ -20,6 +20,8 @@ public class StudentYearlySummary {
     private String studentId;
     private String studentName;
     private String classId;
+    private Double semesterOneAverage;
+    private Double semesterTwoAverage;
     private Double averageScore;
     private String conductGrade;
     private String promotionStatus;

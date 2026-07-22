@@ -75,6 +75,7 @@ public class AssignmentService {
 
     @Transactional
     public Assignment create(CreateAssignmentRequest request, String actorId, String actorRole) {
+        structure.assertClassWritable(request.classId());
         assertTeacherAssignment(actorId, actorRole, request.classId(), request.subjectId());
         String subjectName = structure.requireSubjectName(request.subjectId());
         if (request.deadline() != null && !request.deadline().isAfter(Instant.now())) {
@@ -100,6 +101,7 @@ public class AssignmentService {
     @Transactional
     public Assignment publish(String id, String actorId, String actorRole) {
         Assignment assignment = get(id);
+        structure.assertClassWritable(assignment.getClassId());
         assertCanManage(assignment, actorId, actorRole);
         if ("PUBLISHED".equals(assignment.getStatus())) return assignment;
         if (assignment.getDeadline() != null && !assignment.getDeadline().isAfter(Instant.now())) {
@@ -115,6 +117,7 @@ public class AssignmentService {
     @Transactional
     public Assignment update(String id, UpdateAssignmentRequest request, String actorId, String actorRole) {
         Assignment assignment = get(id);
+        structure.assertClassWritable(assignment.getClassId());
         assertCanManage(assignment, actorId, actorRole);
         if ("CLOSED".equals(assignment.getStatus())) throw ApiException.badRequest("Hãy mở lại bài tập trước khi chỉnh sửa");
         if (request.title() != null) {
@@ -146,6 +149,7 @@ public class AssignmentService {
     @Transactional
     public void delete(String id, String actorId, String actorRole) {
         Assignment assignment = get(id);
+        structure.assertClassWritable(assignment.getClassId());
         assertCanManage(assignment, actorId, actorRole);
         if (submissions.countByAssignmentId(id) > 0) {
             throw ApiException.badRequest("Không thể xóa bài tập đã có bài nộp; hãy đóng bài tập để lưu lịch sử");
@@ -156,6 +160,7 @@ public class AssignmentService {
     @Transactional
     public Assignment extend(String id, Instant deadline, String actorId, String actorRole) {
         Assignment assignment = get(id);
+        structure.assertClassWritable(assignment.getClassId());
         assertCanManage(assignment, actorId, actorRole);
         if (deadline == null || !deadline.isAfter(Instant.now())) throw ApiException.badRequest("Hạn mới phải ở tương lai");
         if (assignment.getDeadline() != null && !deadline.isAfter(assignment.getDeadline())) {
@@ -172,6 +177,7 @@ public class AssignmentService {
     @Transactional
     public Assignment setOpen(String id, boolean open, String actorId, String actorRole) {
         Assignment assignment = get(id);
+        structure.assertClassWritable(assignment.getClassId());
         assertCanManage(assignment, actorId, actorRole);
         if (open && assignment.getDeadline() != null && !assignment.getDeadline().isAfter(Instant.now())) {
             throw ApiException.badRequest("Cần gia hạn trước khi mở lại bài tập đã quá hạn");
@@ -236,6 +242,7 @@ public class AssignmentService {
     @Transactional
     public AssignmentSubmission submit(String assignmentId, String studentId, SubmitRequest request) {
         Assignment assignment = get(assignmentId);
+        structure.assertClassWritable(assignment.getClassId());
         User student = users.getById(studentId);
         if (!"STUDENT".equals(student.getRole()) || !Objects.equals(student.getClassId(), assignment.getClassId())) {
             throw ApiException.forbidden("Bài tập không thuộc lớp của học sinh");
@@ -291,6 +298,7 @@ public class AssignmentService {
         AssignmentSubmission submission = submissions.findById(submissionId)
                 .orElseThrow(() -> ApiException.notFound("Bài nộp"));
         Assignment assignment = get(submission.getAssignmentId());
+        structure.assertClassWritable(assignment.getClassId());
         assertCanManage(assignment, actorId, actorRole);
         if (request.score() == null || !Double.isFinite(request.score())
                 || request.score() < 0 || request.score() > 10) {
@@ -313,6 +321,7 @@ public class AssignmentService {
         AssignmentSubmission submission = submissions.findById(submissionId)
                 .orElseThrow(() -> ApiException.notFound("Bài nộp"));
         Assignment assignment = get(submission.getAssignmentId());
+        structure.assertClassWritable(assignment.getClassId());
         assertCanManage(assignment, actorId, actorRole);
         if (!"GRADED".equals(submission.getStatus())) throw ApiException.badRequest("Chỉ cấp nộp lại cho bài đã chấm");
         if (!"PUBLISHED".equals(assignment.getStatus())) throw ApiException.badRequest("Hãy mở lại bài tập trước khi cho nộp lại");

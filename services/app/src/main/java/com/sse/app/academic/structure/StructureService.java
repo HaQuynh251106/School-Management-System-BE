@@ -101,13 +101,15 @@ public class StructureService {
             }
             for (AcademicYear active : years.findByStatus("ACTIVE")) {
                 if (!active.getId().equals(id)) {
-                    active.setStatus("CLOSED");
-                    closeSemestersOfYear(active.getId());
-                    years.save(active);
+                    throw ApiException.conflict("Năm học " + active.getCode()
+                            + " vẫn đang hoạt động. Hãy hoàn tất quy trình chuyển năm học thay vì kích hoạt trực tiếp.");
                 }
             }
             year.setStatus("ACTIVE");
         } else if ("CLOSED".equals(target)) {
+            if (countStudentsWithoutFinalizedSummary(id) > 0) {
+                throw ApiException.conflict("Năm học còn học sinh chưa được tổng kết. Hãy dùng chức năng Chuyển năm học để tránh mất bước xét lên lớp.");
+            }
             year.setStatus("CLOSED");
             closeSemestersOfYear(id);
         } else {
@@ -227,9 +229,11 @@ public class StructureService {
     @Transactional
     public SchoolClass createClass(CreateClassRequest r) {
         String code = normalizeCode(r.code());
-        if (classes.findByCode(code).isPresent()) throw ApiException.conflict("Mã lớp đã tồn tại");
         AcademicYear year = getYear(r.academicYearId());
         requireNotClosed(year.getStatus(), "Không thể tạo lớp trong năm học đã đóng");
+        if (classes.findByAcademicYearIdAndCode(year.getId(), code).isPresent()) {
+            throw ApiException.conflict("Mã lớp đã tồn tại trong năm học " + year.getCode());
+        }
         return classes.save(SchoolClass.builder()
                 .id(orGen(r.id(), "c")).code(code)
                 .name(defaultName(r.name(), "Lớp " + code))
@@ -242,10 +246,10 @@ public class StructureService {
     public SchoolClass updateClass(String id, UpdateClassRequest r) {
         SchoolClass schoolClass = getClass(id);
         String code = normalizeCode(r.code());
-        classes.findByCode(code).filter(item -> !item.getId().equals(id))
-                .ifPresent(item -> { throw ApiException.conflict("Mã lớp đã tồn tại"); });
         AcademicYear year = getYear(r.academicYearId());
         requireNotClosed(year.getStatus(), "Không thể chuyển lớp vào năm học đã đóng");
+        classes.findByAcademicYearIdAndCode(year.getId(), code).filter(item -> !item.getId().equals(id))
+                .ifPresent(item -> { throw ApiException.conflict("Mã lớp đã tồn tại trong năm học " + year.getCode()); });
         int capacity = r.capacity() == null ? 45 : r.capacity();
         long studentCount = referenceCount("users", "class_id", id);
         if (capacity < studentCount) {
@@ -375,24 +379,42 @@ public class StructureService {
     }
 
     public Optional<SchoolClass> classByCode(String code) {
-        return code == null || code.isBlank() ? Optional.empty() : classes.findByCode(code.trim());
+        if (code == null || code.isBlank()) return Optional.empty();
+        String normalized = normalizeCode(code);
+        Optional<AcademicYear> active = years.findByStatus("ACTIVE").stream().findFirst();
+        if (active.isPresent()) {
+            Optional<SchoolClass> current = classes.findByAcademicYearIdAndCode(active.get().getId(), normalized);
+            if (current.isPresent()) return current;
+        }
+        return classes.findAll().stream().filter(item -> normalized.equalsIgnoreCase(item.getCode()))
+                .max(Comparator.comparing(item -> getYear(item.getAcademicYearId()).getStartDate(),
+                        Comparator.nullsLast(Comparator.naturalOrder())));
     }
 
     public Optional<SchoolClass> findNextClass(String academicYearId, SchoolClass currentClass) {
-        AcademicYear current = years.findById(academicYearId).orElseThrow(() -> ApiException.notFound("Năm học"));
         int nextGrade = parseGrade(currentClass.getGradeLevel()) + 1;
         if (nextGrade > 12) return Optional.empty();
+        return findClassInNextYear(academicYearId, currentClass, nextGrade);
+    }
+
+    public Optional<SchoolClass> findRetainedClass(String academicYearId, SchoolClass currentClass) {
+        return findClassInNextYear(academicYearId, currentClass, parseGrade(currentClass.getGradeLevel()));
+    }
+
+    private Optional<SchoolClass> findClassInNextYear(String academicYearId, SchoolClass currentClass,
+                                                       int targetGrade) {
+        AcademicYear current = years.findById(academicYearId).orElseThrow(() -> ApiException.notFound("Năm học"));
         Optional<AcademicYear> nextYear = years.findAll().stream()
                 .filter(y -> y.getStartDate() != null && current.getStartDate() != null
                         && y.getStartDate().isAfter(current.getStartDate()))
                 .min(Comparator.comparing(AcademicYear::getStartDate));
         if (nextYear.isEmpty()) return Optional.empty();
-        String wanted = "K" + nextGrade;
+        String wanted = "K" + targetGrade;
         String section = currentClass.getCode() == null ? "" : currentClass.getCode().replaceFirst("^\\d+", "");
-        String expectedCode = nextGrade + section;
+        String expectedCode = targetGrade + section;
         return classes.findByAcademicYearId(nextYear.get().getId()).stream()
                 .filter(c -> wanted.equalsIgnoreCase(c.getGradeLevel())
-                        || String.valueOf(nextGrade).equalsIgnoreCase(c.getGradeLevel()))
+                        || String.valueOf(targetGrade).equalsIgnoreCase(c.getGradeLevel()))
                 .filter(c -> expectedCode.equalsIgnoreCase(c.getCode()))
                 .findFirst();
     }
@@ -409,6 +431,21 @@ public class StructureService {
 
     public void assertSemesterExists(String semesterId) {
         if (!semesters.existsById(semesterId)) throw ApiException.notFound("Học kỳ");
+    }
+
+    public void assertSemesterWritable(String semesterId) {
+        Semester semester = getSemester(semesterId);
+        AcademicYear year = getYear(semester.getAcademicYearId());
+        if ("CLOSED".equals(semester.getStatus()) || "CLOSED".equals(year.getStatus())) {
+            throw ApiException.conflict("Học kỳ thuộc năm học đã khóa; không thể thay đổi dữ liệu lịch sử");
+        }
+    }
+
+    public void assertClassWritable(String classId) {
+        SchoolClass schoolClass = getClass(classId);
+        if ("CLOSED".equals(getYear(schoolClass.getAcademicYearId()).getStatus())) {
+            throw ApiException.conflict("Lớp thuộc năm học đã khóa; không thể thay đổi dữ liệu lịch sử");
+        }
     }
 
     /** Cross-domain (finance): bậc khối của lớp, null-safe. */
@@ -552,6 +589,21 @@ public class StructureService {
 
     private long referenceCount(String table, String column, Object value) {
         Long count = jdbc.queryForObject("SELECT COUNT(*) FROM " + table + " WHERE " + column + " = ?", Long.class, value);
+        return count == null ? 0 : count;
+    }
+
+    private long countStudentsWithoutFinalizedSummary(String academicYearId) {
+        Long count = jdbc.queryForObject("""
+                SELECT COUNT(*)
+                FROM users u
+                JOIN classes c ON c.id = u.class_id
+                WHERE u.role = 'STUDENT'
+                  AND c.academic_year_id = ?
+                  AND NOT EXISTS (
+                    SELECT 1 FROM student_yearly_summaries s
+                    WHERE s.academic_year_id = ? AND s.student_id = u.id AND s.finalized_at IS NOT NULL
+                  )
+                """, Long.class, academicYearId, academicYearId);
         return count == null ? 0 : count;
     }
 

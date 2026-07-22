@@ -171,7 +171,7 @@ public class GradeService {
         String categoryCode = normalizeCategory(req.category());
         int assessmentIndex = normalizeAssessmentIndex(req.assessmentIndex());
         ExamCategory examCategory = requireCategory(categoryCode, assessmentIndex);
-        structure.assertSemesterExists(req.semesterId());
+        structure.assertSemesterWritable(req.semesterId());
         String subjectId = resolveSubjectId(changedBy, actorRole, req.classId(), req.semesterId(), req.subjectId());
         String subjectName = structure.requireSubjectName(subjectId);
 

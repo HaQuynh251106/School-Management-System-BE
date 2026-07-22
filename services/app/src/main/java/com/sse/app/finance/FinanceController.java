@@ -112,14 +112,31 @@ public class FinanceController {
     }
 
     @GetMapping("/finance/classes")
-    public List<FinanceClassSummary> classSummaries(@RequestParam(required = false) String periodId) {
+    public List<FinanceClassSummary> classSummaries(@RequestParam(required = false) String periodId,
+                                                     @RequestParam(required = false) String gradeLevel,
+                                                     @RequestParam(required = false) String classId,
+                                                     @RequestParam(required = false) String status) {
         CurrentUser me = CurrentUserHolder.require();
         CurrentUserHolder.requireRole("ADMIN", "TEACHER");
-        if (me.isAdmin()) return finance.classSummaries(periodId, null);
+        if (me.isAdmin()) return finance.classSummaries(periodId, null, gradeLevel, classId, status);
         var classIds = structure.classesOfHomeroom(me.id()).stream()
                 .map(com.sse.app.academic.structure.SchoolClass::getId)
                 .collect(java.util.stream.Collectors.toSet());
-        return finance.classSummaries(periodId, classIds);
+        return finance.classSummaries(periodId, classIds, gradeLevel, classId, status);
+    }
+
+    @PostMapping("/finance/classes/{classId}/remind-homeroom")
+    public HomeroomDebtReminderResult remindHomeroomTeacher(@PathVariable String classId,
+                                                             @RequestParam(required = false) String periodId) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return finance.remindHomeroomTeachers(periodId, List.of(classId));
+    }
+
+    @PostMapping("/finance/classes/remind-homerooms")
+    public HomeroomDebtReminderResult remindHomeroomTeachers(
+            @RequestBody HomeroomDebtReminderRequest request) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return finance.remindHomeroomTeachers(request.periodId(), request.classIds());
     }
 
     @PostMapping("/finance/classes/{classId}/notify-completion")
@@ -135,6 +152,13 @@ public class FinanceController {
         CurrentUser me = CurrentUserHolder.require();
         CurrentUserHolder.requireRole("TEACHER");
         return finance.remindHomeroomClass(me.id(), classId, periodId);
+    }
+
+    @PostMapping("/finance/homeroom/invoices/{invoiceId}/remind")
+    public ClassReminderResult remindHomeroomInvoice(@PathVariable String invoiceId) {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("TEACHER");
+        return finance.remindHomeroomInvoice(me.id(), invoiceId);
     }
 
     @GetMapping("/finance/overview")

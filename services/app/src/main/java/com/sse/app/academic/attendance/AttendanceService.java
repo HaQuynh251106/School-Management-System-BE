@@ -167,6 +167,7 @@ public class AttendanceService {
     @Transactional
     public List<AttendanceRecord> bulkMark(BulkAttendanceRequest req, CurrentUser actor) {
         TimetableSlot slot = requireSlot(req.slotId());
+        structure.assertSemesterWritable(slot.getSemesterId());
         assertCanManageSlot(actor, req.slotId());
         validateOccurrence(slot, req.date());
 

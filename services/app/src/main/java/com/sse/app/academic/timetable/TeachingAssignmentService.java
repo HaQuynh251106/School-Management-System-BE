@@ -189,6 +189,7 @@ public class TeachingAssignmentService {
     @Transactional
     public void delete(String id) {
         TeachingAssignment current = require(id);
+        structure.assertSemesterWritable(current.getSemesterId());
         if (scheduledCount(current, null) > 0) {
             throw ApiException.conflict("Không thể xóa phân công đã có thời khóa biểu; hãy xóa các tiết liên quan trước");
         }
@@ -263,6 +264,7 @@ public class TeachingAssignmentService {
 
     private AssignmentScope validateScope(SaveTeachingAssignmentRequest request) {
         SchoolClass schoolClass = structure.getClass(request.classId());
+        structure.assertSemesterWritable(request.semesterId());
         Semester semester = structure.getSemester(request.semesterId());
         if (schoolClass.getAcademicYearId() != null && semester.getAcademicYearId() != null
                 && !schoolClass.getAcademicYearId().equals(semester.getAcademicYearId())) {

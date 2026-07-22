@@ -368,6 +368,11 @@ public class FinanceService {
 
     /** Tổng hợp theo lớp; allowedClassIds = null nghĩa là Admin được xem toàn trường. */
     public List<FinanceClassSummary> classSummaries(String periodId, Set<String> allowedClassIds) {
+        return classSummaries(periodId, allowedClassIds, null, null, null);
+    }
+
+    public List<FinanceClassSummary> classSummaries(String periodId, Set<String> allowedClassIds,
+                                                     String gradeLevel, String filterClassId, String status) {
         Map<String, SchoolClass> classMap = structure.listClasses(null, null).stream()
                 .collect(java.util.stream.Collectors.toMap(SchoolClass::getId, item -> item));
         LocalDate today = LocalDate.now();
@@ -397,12 +402,75 @@ public class FinanceService {
                             teacherId, schoolClass == null ? null : schoolClass.getHomeroomTeacherName(),
                             rows.size(), paidCount, partialCount, overdueCount, total, paid, total - paid,
                             total == 0 ? 0d : paid * 100d / total, completed,
-                            completed && notifications.hasNotification(teacherId, "FINANCE_CLASS", completionRef));
+                            completed && notifications.hasNotification(teacherId, "FINANCE_CLASS", completionRef),
+                            notifications.hasNotification(teacherId, "FINANCE_CLASS_DEBT",
+                                    debtReminderRef(periodId, classId)));
                 })
+                .filter(summary -> gradeLevel == null || gradeLevel.isBlank()
+                        || gradeLevel.equalsIgnoreCase(summary.gradeLevel()))
+                .filter(summary -> filterClassId == null || filterClassId.isBlank()
+                        || filterClassId.equals(summary.classId()))
+                .filter(summary -> classSummaryMatchesStatus(summary, status))
                 .sorted(Comparator.comparing(FinanceClassSummary::gradeLevel,
                                 Comparator.nullsLast(String::compareTo))
                         .thenComparing(FinanceClassSummary::classCode, Comparator.nullsLast(String::compareTo)))
                 .toList();
+    }
+
+    private boolean classSummaryMatchesStatus(FinanceClassSummary summary, String status) {
+        if (status == null || status.isBlank() || "ALL".equalsIgnoreCase(status)) return true;
+        return switch (status.toUpperCase(Locale.ROOT)) {
+            case "COMPLETED" -> summary.completed();
+            case "INCOMPLETE" -> !summary.completed();
+            case "OVERDUE" -> !summary.completed() && summary.overdueCount() > 0;
+            case "IN_PROGRESS" -> !summary.completed() && summary.overdueCount() == 0;
+            case "NO_HOMEROOM" -> summary.homeroomTeacherId() == null
+                    || summary.homeroomTeacherId().isBlank();
+            default -> throw ApiException.badRequest("Trạng thái lọc công nợ lớp không hợp lệ");
+        };
+    }
+
+    public HomeroomDebtReminderResult remindHomeroomTeachers(String periodId, List<String> requestedClassIds) {
+        Set<String> classIds = requestedClassIds == null ? Set.of() : requestedClassIds.stream()
+                .filter(Objects::nonNull).map(String::trim).filter(value -> !value.isBlank())
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        if (classIds.isEmpty()) {
+            throw ApiException.badRequest("Vui lòng chọn ít nhất một lớp cần nhắc giáo viên chủ nhiệm");
+        }
+        Map<String, FinanceClassSummary> summaries = classSummaries(periodId, classIds).stream()
+                .collect(java.util.stream.Collectors.toMap(FinanceClassSummary::classId, item -> item));
+        FeePeriod period = periodId == null || periodId.isBlank() ? null : getPeriod(periodId);
+        String periodName = period == null ? "các khoản thu hiện tại"
+                : period.getName() == null || period.getName().isBlank() ? period.getCode() : period.getName();
+        Set<String> recipients = new HashSet<>();
+        int classCount = 0;
+        int skippedCount = 0;
+        for (String requestedClassId : classIds) {
+            FinanceClassSummary summary = summaries.get(requestedClassId);
+            if (summary == null || summary.completed() || summary.outstanding() <= 0
+                    || summary.homeroomTeacherId() == null || summary.homeroomTeacherId().isBlank()) {
+                skippedCount++;
+                continue;
+            }
+            String refId = debtReminderRef(periodId, requestedClassId);
+            if (notifications.hasNotification(summary.homeroomTeacherId(), "FINANCE_CLASS_DEBT", refId)) {
+                skippedCount++;
+                continue;
+            }
+            int unfinishedInvoices = Math.max(0, summary.invoiceCount() - summary.paidCount());
+            notifications.notifyUser(summary.homeroomTeacherId(), "FINANCE_TASK_REMINDER", "IMPORTANT",
+                    "Lớp " + summary.classCode() + " còn nhiệm vụ tài chính",
+                    String.format("Lớp %s còn %d hóa đơn chưa hoàn thành %s, tổng công nợ %,d₫ (đã thu %.1f%%). Vui lòng kiểm tra và nhắc phụ huynh trong lớp.",
+                            summary.classCode(), unfinishedInvoices, periodName,
+                            summary.outstanding(), summary.collectionRate()),
+                    "FINANCE_CLASS_DEBT", refId);
+            recipients.add(summary.homeroomTeacherId());
+            classCount++;
+        }
+        if (classCount == 0) {
+            throw ApiException.conflict("Các lớp đã hoàn thành, chưa có GVCN hoặc GVCN đã nhận nhắc trong hôm nay");
+        }
+        return new HomeroomDebtReminderResult(classCount, recipients.size(), skippedCount, Instant.now());
     }
 
     public void notifyHomeroomCompletion(String classId, String periodId) {
@@ -465,8 +533,44 @@ public class FinanceService {
         return new ClassReminderResult(sentInvoices, recipients.size(), Instant.now());
     }
 
+    public ClassReminderResult remindHomeroomInvoice(String teacherId, String invoiceId) {
+        Invoice invoice = getInvoice(invoiceId);
+        if (invoice.getClassId() == null || invoice.getClassId().isBlank()) {
+            throw ApiException.badRequest("Hóa đơn chưa có thông tin lớp học");
+        }
+        SchoolClass schoolClass = structure.getClass(invoice.getClassId());
+        if (!teacherId.equals(schoolClass.getHomeroomTeacherId())) {
+            throw ApiException.forbidden("Bạn chỉ được nhắc phụ huynh của học sinh trong lớp mình chủ nhiệm");
+        }
+        long outstanding = invoice.getTotalAmount() - invoice.getPaidAmount();
+        if (outstanding <= 0) throw ApiException.badRequest("Hóa đơn đã hoàn thành thanh toán");
+        List<String> parentIds = invoice.getParentId() == null
+                ? users.parentIdsOf(invoice.getStudentId()).stream().distinct().toList()
+                : List.of(invoice.getParentId());
+        if (parentIds.isEmpty()) {
+            throw ApiException.badRequest("Học sinh chưa được liên kết với phụ huynh để gửi nhắc thanh toán");
+        }
+        String refId = invoice.getId() + ":" + LocalDate.now();
+        List<String> newRecipients = parentIds.stream()
+                .filter(parentId -> !notifications.hasNotification(parentId, "INVOICE_REMINDER", refId)).toList();
+        if (newRecipients.isEmpty()) {
+            throw ApiException.conflict("Phụ huynh đã nhận nhắc hạn cho hóa đơn này trong hôm nay");
+        }
+        notifications.notifyUsers(newRecipients, "FINANCE_REMINDER", "IMPORTANT",
+                "GVCN lớp " + schoolClass.getCode() + " nhắc hạn khoản thu",
+                String.format("Kính gửi phụ huynh %s, học sinh còn %,d₫ cần thanh toán cho hóa đơn %s. Hạn: %s.",
+                        invoice.getStudentName(), outstanding, invoice.getCode(),
+                        invoice.getDueDate() == null ? "theo thông báo nhà trường" : invoice.getDueDate()),
+                "INVOICE_REMINDER", refId);
+        return new ClassReminderResult(1, newRecipients.size(), Instant.now());
+    }
+
     private String completionRef(String periodId, String classId) {
         return (periodId == null || periodId.isBlank() ? "ALL" : periodId) + ":" + classId;
+    }
+
+    private String debtReminderRef(String periodId, String classId) {
+        return completionRef(periodId, classId) + ":" + LocalDate.now();
     }
 
     @Transactional(noRollbackFor = ApiException.class)

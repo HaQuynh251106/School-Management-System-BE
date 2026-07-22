@@ -964,9 +964,45 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].classId").isString())
-                .andExpect(jsonPath("$[0].collectionRate").isNumber());
+                .andExpect(jsonPath("$[0].collectionRate").isNumber())
+                .andExpect(jsonPath("$[0].reminderSentToday").value(false));
+
+        mvc.perform(get("/finance/classes")
+                        .queryParam("periodId", periodId)
+                        .queryParam("gradeLevel", "K10")
+                        .queryParam("status", "INCOMPLETE")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].gradeLevel").value("K10"))
+                .andExpect(jsonPath("$[0].completed").value(false));
+
+        mvc.perform(post("/finance/classes/c-10a1/remind-homeroom")
+                        .queryParam("periodId", periodId)
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.classCount").value(1))
+                .andExpect(jsonPath("$.recipientCount").value(1));
+        mvc.perform(post("/finance/classes/c-10a1/remind-homeroom")
+                        .queryParam("periodId", periodId)
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isConflict());
+        mvc.perform(get("/finance/classes")
+                        .queryParam("periodId", periodId)
+                        .queryParam("classId", "c-10a1")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].reminderSentToday").value(true));
 
         String homeroomTeacher = login("gv.hoa", "teacher@123");
+        mvc.perform(get("/notifications")
+                        .header("Authorization", "Bearer " + homeroomTeacher))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].type").value("FINANCE_TASK_REMINDER"))
+                .andExpect(jsonPath("$[0].title").value(org.hamcrest.Matchers.containsString("10A1")));
+        mvc.perform(post("/finance/classes/c-10a1/remind-homeroom")
+                        .queryParam("periodId", periodId)
+                        .header("Authorization", "Bearer " + homeroomTeacher))
+                .andExpect(status().isForbidden());
         mvc.perform(get("/finance/classes")
                         .queryParam("periodId", periodId)
                         .header("Authorization", "Bearer " + homeroomTeacher))
@@ -1204,6 +1240,131 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].promotionStatus").value("INCOMPLETE"));
+    }
+
+    @Test
+    void yearEndSummaryAndConductAreScopedToHomeroomStudentAndParent() throws Exception {
+        String admin = login("admin", "admin@123");
+        String homeroomTeacher = login("gv.hoa", "teacher@123");
+        String otherTeacher = login("gv.minh", "teacher@123");
+        String student = login("hs.an", "student@123");
+        String parent = login("ph.pham", "parent@123");
+
+        mvc.perform(get("/academic-years/ay-2025/homeroom-summaries")
+                        .header("Authorization", "Bearer " + homeroomTeacher))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[*].studentId", hasItem("u-student-1")));
+        mvc.perform(get("/academic-years/ay-2025/homeroom-summaries")
+                        .header("Authorization", "Bearer " + student))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(put("/academic-years/ay-2025/students/u-student-1/conduct")
+                        .header("Authorization", "Bearer " + homeroomTeacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"conductGrade\":\"GOOD\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.conductGrade").value("GOOD"));
+        mvc.perform(put("/academic-years/ay-2025/students/u-student-1/conduct")
+                        .header("Authorization", "Bearer " + otherTeacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"conductGrade\":\"FAIR\"}"))
+                .andExpect(status().isForbidden());
+        mvc.perform(put("/academic-years/ay-2025/students/u-student-1/conduct")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"conductGrade\":\"FAIR\"}"))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(get("/academic-years/ay-2025/my-summary")
+                        .header("Authorization", "Bearer " + student))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.studentId").value("u-student-1"))
+                .andExpect(jsonPath("$.conductGrade").value("GOOD"));
+        mvc.perform(get("/academic-years/ay-2025/my-summary")
+                        .header("Authorization", "Bearer " + parent))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(get("/academic-years/ay-2025/children/u-student-1/summary")
+                        .header("Authorization", "Bearer " + parent))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.studentId").value("u-student-1"));
+        mvc.perform(get("/academic-years/ay-2025/children/u-admin-1/summary")
+                        .header("Authorization", "Bearer " + parent))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void academicYearRolloverRequiresReadinessAndSupportsRecurringClassCodes() throws Exception {
+        String admin = login("admin", "admin@123");
+        String teacher = login("gv.hoa", "teacher@123");
+
+        mvc.perform(get("/academic-years/ay-2025/rollover-preview")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.studentCount").isNumber())
+                .andExpect(jsonPath("$.semesterCount").value(2))
+                .andExpect(jsonPath("$.incompleteCount").isNumber())
+                .andExpect(jsonPath("$.blockers").isNotEmpty())
+                .andExpect(jsonPath("$.classPlan").isArray());
+
+        mvc.perform(get("/academic-years/ay-2025/rollover-preview")
+                        .header("Authorization", "Bearer " + teacher))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(put("/academicYears/ay-2025/status")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"CLOSED\"}"))
+                .andExpect(status().isConflict());
+
+        mvc.perform(post("/academicYears")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"id":"ay-rollover-next","code":"2026-2027","name":"Năm học 2026-2027",
+                                 "startDate":"2026-09-05","endDate":"2027-05-31"}
+                                """))
+                .andExpect(status().isOk());
+        mvc.perform(post("/semesters")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"id":"sm-rollover-next-1","academicYearId":"ay-rollover-next","code":"HK1",
+                                 "name":"Học kỳ 1","sequence":1,"startDate":"2026-09-05","endDate":"2027-01-15"}
+                                """))
+                .andExpect(status().isOk());
+        mvc.perform(post("/classes")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"id":"c-rollover-10a1","code":"10A1","name":"Lớp 10A1","gradeLevel":"K10",
+                                 "academicYearId":"ay-rollover-next","capacity":45}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("10A1"));
+
+        mvc.perform(get("/academic-years/ay-rollover-next/rollover-preview")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.semesterCount").value(1))
+                .andExpect(jsonPath("$.blockers", hasItem("Năm học chưa cấu hình học kỳ II")));
+
+        mvc.perform(put("/academicYears/ay-rollover-next/status")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"ACTIVE\"}"))
+                .andExpect(status().isConflict());
+
+        mvc.perform(post("/academic-years/ay-2025/rollover")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"nextYearCode":"2027-2028","nextYearName":"Năm học 2027-2028",
+                                 "startDate":"2027-09-05","endDate":"2028-05-31",
+                                 "createIntakeClasses":true,"activateNextYear":true}
+                                """))
+                .andExpect(status().isBadRequest());
     }
 
     @Test

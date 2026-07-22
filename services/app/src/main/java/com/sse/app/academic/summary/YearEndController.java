@@ -11,9 +11,11 @@ import java.util.List;
 @RequestMapping("/academic-years")
 public class YearEndController {
     private final YearEndService yearEnd;
+    private final YearRolloverService rollover;
 
-    public YearEndController(YearEndService yearEnd) {
+    public YearEndController(YearEndService yearEnd, YearRolloverService rollover) {
         this.yearEnd = yearEnd;
+        this.rollover = rollover;
     }
 
     @GetMapping("/{id}/promotion-preview")
@@ -25,8 +27,28 @@ public class YearEndController {
     @PutMapping("/{id}/students/{studentId}/conduct")
     public StudentYearlySummary conduct(@PathVariable String id, @PathVariable String studentId,
                                         @Valid @RequestBody ConductRequest request) {
-        CurrentUserHolder.requireRole("ADMIN", "TEACHER");
+        CurrentUserHolder.requireRole("TEACHER");
         return yearEnd.setConduct(id, studentId, request.conductGrade(), CurrentUserHolder.require());
+    }
+
+    @GetMapping("/{id}/homeroom-summaries")
+    public List<StudentYearlySummary> homeroomSummaries(@PathVariable String id) {
+        CurrentUserHolder.requireRole("TEACHER");
+        return yearEnd.homeroomPreview(id, CurrentUserHolder.require().id());
+    }
+
+    @GetMapping("/{id}/my-summary")
+    public StudentYearlySummary mySummary(@PathVariable String id) {
+        CurrentUserHolder.requireRole("STUDENT");
+        return yearEnd.studentSummary(id, CurrentUserHolder.require().id());
+    }
+
+    @GetMapping("/{id}/children/{studentId}/summary")
+    public StudentYearlySummary childSummary(@PathVariable String id, @PathVariable String studentId) {
+        CurrentUserHolder.requireRole("PARENT");
+        var current = CurrentUserHolder.require();
+        yearEnd.assertParentOf(current.id(), studentId);
+        return yearEnd.studentSummary(id, studentId);
     }
 
     @PostMapping("/{id}/finalize")
@@ -34,5 +56,18 @@ public class YearEndController {
         CurrentUserHolder.requireRole("ADMIN");
         var current = CurrentUserHolder.require();
         return yearEnd.finalizeYear(id, current.id());
+    }
+
+    @GetMapping("/{id}/rollover-preview")
+    public YearEndDtos.RolloverPreview rolloverPreview(@PathVariable String id) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return rollover.preview(id);
+    }
+
+    @PostMapping("/{id}/rollover")
+    public YearEndDtos.RolloverResult rollover(@PathVariable String id,
+                                                @Valid @RequestBody YearEndDtos.RolloverRequest request) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return rollover.rollover(id, request, CurrentUserHolder.require().id());
     }
 }

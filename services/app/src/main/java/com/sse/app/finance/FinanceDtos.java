@@ -6,6 +6,7 @@ import jakarta.validation.constraints.Positive;
 
 import java.time.LocalDate;
 import java.time.Instant;
+import java.util.List;
 
 public final class FinanceDtos {
     private FinanceDtos() {}
@@ -30,9 +31,15 @@ public final class FinanceDtos {
             String homeroomTeacherId, String homeroomTeacherName,
             int invoiceCount, int paidCount, int partialCount, int overdueCount,
             long totalAmount, long paidAmount, long outstanding,
-            double collectionRate, boolean completed, boolean completionNotified) {}
+            double collectionRate, boolean completed, boolean completionNotified,
+            boolean reminderSentToday) {}
 
     public record ClassReminderResult(int invoiceCount, int recipientCount, Instant sentAt) {}
+
+    public record HomeroomDebtReminderRequest(String periodId, List<String> classIds) {}
+
+    public record HomeroomDebtReminderResult(
+            int classCount, int recipientCount, int skippedCount, Instant sentAt) {}
 
     public record PaymentCallbackRequest(
             @NotBlank String txnRef,

@@ -87,7 +87,7 @@ public class TimetableService {
 
     private SlotContext validateSlot(CreateSlotRequest request, String ignoredSlotId) {
         String classCode = structure.getClass(request.classId()).getCode();
-        structure.assertSemesterExists(request.semesterId());
+        structure.assertSemesterWritable(request.semesterId());
         String subjectName = structure.requireSubjectName(request.subjectId());
         User teacher = users.getById(request.teacherId());
         if (!"TEACHER".equals(teacher.getRole()) || !"ACTIVE".equals(teacher.getStatus())) {
@@ -126,8 +126,9 @@ public class TimetableService {
     }
 
     public void delete(String id) {
-        if (!slots.existsById(id)) throw ApiException.notFound("Tiết học");
-        slots.deleteById(id);
+        TimetableSlot slot = slots.findById(id).orElseThrow(() -> ApiException.notFound("Tiết học"));
+        structure.assertSemesterWritable(slot.getSemesterId());
+        slots.delete(slot);
     }
 
     public TimetableSlot findSlot(String id) {

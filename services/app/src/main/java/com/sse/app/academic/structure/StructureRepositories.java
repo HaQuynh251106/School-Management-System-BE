@@ -23,7 +23,7 @@ interface SchoolClassRepository extends JpaRepository<SchoolClass, String> {
     List<SchoolClass> findByAcademicYearId(String academicYearId);
     List<SchoolClass> findByGradeLevel(String gradeLevel);
     List<SchoolClass> findByHomeroomTeacherId(String homeroomTeacherId);
-    Optional<SchoolClass> findByCode(String code);
+    Optional<SchoolClass> findByAcademicYearIdAndCode(String academicYearId, String code);
 }
 
 interface SubjectRepository extends JpaRepository<Subject, String> {
