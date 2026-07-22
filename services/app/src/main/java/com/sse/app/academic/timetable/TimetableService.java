@@ -36,6 +36,7 @@ public class TimetableService {
         return base.stream()
                 .filter(slot -> semesterId == null || semesterId.equals(slot.getSemesterId()))
                 .filter(slot -> dayOfWeek == null || dayOfWeek.equalsIgnoreCase(slot.getDayOfWeek()))
+                .peek(this::attachClassCode)
                 .sorted((left, right) -> {
                     int day = dayIndex(left.getDayOfWeek()) - dayIndex(right.getDayOfWeek());
                     return day != 0 ? day : Integer.compare(left.getPeriodNo(), right.getPeriodNo());
@@ -50,6 +51,7 @@ public class TimetableService {
         return slots.save(TimetableSlot.builder()
                 .id(request.id() == null || request.id().isBlank() ? Ids.gen("tt") : request.id())
                 .classId(request.classId())
+                .classCode(context.classCode())
                 .subjectId(request.subjectId())
                 .subjectName(context.subjectName())
                 .teacherId(request.teacherId())
@@ -69,6 +71,7 @@ public class TimetableService {
         SlotContext context = validateSlot(request, id);
         checkConflicts(request, id);
         slot.setClassId(request.classId());
+        slot.setClassCode(context.classCode());
         slot.setSubjectId(request.subjectId());
         slot.setSubjectName(context.subjectName());
         slot.setTeacherId(request.teacherId());
@@ -83,7 +86,7 @@ public class TimetableService {
     }
 
     private SlotContext validateSlot(CreateSlotRequest request, String ignoredSlotId) {
-        structure.getClass(request.classId());
+        String classCode = structure.getClass(request.classId()).getCode();
         structure.assertSemesterExists(request.semesterId());
         String subjectName = structure.requireSubjectName(request.subjectId());
         User teacher = users.getById(request.teacherId());
@@ -93,7 +96,7 @@ public class TimetableService {
         TeachingAssignment assignment = teachingAssignments.requireForSlot(
                 request.classId(), request.subjectId(), request.teacherId(), request.semesterId());
         teachingAssignments.assertCanSchedule(assignment, ignoredSlotId);
-        return new SlotContext(subjectName, teacher);
+        return new SlotContext(classCode, subjectName, teacher);
     }
 
     private void checkConflicts(CreateSlotRequest request, String ignoredSlotId) {
@@ -128,7 +131,9 @@ public class TimetableService {
     }
 
     public TimetableSlot findSlot(String id) {
-        return id == null ? null : slots.findById(id).orElse(null);
+        TimetableSlot slot = id == null ? null : slots.findById(id).orElse(null);
+        if (slot != null) attachClassCode(slot);
+        return slot;
     }
 
     public boolean teacherTeachesClass(String teacherId, String classId) {
@@ -167,5 +172,9 @@ public class TimetableService {
         };
     }
 
-    private record SlotContext(String subjectName, User teacher) {}
+    private void attachClassCode(TimetableSlot slot) {
+        if (slot.getClassId() != null) slot.setClassCode(structure.getClass(slot.getClassId()).getCode());
+    }
+
+    private record SlotContext(String classCode, String subjectName, User teacher) {}
 }

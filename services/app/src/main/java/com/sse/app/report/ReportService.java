@@ -3,6 +3,7 @@ package com.sse.app.report;
 import com.sse.app.academic.attendance.AttendanceRecord;
 import com.sse.app.academic.attendance.AttendanceService;
 import com.sse.app.academic.grade.Grade;
+import com.sse.app.academic.grade.GradeCalculationService;
 import com.sse.app.academic.grade.GradeService;
 import com.sse.app.academic.structure.StructureService;
 import com.sse.app.finance.FinanceService;
@@ -29,10 +30,12 @@ public class ReportService {
     private final YearEndService yearEnd;
     private final AssignmentService assignments;
     private final TeachingAssignmentService teachingAssignments;
+    private final GradeCalculationService gradeCalculations;
 
     public ReportService(GradeService grades, AttendanceService attendance, FinanceService finance,
                          UserService users, StructureService structure, YearEndService yearEnd,
-                         AssignmentService assignments, TeachingAssignmentService teachingAssignments) {
+                         AssignmentService assignments, TeachingAssignmentService teachingAssignments,
+                         GradeCalculationService gradeCalculations) {
         this.grades = grades;
         this.attendance = attendance;
         this.finance = finance;
@@ -41,6 +44,7 @@ public class ReportService {
         this.yearEnd = yearEnd;
         this.assignments = assignments;
         this.teachingAssignments = teachingAssignments;
+        this.gradeCalculations = gradeCalculations;
     }
 
     public Map<String, Object> overview() {
@@ -54,10 +58,14 @@ public class ReportService {
         return m;
     }
 
-    public List<Map<String, Object>> gradeDistribution(String semesterId) {
+    public List<Map<String, Object>> gradeDistribution(String semesterId, String classId, String subjectId) {
         int[] bands = new int[4]; // <5, 5-6.4, 6.5-7.9, 8-10
+        Set<String> classStudentIds = classId == null || classId.isBlank() ? null : users.list("STUDENT", null, classId)
+                .stream().map(UserDto::id).collect(java.util.stream.Collectors.toSet());
         for (Grade g : grades.allGrades()) {
             if (semesterId != null && !semesterId.equals(g.getSemesterId())) continue;
+            if (subjectId != null && !subjectId.isBlank() && !subjectId.equals(g.getSubjectId())) continue;
+            if (classStudentIds != null && !classStudentIds.contains(g.getStudentId())) continue;
             Double s = g.getScore();
             if (s == null) continue;
             if (s < 5) bands[0]++;
@@ -76,9 +84,12 @@ public class ReportService {
         return out;
     }
 
-    public Map<String, Object> attendanceSummary() {
+    public Map<String, Object> attendanceSummary(String classId, java.time.LocalDate startDate, java.time.LocalDate endDate) {
         long present = 0, late = 0, excused = 0, unexcused = 0;
         for (AttendanceRecord r : attendance.allRecords()) {
+            if (classId != null && !classId.isBlank() && !classId.equals(r.getClassId())) continue;
+            if (startDate != null && r.getDate().isBefore(startDate)) continue;
+            if (endDate != null && r.getDate().isAfter(endDate)) continue;
             switch (r.getStatus() == null ? "" : r.getStatus()) {
                 case "PRESENT" -> present++;
                 case "LATE" -> late++;
@@ -103,6 +114,10 @@ public class ReportService {
         return finance.revenueReport();
     }
 
+    public Map<String, Object> revenue(String periodId, String classId) {
+        return finance.revenueReport(periodId, classId);
+    }
+
     public Map<String, Object> promotion(String academicYearId) {
         List<StudentYearlySummary> rows = yearEnd.summaries(academicYearId);
         Map<String, Object> result = new LinkedHashMap<>();
@@ -115,17 +130,18 @@ public class ReportService {
         return result;
     }
 
-    public String exportCsv(String type, String semesterId) {
+    public String exportCsv(String type, String semesterId, String classId, String subjectId,
+                            java.time.LocalDate startDate, java.time.LocalDate endDate, String periodId) {
         StringBuilder csv = new StringBuilder("\uFEFF");
         switch (type == null ? "overview" : type.toLowerCase()) {
             case "grades" -> {
                 csv.append("Khoảng điểm,Số kết quả\n");
-                gradeDistribution(semesterId).forEach(row -> csv.append(cell(row.get("band"))).append(',')
+                gradeDistribution(semesterId, classId, subjectId).forEach(row -> csv.append(cell(row.get("band"))).append(',')
                         .append(cell(row.get("count"))).append('\n'));
             }
             case "attendance" -> {
                 csv.append("Trạng thái,Số lượt\n");
-                Map<String, Object> data = attendanceSummary();
+                Map<String, Object> data = attendanceSummary(classId, startDate, endDate);
                 csv.append("Có mặt,").append(data.get("present")).append('\n')
                         .append("Đi muộn,").append(data.get("late")).append('\n')
                         .append("Vắng có phép,").append(data.get("absentExcused")).append('\n')
@@ -133,7 +149,7 @@ public class ReportService {
             }
             case "revenue" -> {
                 csv.append("Hạng mục,Giá trị\n");
-                revenue().forEach((key, value) -> csv.append(cell(key)).append(',').append(cell(value)).append('\n'));
+                revenue(periodId, classId).forEach((key, value) -> csv.append(cell(key)).append(',').append(cell(value)).append('\n'));
             }
             case "overview" -> {
                 csv.append("Nhóm dữ liệu,Số lượng\n");
@@ -152,15 +168,11 @@ public class ReportService {
         long late = attendanceRows.stream().filter(item -> "LATE".equals(item.getStatus())).count();
         long excused = attendanceRows.stream().filter(item -> "ABSENT_EXCUSED".equals(item.getStatus())).count();
         long unexcused = attendanceRows.stream().filter(item -> "ABSENT_UNEXCUSED".equals(item.getStatus())).count();
-        double average = gradeRows.stream().filter(item -> item.getScore() != null).mapToDouble(Grade::getScore).average().orElse(0);
+        double average = Optional.ofNullable(gradeCalculations.overallAverage(studentIds)).orElse(0d);
         long submissions = studentIds.stream().mapToLong(id -> assignments.submissionsByStudent(id).size()).sum();
         long gradedSubmissions = studentIds.stream().flatMap(id -> assignments.submissionsByStudent(id).stream())
                 .filter(item -> "GRADED".equals(item.getStatus())).count();
-        Map<String, Double> subjectAverages = new LinkedHashMap<>();
-        gradeRows.stream().filter(item -> item.getScore() != null)
-                .collect(java.util.stream.Collectors.groupingBy(Grade::getSubjectName, LinkedHashMap::new,
-                java.util.stream.Collectors.averagingDouble(Grade::getScore))).forEach((key, value) ->
-                subjectAverages.put(key, Math.round(value * 10) / 10.0));
+        Map<String, Double> subjectAverages = gradeCalculations.subjectAverages(studentIds);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("role", actor.role());

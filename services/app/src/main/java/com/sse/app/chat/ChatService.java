@@ -79,6 +79,11 @@ public class ChatService {
         return out;
     }
 
+    /** Tổng số tin nhắn người dùng chưa đọc, dùng cho huy hiệu điều hướng toàn hệ thống. */
+    public long unreadCount(String userId) {
+        return repo.countByRecipientIdAndReadFlagFalse(userId);
+    }
+
     public ChatMessage send(String meId, String meName, String toId, String body, String attachmentFileId) {
         String normalizedBody = body == null ? "" : body.trim();
         StoredFile attachment = attachmentFileId == null || attachmentFileId.isBlank()

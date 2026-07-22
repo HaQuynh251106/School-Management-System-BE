@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 /** Gửi các kênh ngoài ứng dụng; mọi kết quả đều được ghi rõ, không báo thành công giả. */
 @Service
@@ -76,6 +77,10 @@ class NotificationChannelDispatcher {
                 ? "Người dùng chưa đăng ký thiết bị"
                 : "Chưa cấu hình nhà cung cấp push; có " + activeDevices.size() + " thiết bị đang hoạt động";
         log(notificationId, recipientId, "PUSH", "SKIPPED", detail);
+    }
+
+    Map<String, Boolean> capabilities() {
+        return Map.of("IN_APP", true, "EMAIL", mailEnabled, "PUSH", false);
     }
 
     private boolean enabled(String userId, String channel) {

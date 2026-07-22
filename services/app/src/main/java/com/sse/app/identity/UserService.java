@@ -352,14 +352,27 @@ public class UserService {
     @Transactional
     public UserDto updateMyProfile(String id, UpdateMyProfileRequest request) {
         User user = getById(id);
-        if (request.email() != null) user.setEmail(cleanProfileValue(request.email()));
-        if (request.phone() != null) user.setPhone(cleanProfileValue(request.phone()));
-        if (request.avatarUrl() != null) user.setAvatarUrl(cleanProfileValue(request.avatarUrl()));
-        if (request.address() != null) user.setAddress(cleanProfileValue(request.address()));
-        if ("STUDENT".equals(user.getRole())) {
-            if (request.guardianName() != null) user.setGuardianName(cleanProfileValue(request.guardianName()));
-            if (request.guardianPhone() != null) user.setGuardianPhone(cleanProfileValue(request.guardianPhone()));
+        if (request.email() != null) {
+            String normalizedEmail = cleanProfileValue(request.email());
+            if (normalizedEmail != null) normalizedEmail = normalizedEmail.toLowerCase(java.util.Locale.ROOT);
+            String finalEmail = normalizedEmail;
+            if (finalEmail != null) {
+                users.findByEmail(finalEmail).filter(other -> !id.equals(other.getId())).ifPresent(other -> {
+                    throw ApiException.conflict("Email đã được sử dụng bởi tài khoản khác");
+                });
+            }
+            user.setEmail(normalizedEmail);
         }
+        if (request.phone() != null) user.setPhone(cleanProfileValue(request.phone()));
+        if (request.avatarUrl() != null) {
+            String avatarUrl = cleanProfileValue(request.avatarUrl());
+            if (avatarUrl != null && !(avatarUrl.startsWith("https://") || avatarUrl.startsWith("http://"))) {
+                throw ApiException.badRequest("Ảnh đại diện phải dùng đường dẫn http hoặc https");
+            }
+            user.setAvatarUrl(avatarUrl);
+        }
+        if (request.address() != null) user.setAddress(cleanProfileValue(request.address()));
+        // Guardian information is an official student record and can only be changed by administrators.
         return toDto(users.save(user));
     }
 

@@ -15,6 +15,7 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import java.io.ByteArrayOutputStream;
 import java.time.Instant;
 import java.time.LocalDate;
+import jakarta.servlet.http.Cookie;
 
 import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
@@ -93,6 +94,26 @@ class SecurityIntegrationTest {
                         .header("Access-Control-Request-Headers", "content-type"))
                 .andExpect(status().isOk())
                 .andExpect(header().string("Access-Control-Allow-Origin", mobileOrigin));
+    }
+
+    @Test
+    void webSessionCanRotateRefreshTokenUsingHttpOnlyCookie() throws Exception {
+        var loginResult = mvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(new Login("admin", "admin@123"))))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Set-Cookie", org.hamcrest.Matchers.containsString("HttpOnly")))
+                .andReturn();
+        Cookie cookie = loginResult.getResponse().getCookie("sse_refresh");
+        org.junit.jupiter.api.Assertions.assertNotNull(cookie);
+
+        mvc.perform(post("/auth/refresh")
+                        .cookie(cookie)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accessToken").isString())
+                .andExpect(header().string("Set-Cookie", org.hamcrest.Matchers.containsString("sse_refresh=")));
     }
 
     @Test
@@ -542,6 +563,13 @@ class SecurityIntegrationTest {
         mvc.perform(get("/files/{id}/content", id)
                         .header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk());
+
+        MockMultipartFile disguisedExecutable = new MockMultipartFile(
+                "file", "not-really.pdf", "application/pdf", "MZ executable".getBytes());
+        mvc.perform(multipart("/files").file(disguisedExecutable)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("định dạng")));
     }
 
     @Test
@@ -715,6 +743,16 @@ class SecurityIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("SUBMITTED"))
                 .andExpect(jsonPath("$.attemptNumber").value(2));
+        mvc.perform(get("/submissions/{id}/attempts", submissionId)
+                        .header("Authorization", "Bearer " + student))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].attemptNumber").value(2))
+                .andExpect(jsonPath("$[1].attemptNumber").value(1))
+                .andExpect(jsonPath("$[1].score").value(8.5));
+        mvc.perform(get("/submissions/{id}/attempts", submissionId)
+                        .header("Authorization", "Bearer " + otherStudent))
+                .andExpect(status().isForbidden());
         mvc.perform(get("/children/u-student-1/submissions")
                         .header("Authorization", "Bearer " + parent))
                 .andExpect(status().isOk())
@@ -740,6 +778,12 @@ class SecurityIntegrationTest {
                 .andReturn().getResponse().getContentAsString();
         String requestId = body(response).path("id").asText();
 
+        mvc.perform(post("/leave-requests")
+                        .header("Authorization", "Bearer " + student)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"startDate\":\"" + start + "\",\"endDate\":\"" + end + "\",\"reason\":\"Đơn bị trùng ngày\"}"))
+                .andExpect(status().isConflict());
+
         mvc.perform(post("/leave-requests/{id}/approve", requestId)
                         .header("Authorization", "Bearer " + homeroomTeacher))
                 .andExpect(status().isBadRequest());
@@ -755,6 +799,13 @@ class SecurityIntegrationTest {
                         .content("{\"note\":\"Đã duyệt và báo giáo viên bộ môn\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("APPROVED"));
+
+        mvc.perform(get("/attendance/approved-leaves")
+                        .queryParam("slotId", "tt-1")
+                        .queryParam("date", start.toString())
+                        .header("Authorization", "Bearer " + homeroomTeacher))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].studentId").value("u-student-1"));
         mvc.perform(get("/leave-requests").header("Authorization", "Bearer " + parent))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[*].id").value(hasItem(requestId)));
@@ -1341,6 +1392,10 @@ class SecurityIntegrationTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString());
         assertTrue(findThread(unreadThreads, "u-student-1").path("unread").asInt() > 0);
+        mvc.perform(get("/chat/unread-count")
+                        .header("Authorization", "Bearer " + teacher))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.count").value(greaterThanOrEqualTo(1)));
 
         mvc.perform(get("/chat/messages")
                         .queryParam("withUserId", "u-student-1")
@@ -1353,6 +1408,10 @@ class SecurityIntegrationTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString());
         assertTrue(findThread(readThreads, "u-student-1").path("unread").asInt() == 0);
+        mvc.perform(get("/chat/unread-count")
+                        .header("Authorization", "Bearer " + teacher))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.count").isNumber());
 
         mvc.perform(post("/chat/messages")
                         .header("Authorization", "Bearer " + student)
@@ -1605,6 +1664,59 @@ class SecurityIntegrationTest {
                         .content(missingAssignmentSlot))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("Chưa phân công")));
+    }
+
+    @Test
+    void examinationAdministrationAndStudentDocumentsRespectRoleScope() throws Exception {
+        String admin = login("admin", "admin@123");
+        String homeroomTeacher = login("gv.hoa", "teacher@123");
+        String subjectTeacher = login("gv.minh", "teacher@123");
+        String student = login("hs.an", "student@123");
+        String parent = login("ph.pham", "parent@123");
+
+        mvc.perform(get("/exam-periods").header("Authorization", "Bearer " + homeroomTeacher))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/reports/grade-distribution").header("Authorization", "Bearer " + homeroomTeacher))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/me/exam-agenda").header("Authorization", "Bearer " + homeroomTeacher))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/exam-reports/report-card")
+                        .queryParam("academicYearId", "ay-2025")
+                        .queryParam("studentId", "u-student-1")
+                        .header("Authorization", "Bearer " + student))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Type", org.hamcrest.Matchers.containsString("application/pdf")));
+        mvc.perform(get("/exam-reports/report-card")
+                        .queryParam("academicYearId", "ay-2025")
+                        .queryParam("studentId", "u-student-1")
+                        .header("Authorization", "Bearer " + parent))
+                .andExpect(status().isOk());
+        mvc.perform(get("/exam-reports/report-card")
+                        .queryParam("academicYearId", "ay-2025")
+                        .queryParam("studentId", "u-student-1")
+                        .header("Authorization", "Bearer " + homeroomTeacher))
+                .andExpect(status().isOk());
+        mvc.perform(get("/exam-reports/report-card")
+                        .queryParam("academicYearId", "ay-2025")
+                        .queryParam("studentId", "u-student-1")
+                        .header("Authorization", "Bearer " + subjectTeacher))
+                .andExpect(status().isForbidden());
+
+        JsonNode period = body(mvc.perform(post("/exam-periods")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"code":"SEC-EXAM-2026","name":"Kỳ thi kiểm thử phân quyền",
+                                 "academicYearId":"ay-2025","semesterId":"sm-2025-1","gradeLevel":"K10",
+                                 "startDate":"2025-11-10","endDate":"2025-11-12"}
+                                """))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+        String periodId = period.path("id").asText();
+        mvc.perform(delete("/exam-periods/{id}", periodId)
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk());
     }
 
     @Test

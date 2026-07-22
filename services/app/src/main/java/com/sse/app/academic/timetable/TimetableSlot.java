@@ -14,6 +14,8 @@ public class TimetableSlot {
     @Id
     private String id;
     private String classId;
+    @Transient
+    private String classCode;
     private String subjectId;
     private String subjectName;
     private String teacherId;

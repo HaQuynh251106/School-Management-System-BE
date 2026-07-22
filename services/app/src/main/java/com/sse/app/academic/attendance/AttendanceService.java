@@ -5,6 +5,8 @@ import com.sse.app.academic.timetable.TimetableService;
 import com.sse.app.academic.timetable.TimetableSlot;
 import com.sse.app.academic.structure.Semester;
 import com.sse.app.academic.structure.StructureService;
+import com.sse.app.academic.leave.LeaveRequest;
+import com.sse.app.academic.leave.LeaveRequestService;
 import com.sse.app.common.Ids;
 import com.sse.app.common.ApiException;
 import com.sse.app.identity.User;
@@ -38,16 +40,19 @@ public class AttendanceService {
     private final NotificationService notifications;
     private final StructureService structure;
     private final AttendanceSessionAccessRepository sessionAccesses;
+    private final LeaveRequestService leaveRequests;
 
     public AttendanceService(AttendanceRepository records, TimetableService timetable,
                              UserService users, NotificationService notifications,
-                             StructureService structure, AttendanceSessionAccessRepository sessionAccesses) {
+                             StructureService structure, AttendanceSessionAccessRepository sessionAccesses,
+                             LeaveRequestService leaveRequests) {
         this.records = records;
         this.timetable = timetable;
         this.users = users;
         this.notifications = notifications;
         this.structure = structure;
         this.sessionAccesses = sessionAccesses;
+        this.leaveRequests = leaveRequests;
     }
 
     public List<AttendanceRecord> list(String studentId, String classId, String slotId, LocalDate date) {
@@ -90,6 +95,12 @@ public class AttendanceService {
 
     public AttendanceSessionStatus sessionStatus(String slotId, LocalDate date) {
         return sessionStatus(requireSlot(slotId), date, ZonedDateTime.now(SCHOOL_ZONE));
+    }
+
+    public List<LeaveRequest> approvedLeaves(String slotId, LocalDate date, CurrentUser actor) {
+        TimetableSlot slot = requireSlot(slotId);
+        assertCanManageSlot(actor, slotId);
+        return leaveRequests.approvedForClassOn(slot.getClassId(), date);
     }
 
     @Transactional
@@ -164,7 +175,8 @@ public class AttendanceService {
             if (!seenStudents.add(mark.studentId())) {
                 throw ApiException.badRequest("Danh sách điểm danh chứa học sinh bị trùng");
             }
-            if (!"PRESENT".equals(mark.status()) && (mark.note() == null || mark.note().isBlank())) {
+            boolean approvedLeave = leaveRequests.hasApprovedLeave(mark.studentId(), req.date());
+            if (!"PRESENT".equals(mark.status()) && !approvedLeave && (mark.note() == null || mark.note().isBlank())) {
                 throw ApiException.badRequest("Cần nhập ghi chú cho học sinh vắng hoặc đi muộn");
             }
             User student = users.getById(mark.studentId());
@@ -183,13 +195,17 @@ public class AttendanceService {
             rec.setClassId(slot.getClassId());
             rec.setSlotId(req.slotId());
             rec.setDate(req.date());
-            rec.setStatus(m.status());
-            rec.setNote(normalizeNote(m.note()));
+            boolean approvedLeave = leaveRequests.hasApprovedLeave(m.studentId(), req.date());
+            String resolvedStatus = approvedLeave && !"PRESENT".equals(m.status()) ? "ABSENT_EXCUSED" : m.status();
+            String resolvedNote = approvedLeave && !"PRESENT".equals(m.status())
+                    ? "Đơn xin nghỉ đã được GVCN duyệt" : normalizeNote(m.note());
+            rec.setStatus(resolvedStatus);
+            rec.setNote(resolvedNote);
             rec.setSubjectName(slot.getSubjectName());
             rec.setPeriodNo(slot.getPeriodNo());
             saved.add(records.save(rec));
 
-            if (!Objects.equals(previousStatus, m.status())) {
+            if (!Objects.equals(previousStatus, resolvedStatus)) {
                 notifyAttendanceStatus(rec);
             }
         }

@@ -52,6 +52,7 @@ sse:
     secret: ${SSE_JWT_SECRET}
     access-ttl-seconds: 900
     refresh-ttl-seconds: 604800
+    cookie-secure: ${SSE_COOKIE_SECURE:false}
   seed:
     enabled: ${SSE_SEED_ENABLED:false}
   cors:
@@ -69,6 +70,8 @@ sse:
       return-url: ${SSE_VNPAY_RETURN_URL:}
   storage:
     path: ${SSE_STORAGE_PATH:/data/sse/uploads}
+    max-file-bytes: ${SSE_STORAGE_MAX_FILE_BYTES:10485760}
+    user-quota-bytes: ${SSE_STORAGE_USER_QUOTA_BYTES:104857600}
   mail:
     enabled: ${SSE_MAIL_ENABLED:false}
     from: ${SSE_MAIL_FROM:no-reply@smartschool.local}

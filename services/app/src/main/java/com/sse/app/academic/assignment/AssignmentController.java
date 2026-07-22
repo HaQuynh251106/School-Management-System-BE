@@ -142,4 +142,9 @@ public class AssignmentController {
         CurrentUser me = CurrentUserHolder.require();
         return assignments.submissionsByStudent(me.id());
     }
+
+    @GetMapping("/submissions/{id}/attempts")
+    public List<AssignmentSubmissionAttempt> attempts(@PathVariable String id) {
+        return assignments.attempts(id, CurrentUserHolder.require());
+    }
 }

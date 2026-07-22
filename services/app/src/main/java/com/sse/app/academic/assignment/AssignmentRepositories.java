@@ -18,3 +18,9 @@ interface AssignmentSubmissionRepository extends JpaRepository<AssignmentSubmiss
     Optional<AssignmentSubmission> findByAttachmentFileId(String attachmentFileId);
     long countByAssignmentId(String assignmentId);
 }
+
+interface AssignmentSubmissionAttemptRepository extends JpaRepository<AssignmentSubmissionAttempt, String> {
+    List<AssignmentSubmissionAttempt> findBySubmissionIdOrderByAttemptNumberDesc(String submissionId);
+    Optional<AssignmentSubmissionAttempt> findBySubmissionIdAndAttemptNumber(String submissionId, int attemptNumber);
+    Optional<AssignmentSubmissionAttempt> findByAttachmentFileId(String attachmentFileId);
+}

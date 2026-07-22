@@ -28,6 +28,7 @@ public class AssignmentService {
 
     private final AssignmentRepository assignments;
     private final AssignmentSubmissionRepository submissions;
+    private final AssignmentSubmissionAttemptRepository attempts;
     private final StructureService structure;
     private final TeachingAssignmentService teachingAssignments;
     private final UserService users;
@@ -35,11 +36,13 @@ public class AssignmentService {
     private final FileStorageService storage;
 
     public AssignmentService(AssignmentRepository assignments, AssignmentSubmissionRepository submissions,
+                             AssignmentSubmissionAttemptRepository attempts,
                              StructureService structure, TeachingAssignmentService teachingAssignments,
                              UserService users,
                              NotificationService notifications, FileStorageService storage) {
         this.assignments = assignments;
         this.submissions = submissions;
+        this.attempts = attempts;
         this.structure = structure;
         this.teachingAssignments = teachingAssignments;
         this.users = users;
@@ -217,6 +220,16 @@ public class AssignmentService {
             throw ApiException.forbidden("Không có quyền truy cập tệp bài làm này");
         }
 
+        var attempt = attempts.findByAttachmentFileId(file.getId());
+        if (attempt.isPresent()) {
+            AssignmentSubmissionAttempt item = attempt.get();
+            Assignment parent = get(item.getAssignmentId());
+            if (actor.id().equals(item.getStudentId())) return;
+            if (actor.isTeacher() && actor.id().equals(parent.getTeacherId())) return;
+            if (actor.isParent() && users.parentIdsOf(item.getStudentId()).contains(actor.id())) return;
+            throw ApiException.forbidden("Không có quyền truy cập tệp của lần nộp này");
+        }
+
         throw ApiException.forbidden("Không có quyền truy cập tệp này");
     }
 
@@ -247,6 +260,7 @@ public class AssignmentService {
             throw ApiException.badRequest("Bài đã được chấm, không thể nộp lại");
         }
         boolean resubmitting = submission.getId() != null && submission.isResubmissionAllowed();
+        if (resubmitting) snapshotAttempt(submission);
         submission.setAssignmentId(assignmentId);
         submission.setStudentId(studentId);
         submission.setStudentName(student.getFullName());
@@ -264,6 +278,7 @@ public class AssignmentService {
             submission.setGradedAt(null);
         }
         AssignmentSubmission saved = submissions.save(submission);
+        snapshotAttempt(saved);
 
         notifications.notifyUser(assignment.getTeacherId(), "ASSIGNMENT", "Có bài nộp mới",
                 student.getFullName() + " đã nộp: " + assignment.getTitle(), "SUBMISSION", saved.getId());
@@ -287,6 +302,7 @@ public class AssignmentService {
         submission.setGradedBy(actorId);
         submission.setGradedAt(Instant.now());
         submissions.save(submission);
+        snapshotAttempt(submission);
         notifications.notifyUser(submission.getStudentId(), "ASSIGNMENT", "Bài tập đã được chấm",
                 assignment.getTitle() + " — Điểm: " + request.score(), "SUBMISSION", submission.getId());
         return submission;
@@ -318,6 +334,47 @@ public class AssignmentService {
 
     public List<AssignmentSubmission> submissionsByStudent(String studentId) {
         return submissions.findByStudentId(studentId);
+    }
+
+    public List<AssignmentSubmissionAttempt> attempts(String submissionId, CurrentUser actor) {
+        AssignmentSubmission submission = submissions.findById(submissionId)
+                .orElseThrow(() -> ApiException.notFound("Bài nộp"));
+        Assignment assignment = get(submission.getAssignmentId());
+        if (actor.isAdmin()) return attempts.findBySubmissionIdOrderByAttemptNumberDesc(submissionId);
+        if (actor.isTeacher()) {
+            assertCanManage(assignment, actor.id(), actor.role());
+            return attempts.findBySubmissionIdOrderByAttemptNumberDesc(submissionId);
+        }
+        if (actor.isStudent() && actor.id().equals(submission.getStudentId())) {
+            return attempts.findBySubmissionIdOrderByAttemptNumberDesc(submissionId);
+        }
+        if (actor.isParent() && users.parentIdsOf(submission.getStudentId()).contains(actor.id())) {
+            return attempts.findBySubmissionIdOrderByAttemptNumberDesc(submissionId);
+        }
+        throw ApiException.forbidden("Không có quyền xem lịch sử các lần nộp");
+    }
+
+    private void snapshotAttempt(AssignmentSubmission submission) {
+        int number = Math.max(1, submission.getAttemptNumber());
+        AssignmentSubmissionAttempt attempt = attempts.findBySubmissionIdAndAttemptNumber(submission.getId(), number)
+                .orElseGet(() -> AssignmentSubmissionAttempt.builder()
+                        .id(Ids.gen("attempt"))
+                        .submissionId(submission.getId())
+                        .assignmentId(submission.getAssignmentId())
+                        .studentId(submission.getStudentId())
+                        .attemptNumber(number)
+                        .build());
+        attempt.setStatus(submission.getStatus());
+        attempt.setContent(submission.getContent());
+        attempt.setAttachmentFileId(submission.getAttachmentFileId());
+        attempt.setAttachmentName(submission.getAttachmentName());
+        attempt.setSubmittedAt(submission.getSubmittedAt());
+        attempt.setScore(submission.getScore());
+        attempt.setFeedback(submission.getFeedback());
+        attempt.setGradedBy(submission.getGradedBy());
+        attempt.setGradedAt(submission.getGradedAt());
+        attempt.setUpdatedAt(Instant.now());
+        attempts.save(attempt);
     }
 
     private void assertTeacherAssignment(String actorId, String actorRole, String classId, String subjectId) {

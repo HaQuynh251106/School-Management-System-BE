@@ -58,6 +58,10 @@ Compose khởi động một PostgreSQL 16 và một Backend. Dữ liệu Postgr
 | `SSE_CORS_ALLOWED_ORIGINS` | Danh sách origin Web/Mobile Web |
 | `SSE_SEED_ENABLED` | Chỉ bật dữ liệu mẫu ở môi trường phát triển |
 | `SSE_STORAGE_PATH` | Thư mục lưu tệp upload |
+| `SSE_STORAGE_MAX_FILE_BYTES` | Dung lượng tối đa mỗi tệp, mặc định 10 MB |
+| `SSE_STORAGE_USER_QUOTA_BYTES` | Hạn mức tệp mỗi tài khoản, mặc định 100 MB |
+| `SSE_COOKIE_SECURE` | Đặt `true` khi website chạy HTTPS để bảo vệ cookie phiên |
+| `SSE_MAIL_ENABLED` | Chỉ bật sau khi SMTP đã được cấu hình và kiểm thử |
 | `SSE_MAIL_*` | SMTP cho email reset mật khẩu/thông báo |
 | `SSE_PAYMENT_MODE` | `disabled`, `sandbox` (local) hoặc `vnpay`/`production` |
 | `SSE_PAYMENT_CALLBACK_SECRET` | Khóa HMAC callback sandbox, tối thiểu 32 ký tự |

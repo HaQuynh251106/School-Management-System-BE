@@ -2,6 +2,7 @@ package com.sse.app.dashboard;
 
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -14,7 +15,7 @@ public class DashboardController {
     }
 
     @GetMapping
-    public DashboardDtos.Response getDashboard() {
-        return service.getDashboard();
+    public DashboardDtos.Response getDashboard(@RequestParam(required = false) String childId) {
+        return service.getDashboard(childId);
     }
 }

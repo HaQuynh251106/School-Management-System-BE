@@ -24,12 +24,14 @@ public class ExamReportService {
     private final ExamCandidateRepository candidates;
     private final ExamResultRepository results;
     private final GradeService grades;
+    private final GradeCalculationService gradeCalculations;
     private final StructureService structure;
     private final UserService users;
 
     public byte[] scoreSlip(String periodId, String studentId) {
         ExamPeriod period = exams.requirePeriod(periodId); User student = users.getById(studentId);
-        List<ExamResult> studentResults = results.findByExamPeriodIdAndStudentId(periodId, studentId);
+        List<ExamResult> studentResults = results.findByExamPeriodIdAndStudentId(periodId, studentId).stream()
+                .filter(result -> "PUBLISHED".equals(result.getStatus())).toList();
         Map<String, ExamSchedule> scheduleMap = schedules.findByExamPeriodId(periodId).stream()
                 .collect(Collectors.toMap(ExamSchedule::getId, s -> s));
         return pdf(false, document -> {
@@ -49,8 +51,6 @@ public class ExamReportService {
     public byte[] reportCard(String academicYearId, String studentId) {
         User student = users.getById(studentId); AcademicYear year = structure.getYear(academicYearId);
         List<Semester> semesters = structure.listSemesters(academicYearId);
-        List<ExamCategory> categories = grades.listCategories();
-        Map<String, Double> weights = categories.stream().collect(Collectors.toMap(ExamCategory::getCode, ExamCategory::getWeight));
         return pdf(false, document -> {
             title(document, "HỌC BẠ ĐIỆN TỬ", "Năm học " + year.getName());
             info(document, List.of("Học sinh: " + student.getFullName(), "Mã học sinh: " + value(student.getStudentCode()),
@@ -62,9 +62,7 @@ public class ExamReportService {
                 PdfPTable table = table(new float[]{1, 6, 2, 3}, "STT", "Môn học", "Trung bình", "Xếp loại");
                 int index = 1;
                 for (var entry : bySubject.entrySet()) {
-                    double sum = 0, totalWeight = 0;
-                    for (Grade grade : entry.getValue()) { double w = weights.getOrDefault(grade.getCategory(), 1d); sum += grade.getScore() * w; totalWeight += w; }
-                    Double average = totalWeight == 0 ? null : Math.round(sum / totalWeight * 10d) / 10d;
+                    Double average = gradeCalculations.subjectAverage(entry.getValue());
                     row(table, String.valueOf(index++), entry.getKey(), score(average), classify(average));
                 }
                 document.add(table);

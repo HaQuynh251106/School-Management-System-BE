@@ -9,6 +9,7 @@ import com.sse.app.common.Ids;
 import com.sse.app.identity.User;
 import com.sse.app.identity.UserService;
 import com.sse.app.notification.NotificationService;
+import com.sse.app.security.CurrentUser;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -234,19 +235,68 @@ public class GradeService {
                 "GRADE", grade.getId());
     }
 
-    public List<GradeChangeLog> changeLogs(String gradeId) {
+    public List<GradeChangeLog> changeLogs(String gradeId, CurrentUser actor) {
+        Grade grade = get(gradeId);
+        if (actor.isTeacher()) {
+            User student = users.getById(grade.getStudentId());
+            if (student.getClassId() == null || teacherGradebookContext(actor.id(), student.getClassId(), grade.getSemesterId())
+                    .subjects().stream().noneMatch(subject -> subject.subjectId().equals(grade.getSubjectId()))) {
+                throw ApiException.forbidden("Không có quyền xem lịch sử điểm này");
+            }
+        } else if (!actor.isAdmin()) {
+            throw ApiException.forbidden("Không có quyền xem lịch sử điều chỉnh điểm");
+        }
         return logs.findByGradeIdOrderByChangedAtDesc(gradeId);
     }
 
     // ---------- Exam categories (A4) ----------
     public List<ExamCategory> listCategories() { return categories.findAll(); }
 
+    @Transactional
     public ExamCategory createCategory(CreateExamCategoryRequest r) {
+        String code = r.code().trim().toUpperCase();
+        if (categories.findByCode(code).isPresent()) throw ApiException.conflict("Mã đầu điểm đã tồn tại");
+        validateCategory(r);
         return categories.save(ExamCategory.builder()
-                .id(r.id() == null || r.id().isBlank() ? Ids.gen("ec") : r.id())
-                .code(r.code()).name(r.name())
+                .id(Ids.gen("ec")).code(code).name(r.name().trim())
                 .weight(r.weight() == null ? 1.0 : r.weight())
                 .requiredCount(r.requiredCount() == null ? 1 : r.requiredCount()).build());
+    }
+
+    @Transactional
+    public ExamCategory updateCategory(String id, CreateExamCategoryRequest r) {
+        ExamCategory category = categories.findById(id).orElseThrow(() -> ApiException.notFound("Loại điểm"));
+        String code = r.code().trim().toUpperCase();
+        categories.findByCode(code).filter(other -> !id.equals(other.getId())).ifPresent(other -> {
+            throw ApiException.conflict("Mã đầu điểm đã tồn tại");
+        });
+        if (!category.getCode().equals(code) && grades.existsByCategory(category.getCode())) {
+            throw ApiException.conflict("Không thể đổi mã đầu điểm đã có dữ liệu; chỉ có thể sửa tên, hệ số và số đầu điểm");
+        }
+        validateCategory(r);
+        category.setCode(code);
+        category.setName(r.name().trim());
+        category.setWeight(r.weight() == null ? 1.0 : r.weight());
+        category.setRequiredCount(r.requiredCount() == null ? 1 : r.requiredCount());
+        return categories.save(category);
+    }
+
+    @Transactional
+    public void deleteCategory(String id) {
+        ExamCategory category = categories.findById(id).orElseThrow(() -> ApiException.notFound("Loại điểm"));
+        if (grades.existsByCategory(category.getCode())) {
+            throw ApiException.conflict("Không thể xóa đầu điểm đã được sử dụng trong bảng điểm");
+        }
+        categories.delete(category);
+    }
+
+    private void validateCategory(CreateExamCategoryRequest r) {
+        double weight = r.weight() == null ? 1.0 : r.weight();
+        int required = r.requiredCount() == null ? 1 : r.requiredCount();
+        if (!Double.isFinite(weight) || weight <= 0 || weight > 10) {
+            throw ApiException.badRequest("Hệ số phải lớn hơn 0 và không vượt quá 10");
+        }
+        if (required < 1 || required > 10) throw ApiException.badRequest("Số đầu điểm phải từ 1 đến 10");
     }
 
     /** Seed raw (không bắn notification) — dùng bởi DataSeeder. */

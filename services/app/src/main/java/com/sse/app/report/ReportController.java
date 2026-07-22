@@ -30,21 +30,26 @@ public class ReportController {
     }
 
     @GetMapping("/grade-distribution")
-    public List<Map<String, Object>> gradeDistribution(@RequestParam(required = false) String semesterId) {
-        CurrentUserHolder.requireRole("ADMIN", "TEACHER");
-        return reports.gradeDistribution(semesterId);
+    public List<Map<String, Object>> gradeDistribution(@RequestParam(required = false) String semesterId,
+                                                        @RequestParam(required = false) String classId,
+                                                        @RequestParam(required = false) String subjectId) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return reports.gradeDistribution(semesterId, classId, subjectId);
     }
 
     @GetMapping("/attendance-summary")
-    public Map<String, Object> attendanceSummary() {
-        CurrentUserHolder.requireRole("ADMIN", "TEACHER");
-        return reports.attendanceSummary();
+    public Map<String, Object> attendanceSummary(@RequestParam(required = false) String classId,
+                                                  @RequestParam(required = false) java.time.LocalDate startDate,
+                                                  @RequestParam(required = false) java.time.LocalDate endDate) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return reports.attendanceSummary(classId, startDate, endDate);
     }
 
     @GetMapping("/revenue")
-    public Map<String, Object> revenue() {
+    public Map<String, Object> revenue(@RequestParam(required = false) String periodId,
+                                       @RequestParam(required = false) String classId) {
         CurrentUserHolder.requireRole("ADMIN");
-        return reports.revenue();
+        return reports.revenue(periodId, classId);
     }
 
     @GetMapping("/promotion")
@@ -55,10 +60,16 @@ public class ReportController {
 
     @GetMapping(value = "/export", produces = "text/csv; charset=UTF-8")
     public ResponseEntity<byte[]> export(@RequestParam(defaultValue = "overview") String type,
-                                         @RequestParam(required = false) String semesterId) {
+                                         @RequestParam(required = false) String semesterId,
+                                         @RequestParam(required = false) String classId,
+                                         @RequestParam(required = false) String subjectId,
+                                         @RequestParam(required = false) java.time.LocalDate startDate,
+                                         @RequestParam(required = false) java.time.LocalDate endDate,
+                                         @RequestParam(required = false) String periodId) {
         CurrentUserHolder.requireRole("ADMIN");
         var current = CurrentUserHolder.require();
-        byte[] body = reports.exportCsv(type, semesterId).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] body = reports.exportCsv(type, semesterId, classId, subjectId, startDate, endDate, periodId)
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
         audit.record(current.id(), current.username(), current.role(), "EXPORT", "report",
                 "report", type, "Xuất báo cáo CSV");
         return ResponseEntity.ok()

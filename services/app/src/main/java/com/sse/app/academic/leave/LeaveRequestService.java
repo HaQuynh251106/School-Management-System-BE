@@ -54,6 +54,10 @@ public class LeaveRequestService {
             throw ApiException.badRequest("Học sinh chưa được xếp lớp");
         }
         validateDates(input.startDate(), input.endDate());
+        boolean overlaps = requests.findByStudentIdAndEndDateGreaterThanEqualAndStartDateLessThanEqual(
+                        studentId, input.startDate(), input.endDate()).stream()
+                .anyMatch(item -> !List.of("REJECTED", "CANCELLED").contains(item.getStatus()));
+        if (overlaps) throw ApiException.conflict("Học sinh đã có đơn xin nghỉ trùng khoảng thời gian này");
         SchoolClass schoolClass = structure.getClass(student.getClassId());
         String reason = input.reason().trim();
         LeaveRequest request = requests.save(LeaveRequest.builder()
@@ -124,6 +128,18 @@ public class LeaveRequestService {
 
     private LeaveRequest get(String id) {
         return requests.findById(id).orElseThrow(() -> ApiException.notFound("Đơn xin nghỉ"));
+    }
+
+    public boolean hasApprovedLeave(String studentId, LocalDate date) {
+        return requests.findByStudentIdAndEndDateGreaterThanEqualAndStartDateLessThanEqual(studentId, date, date)
+                .stream().anyMatch(item -> "APPROVED".equals(item.getStatus()));
+    }
+
+    public List<LeaveRequest> approvedForClassOn(String classId, LocalDate date) {
+        return requests.findByClassIdAndStartDateLessThanEqualAndEndDateGreaterThanEqual(classId, date, date).stream()
+                .filter(item -> "APPROVED".equals(item.getStatus()))
+                .sorted(Comparator.comparing(LeaveRequest::getStudentName))
+                .toList();
     }
 
     private void validateDates(LocalDate start, LocalDate end) {

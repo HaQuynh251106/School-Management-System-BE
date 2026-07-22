@@ -63,6 +63,12 @@ public class NotificationController {
         return notifications.preferences(CurrentUserHolder.require().id());
     }
 
+    @GetMapping("/notification-capabilities")
+    public Map<String, Boolean> notificationCapabilities() {
+        CurrentUserHolder.require();
+        return notifications.channelCapabilities();
+    }
+
     @PutMapping("/notification-preferences")
     public NotificationPreference updatePreference(@Valid @RequestBody UpdatePreferenceRequest request) {
         return notifications.updatePreference(CurrentUserHolder.require().id(), request);

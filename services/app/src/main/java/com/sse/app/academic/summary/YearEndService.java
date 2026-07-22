@@ -2,6 +2,7 @@ package com.sse.app.academic.summary;
 
 import com.sse.app.academic.grade.ExamCategory;
 import com.sse.app.academic.grade.Grade;
+import com.sse.app.academic.grade.GradeCalculationService;
 import com.sse.app.academic.grade.GradeService;
 import com.sse.app.academic.structure.AcademicYear;
 import com.sse.app.academic.structure.SchoolClass;
@@ -29,16 +30,18 @@ public class YearEndService {
     private final GradeService grades;
     private final UserService users;
     private final NotificationService notifications;
+    private final GradeCalculationService gradeCalculations;
 
     public YearEndService(StudentYearlySummaryRepository summaries, StructureService structure,
                           TeachingAssignmentService teachingAssignments, GradeService grades, UserService users,
-                          NotificationService notifications) {
+                          NotificationService notifications, GradeCalculationService gradeCalculations) {
         this.summaries = summaries;
         this.structure = structure;
         this.teachingAssignments = teachingAssignments;
         this.grades = grades;
         this.users = users;
         this.notifications = notifications;
+        this.gradeCalculations = gradeCalculations;
     }
 
     @Transactional
@@ -167,22 +170,23 @@ public class YearEndService {
         for (String key : expected) {
             List<Grade> entries = gradeMap.getOrDefault(key, List.of());
             String subjectId = key.substring(0, key.indexOf('|'));
-            double weighted = 0;
-            double weights = 0;
+            List<String> subjectMissing = new ArrayList<>();
             for (ExamCategory category : categories) {
-                List<Grade> categoryGrades = entries.stream().filter(g -> category.getCode().equals(g.getCategory())).toList();
-                if (categoryGrades.size() < category.getRequiredCount()) {
+                Set<Integer> indexes = entries.stream().filter(g -> category.getCode().equals(g.getCategory()))
+                        .filter(g -> g.getScore() != null)
+                        .map(g -> g.getAssessmentIndex() == null ? 1 : g.getAssessmentIndex())
+                        .collect(Collectors.toSet());
+                boolean complete = java.util.stream.IntStream.rangeClosed(1, Math.max(1, category.getRequiredCount()))
+                        .allMatch(indexes::contains);
+                if (!complete) {
                     String subjectName = entries.isEmpty() ? structure.requireSubjectName(subjectId) : entries.get(0).getSubjectName();
-                    missing.add(subjectName + " thiếu " + category.getName());
-                    continue;
+                    subjectMissing.add(subjectName + " thiếu " + category.getName());
                 }
-                double average = categoryGrades.stream().limit(category.getRequiredCount())
-                        .mapToDouble(Grade::getScore).average().orElse(0);
-                weighted += average * category.getWeight();
-                weights += category.getWeight();
             }
-            if (weights > 0 && missing.stream().noneMatch(m -> m.startsWith(structure.requireSubjectName(subjectId) + " thiếu"))) {
-                subjectSemesterAverages.computeIfAbsent(subjectId, ignored -> new ArrayList<>()).add(weighted / weights);
+            missing.addAll(subjectMissing);
+            if (subjectMissing.isEmpty()) {
+                Double average = gradeCalculations.subjectAverage(entries, categories);
+                if (average != null) subjectSemesterAverages.computeIfAbsent(subjectId, ignored -> new ArrayList<>()).add(average);
             }
         }
         if (!missing.isEmpty()) return new Evaluation(null, String.join("; ", missing.stream().distinct().limit(12).toList()));

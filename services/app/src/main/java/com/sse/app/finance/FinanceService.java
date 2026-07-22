@@ -772,7 +772,11 @@ public class FinanceService {
     }
 
     public Map<String, Object> revenueReport() {
-        List<Invoice> all = invoices.findAll();
+        return revenueReport(null, null);
+    }
+
+    public Map<String, Object> revenueReport(String periodId, String classId) {
+        List<Invoice> all = listInvoices(null, null, null, periodId, null, classId, null);
         long total = all.stream().mapToLong(Invoice::getTotalAmount).sum();
         long paid = all.stream().mapToLong(Invoice::getPaidAmount).sum();
         long paidCount = all.stream().filter(i -> "PAID".equals(i.getStatus())).count();

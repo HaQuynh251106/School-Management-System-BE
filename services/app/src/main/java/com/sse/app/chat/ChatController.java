@@ -41,6 +41,11 @@ public class ChatController {
         return chat.contacts(CurrentUserHolder.require());
     }
 
+    @GetMapping("/unread-count")
+    public Map<String, Long> unreadCount() {
+        return Map.of("count", chat.unreadCount(CurrentUserHolder.require().id()));
+    }
+
     @GetMapping("/messages")
     public List<ChatMessage> messages(@RequestParam String withUserId) {
         CurrentUser current = CurrentUserHolder.require();

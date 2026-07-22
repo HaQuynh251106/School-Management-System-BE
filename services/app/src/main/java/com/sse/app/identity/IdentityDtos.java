@@ -14,7 +14,8 @@ public final class IdentityDtos {
 
     public record LoginRequest(@NotBlank String username, @NotBlank String password) {}
 
-    public record RefreshRequest(@NotBlank String refreshToken) {}
+    /** Refresh token may be supplied in the request body by mobile clients or by an HttpOnly cookie on web. */
+    public record RefreshRequest(String refreshToken) {}
     public record LogoutRequest(String refreshToken) {}
 
     public record ForgotPasswordRequest(String email, String username) {}
@@ -27,7 +28,7 @@ public final class IdentityDtos {
 
     public record UpdateMyProfileRequest(
             @Email String email,
-            @Size(max = 30) String phone,
+            @Size(max = 30) @Pattern(regexp = "^$|^[0-9+ .()\\-]{7,30}$", message = "Số điện thoại không hợp lệ") String phone,
             @Size(max = 1000) String avatarUrl,
             @Size(max = 1000) String address,
             @Size(max = 255) String guardianName,

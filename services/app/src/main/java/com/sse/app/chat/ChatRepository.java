@@ -12,6 +12,7 @@ import java.time.Instant;
 interface ChatRepository extends JpaRepository<ChatMessage, String> {
     List<ChatMessage> findBySenderIdOrRecipientIdOrderByCreatedAtAsc(String senderId, String recipientId);
     Optional<ChatMessage> findByAttachmentFileId(String attachmentFileId);
+    long countByRecipientIdAndReadFlagFalse(String recipientId);
 
     @Modifying
     @Query("""

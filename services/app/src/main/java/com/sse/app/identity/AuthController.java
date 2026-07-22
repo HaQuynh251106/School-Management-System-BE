@@ -8,10 +8,14 @@ import com.sse.app.security.JwtService;
 import io.jsonwebtoken.Claims;
 import jakarta.validation.Valid;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseCookie;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -19,6 +23,8 @@ import java.util.Map;
 @RestController
 @RequestMapping("/auth")
 public class AuthController {
+
+    private static final String REFRESH_COOKIE = "sse_refresh";
 
     private final UserService users;
     private final JwtService jwt;
@@ -28,13 +34,15 @@ public class AuthController {
     private final PasswordResetMailer resetMailer;
     private final LoginHistoryService loginHistory;
     private final LoginAttemptService loginAttempts;
+    private final boolean secureRefreshCookie;
 
     public AuthController(UserService users, JwtService jwt, AuditService audit,
                           RefreshTokenService refreshTokens,
                           PasswordResetMailer resetMailer,
                           LoginHistoryService loginHistory,
                           LoginAttemptService loginAttempts,
-                          @Value("${sse.password-reset.expose-token:false}") boolean exposeResetToken) {
+                          @Value("${sse.password-reset.expose-token:false}") boolean exposeResetToken,
+                          @Value("${sse.jwt.cookie-secure:false}") boolean secureRefreshCookie) {
         this.users = users;
         this.jwt = jwt;
         this.audit = audit;
@@ -43,10 +51,12 @@ public class AuthController {
         this.resetMailer = resetMailer;
         this.loginHistory = loginHistory;
         this.loginAttempts = loginAttempts;
+        this.secureRefreshCookie = secureRefreshCookie;
     }
 
     @PostMapping("/login")
-    public Map<String, Object> login(@Valid @RequestBody LoginRequest req, HttpServletRequest request) {
+    public Map<String, Object> login(@Valid @RequestBody LoginRequest req, HttpServletRequest request,
+                                     HttpServletResponse response) {
         String ipAddress = clientIp(request);
         loginAttempts.assertAllowed(req.username(), ipAddress);
         try {
@@ -55,7 +65,7 @@ public class AuthController {
             loginHistory.record(u.getId(), u.getUsername(), true, null, ipAddress, request.getHeader("User-Agent"));
             audit.record(u.getId(), u.getFullName(), u.getRole(), "LOGIN", "identity",
                     "user", u.getId(), "Đăng nhập thành công");
-            return tokenResponse(u, true, request);
+            return tokenResponse(u, true, request, response);
         } catch (ApiException e) {
             if (e.getStatus() == HttpStatus.UNAUTHORIZED) loginAttempts.failed(req.username(), ipAddress);
             String userId = users.findByUsername(req.username()).map(User::getId).orElse(null);
@@ -65,29 +75,41 @@ public class AuthController {
     }
 
     @PostMapping("/refresh")
-    public Map<String, Object> refresh(@Valid @RequestBody RefreshRequest req, HttpServletRequest request) {
+    public Map<String, Object> refresh(@RequestBody(required = false) RefreshRequest req,
+                                       @CookieValue(name = REFRESH_COOKIE, required = false) String cookieToken,
+                                       HttpServletRequest request, HttpServletResponse response) {
+        String suppliedToken = req != null && req.refreshToken() != null && !req.refreshToken().isBlank()
+                ? req.refreshToken() : cookieToken;
+        if (suppliedToken == null || suppliedToken.isBlank()) {
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "Missing refresh token");
+        }
         Claims c;
         try {
-            c = jwt.parse(req.refreshToken());
+            c = jwt.parse(suppliedToken);
         } catch (Exception e) {
             throw new ApiException(HttpStatus.UNAUTHORIZED, "Invalid refresh token");
         }
         if (!"refresh".equals(c.get("type", String.class))) {
             throw new ApiException(HttpStatus.UNAUTHORIZED, "Invalid refresh token");
         }
-        refreshTokens.consume(c.getId(), req.refreshToken(), clientIp(request), request.getHeader("User-Agent"));
+        refreshTokens.consume(c.getId(), suppliedToken, clientIp(request), request.getHeader("User-Agent"));
         User u = users.getById(c.getSubject());
         if (!"ACTIVE".equals(u.getStatus())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Tài khoản bị khóa");
         }
-        return tokenResponse(u, false, request);
+        return tokenResponse(u, false, request, response);
     }
 
     @PostMapping("/logout")
-    public Map<String, Object> logout(@RequestBody(required = false) LogoutRequest req) {
-        if (req != null && req.refreshToken() != null && !req.refreshToken().isBlank()) {
-            refreshTokens.revoke(req.refreshToken());
+    public Map<String, Object> logout(@RequestBody(required = false) LogoutRequest req,
+                                      @CookieValue(name = REFRESH_COOKIE, required = false) String cookieToken,
+                                      HttpServletResponse response) {
+        String suppliedToken = req != null && req.refreshToken() != null && !req.refreshToken().isBlank()
+                ? req.refreshToken() : cookieToken;
+        if (suppliedToken != null && !suppliedToken.isBlank()) {
+            refreshTokens.revoke(suppliedToken);
         }
+        clearRefreshCookie(response);
         return Map.of("ok", true);
     }
 
@@ -109,7 +131,8 @@ public class AuthController {
         return Map.of("ok", true);
     }
 
-    private Map<String, Object> tokenResponse(User u, boolean includeUser, HttpServletRequest request) {
+    private Map<String, Object> tokenResponse(User u, boolean includeUser, HttpServletRequest request,
+                                              HttpServletResponse response) {
         Map<String, Object> body = new HashMap<>();
         if (includeUser) body.put("user", users.toDto(u));
         body.put("accessToken", jwt.createAccessToken(u.getId(), u.getUsername(), u.getRole(), u.getTokenVersion()));
@@ -117,9 +140,33 @@ public class AuthController {
         String refreshToken = jwt.createRefreshToken(u.getId(), tokenId);
         refreshTokens.store(tokenId, u.getId(), refreshToken, jwt.refreshTtlSeconds(),
                 clientIp(request), request.getHeader("User-Agent"));
+        setRefreshCookie(response, refreshToken);
+        // Kept in the response for native/mobile clients. The web client uses the HttpOnly cookie.
         body.put("refreshToken", refreshToken);
         body.put("expiresIn", jwt.accessTtlSeconds());
         return body;
+    }
+
+    private void setRefreshCookie(HttpServletResponse response, String token) {
+        ResponseCookie cookie = ResponseCookie.from(REFRESH_COOKIE, token)
+                .httpOnly(true)
+                .secure(secureRefreshCookie)
+                .sameSite("Lax")
+                .path("/auth")
+                .maxAge(Duration.ofSeconds(jwt.refreshTtlSeconds()))
+                .build();
+        response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
+    }
+
+    private void clearRefreshCookie(HttpServletResponse response) {
+        ResponseCookie cookie = ResponseCookie.from(REFRESH_COOKIE, "")
+                .httpOnly(true)
+                .secure(secureRefreshCookie)
+                .sameSite("Lax")
+                .path("/auth")
+                .maxAge(Duration.ZERO)
+                .build();
+        response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
     }
 
     private String clientIp(HttpServletRequest request) {

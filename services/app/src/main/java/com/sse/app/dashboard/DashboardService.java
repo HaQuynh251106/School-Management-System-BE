@@ -1,5 +1,8 @@
 package com.sse.app.dashboard;
 
+import com.sse.app.academic.grade.GradeCalculationService;
+import com.sse.app.identity.UserDto;
+import com.sse.app.identity.UserService;
 import com.sse.app.security.CurrentUser;
 import com.sse.app.security.CurrentUserHolder;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -7,23 +10,29 @@ import org.springframework.stereotype.Service;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class DashboardService {
     private final JdbcTemplate jdbc;
+    private final GradeCalculationService gradeCalculations;
+    private final UserService users;
 
-    public DashboardService(JdbcTemplate jdbc) {
+    public DashboardService(JdbcTemplate jdbc, GradeCalculationService gradeCalculations, UserService users) {
         this.jdbc = jdbc;
+        this.gradeCalculations = gradeCalculations;
+        this.users = users;
     }
 
-    public DashboardDtos.Response getDashboard() {
+    public DashboardDtos.Response getDashboard(String childId) {
         CurrentUser user = CurrentUserHolder.require();
         return switch (user.role()) {
             case "ADMIN" -> admin();
             case "TEACHER" -> teacher(user.id());
             case "STUDENT" -> student(user.id());
-            case "PARENT" -> parent(user.id());
+            case "PARENT" -> parent(user.id(), childId);
             default -> new DashboardDtos.Response(List.of(), List.of());
         };
     }
@@ -37,7 +46,8 @@ public class DashboardService {
                 """);
         double openAlerts = number("""
                 select (select count(*) from invoices where status in ('PENDING', 'PARTIAL', 'OVERDUE'))
-                     + (select count(*) from attendance_records where date = current_date and status in ('ABSENT', 'LATE'))
+                     + (select count(*) from attendance_records where date = current_date
+                        and status in ('ABSENT_EXCUSED', 'ABSENT_UNEXCUSED', 'LATE'))
                 """);
 
         List<DashboardDtos.Metric> metrics = List.of(
@@ -54,7 +64,9 @@ public class DashboardService {
                         from users group by role order by value desc
                         """)),
                 chart("Quy mô lớp học", "Sĩ số các lớp đông nhất", "COLUMN", " HS", rows("""
-                        select code label, student_count value from classes order by student_count desc, code limit 8
+                        select c.code label, count(u.id) value
+                        from classes c left join users u on u.class_id = c.id and u.role = 'STUDENT'
+                        group by c.id, c.code order by value desc, c.code limit 8
                         """))
         );
         return new DashboardDtos.Response(metrics, charts);
@@ -74,13 +86,18 @@ public class DashboardService {
         );
         List<DashboardDtos.Chart> charts = List.of(
                 chart("Nhịp dạy trong tuần", "Số tiết theo từng ngày", "COLUMN", " tiết", rows("""
-                        select case day_of_week when 'MONDAY' then 'T2' when 'TUESDAY' then 'T3'
-                               when 'WEDNESDAY' then 'T4' when 'THURSDAY' then 'T5'
-                               when 'FRIDAY' then 'T6' when 'SATURDAY' then 'T7' else day_of_week end label,
+                        select case day_of_week when 'MON' then 'T2' when 'MONDAY' then 'T2'
+                               when 'TUE' then 'T3' when 'TUESDAY' then 'T3'
+                               when 'WED' then 'T4' when 'WEDNESDAY' then 'T4'
+                               when 'THU' then 'T5' when 'THURSDAY' then 'T5'
+                               when 'FRI' then 'T6' when 'FRIDAY' then 'T6'
+                               when 'SAT' then 'T7' when 'SATURDAY' then 'T7' else day_of_week end label,
                                count(*) value
                         from timetable_slots where teacher_id = ? group by day_of_week
-                        order by min(case day_of_week when 'MONDAY' then 1 when 'TUESDAY' then 2 when 'WEDNESDAY' then 3
-                                     when 'THURSDAY' then 4 when 'FRIDAY' then 5 when 'SATURDAY' then 6 else 7 end)
+                        order by min(case day_of_week when 'MON' then 1 when 'MONDAY' then 1
+                                     when 'TUE' then 2 when 'TUESDAY' then 2 when 'WED' then 3 when 'WEDNESDAY' then 3
+                                     when 'THU' then 4 when 'THURSDAY' then 4 when 'FRI' then 5 when 'FRIDAY' then 5
+                                     when 'SAT' then 6 when 'SATURDAY' then 6 else 7 end)
                         """, teacherId)),
                 chart("Bài tập theo lớp", "Số bài tập đã giao", "BAR", " bài", rows("""
                         select coalesce(c.code, a.class_id) label, count(*) value
@@ -92,7 +109,7 @@ public class DashboardService {
     }
 
     private DashboardDtos.Response student(String studentId) {
-        double average = number("select coalesce(avg(score), 0) from grades where student_id = ?", studentId);
+        double average = valueOrZero(gradeCalculations.overallAverage(List.of(studentId)));
         double attendance = number("""
                 select coalesce(100.0 * sum(case when status = 'PRESENT' then 1 else 0 end) / nullif(count(*), 0), 0)
                 from attendance_records where student_id = ?
@@ -105,19 +122,17 @@ public class DashboardService {
         double unread = unread(studentId);
 
         List<DashboardDtos.Metric> metrics = List.of(
-                metric("grades", "Điểm trung bình", average, "DECIMAL_1", "Trung bình các đầu điểm hiện có", "violet"),
+                metric("grades", "Điểm trung bình", average, "DECIMAL_1", "Chỉ tính các môn đã đủ đầu điểm", "violet"),
                 metric("attendance", "Tỷ lệ chuyên cần", attendance, "PERCENT", "Toàn bộ lịch sử điểm danh", "green"),
                 metric("assignments", "Bài tập cần nộp", pending, "NUMBER", "Bài đang mở chưa nộp", pending > 0 ? "orange" : "green"),
                 metric("notifications", "Thông báo chưa đọc", unread, "NUMBER", "Cập nhật từ giáo viên và nhà trường", unread > 0 ? "blue" : "green")
         );
         List<DashboardDtos.Chart> charts = List.of(
-                chart("Kết quả theo môn", "Điểm trung bình từ dữ liệu đã nhập", "COLUMN", " điểm", rows("""
-                        select subject_name label, avg(score) value from grades where student_id = ?
-                        group by subject_name order by value desc limit 8
-                        """, studentId)),
+                chart("Kết quả theo môn", "Chỉ tính những môn đã đủ đầu điểm", "COLUMN", " điểm",
+                        subjectAverageRows(List.of(studentId))),
                 chart("Tình hình chuyên cần", "Số lượt theo trạng thái", "BAR", " lượt", rows("""
-                        select case status when 'PRESENT' then 'Có mặt' when 'ABSENT' then 'Vắng'
-                               when 'LATE' then 'Đi trễ' when 'EXCUSED' then 'Có phép' else status end label,
+                        select case status when 'PRESENT' then 'Có mặt' when 'ABSENT_UNEXCUSED' then 'Vắng không phép'
+                               when 'ABSENT_EXCUSED' then 'Vắng có phép' when 'LATE' then 'Đi trễ' else status end label,
                                count(*) value
                         from attendance_records where student_id = ? group by status order by value desc
                         """, studentId))
@@ -125,37 +140,45 @@ public class DashboardService {
         return new DashboardDtos.Response(metrics, charts);
     }
 
-    private DashboardDtos.Response parent(String parentId) {
-        double children = number("select count(*) from parent_student where parent_id = ?", parentId);
-        double average = number("""
-                select coalesce(avg(g.score), 0) from grades g
-                where g.student_id in (select student_id from parent_student where parent_id = ?)
-                """, parentId);
-        double unpaid = number("""
+    private DashboardDtos.Response parent(String parentId, String childId) {
+        List<UserDto> allChildren = users.childrenOf(parentId);
+        if (childId != null && !childId.isBlank()) users.assertParentOf(parentId, childId);
+        List<UserDto> childRows = childId == null || childId.isBlank() ? allChildren
+                : allChildren.stream().filter(child -> childId.equals(child.id())).toList();
+        List<String> childIds = childRows.stream().map(UserDto::id).toList();
+        double children = childRows.size();
+        double average = valueOrZero(gradeCalculations.overallAverage(childIds));
+        double unpaid = childId == null || childId.isBlank() ? number("""
                 select count(*) from invoices i where i.status in ('PENDING', 'PARTIAL', 'OVERDUE')
                   and (i.parent_id = ? or i.student_id in (select student_id from parent_student where parent_id = ?))
-                """, parentId, parentId);
+                """, parentId, parentId) : number("""
+                select count(*) from invoices i where i.status in ('PENDING', 'PARTIAL', 'OVERDUE')
+                  and i.student_id = ?
+                """, childId);
         double unread = unread(parentId);
 
         List<DashboardDtos.Metric> metrics = List.of(
                 metric("children", "Học sinh liên kết", children, "NUMBER", "Hồ sơ con đang theo dõi", "blue"),
-                metric("grades", "Điểm trung bình", average, "DECIMAL_1", "Trung bình các đầu điểm của con", "violet"),
+                metric("grades", "Điểm trung bình", average, "DECIMAL_1", "Các môn đã đủ đầu điểm của con", "violet"),
                 metric("invoices", "Khoản thu cần xử lý", unpaid, "NUMBER", "Hóa đơn chưa hoàn tất", unpaid > 0 ? "orange" : "green"),
                 metric("notifications", "Thông báo chưa đọc", unread, "NUMBER", "Cập nhật mới từ nhà trường", unread > 0 ? "blue" : "green")
         );
         List<DashboardDtos.Chart> charts = List.of(
-                chart("Kết quả của con", "Điểm trung bình theo học sinh", "COLUMN", " điểm", rows("""
-                        select u.full_name label, avg(g.score) value from parent_student ps
-                        join users u on u.id = ps.student_id left join grades g on g.student_id = ps.student_id
-                        where ps.parent_id = ? group by u.id, u.full_name order by u.full_name
-                        """, parentId)),
-                chart("Tình trạng khoản thu", "Số hóa đơn theo trạng thái", "BAR", " hóa đơn", rows("""
+                chart("Kết quả của con", "Trung bình các môn đã đủ đầu điểm", "COLUMN", " điểm",
+                        childRows.stream().map(child -> new DashboardDtos.Datum(child.fullName(),
+                                valueOrZero(gradeCalculations.overallAverage(List.of(child.id()))))).toList()),
+                chart("Tình trạng khoản thu", "Số hóa đơn theo trạng thái", "BAR", " hóa đơn",
+                        childId == null || childId.isBlank() ? rows("""
                         select case i.status when 'PAID' then 'Đã thanh toán' when 'PARTIAL' then 'Thanh toán một phần'
                                when 'OVERDUE' then 'Quá hạn' else 'Chưa thanh toán' end label, count(*) value
                         from invoices i where i.parent_id = ? or i.student_id in
                           (select student_id from parent_student where parent_id = ?)
                         group by i.status order by value desc
-                        """, parentId, parentId))
+                        """, parentId, parentId) : rows("""
+                        select case i.status when 'PAID' then 'Đã thanh toán' when 'PARTIAL' then 'Thanh toán một phần'
+                               when 'OVERDUE' then 'Quá hạn' else 'Chưa thanh toán' end label, count(*) value
+                        from invoices i where i.student_id = ? group by i.status order by value desc
+                        """, childId))
         );
         return new DashboardDtos.Response(metrics, charts);
     }
@@ -176,6 +199,18 @@ public class DashboardService {
     private double number(String sql, Object... args) {
         Number value = jdbc.queryForObject(sql, Number.class, args);
         return value == null ? 0 : value.doubleValue();
+    }
+
+    private double valueOrZero(Double value) {
+        return value == null ? 0 : value;
+    }
+
+    private List<DashboardDtos.Datum> subjectAverageRows(Collection<String> studentIds) {
+        return gradeCalculations.subjectAverages(studentIds).entrySet().stream()
+                .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
+                .limit(8)
+                .map(entry -> new DashboardDtos.Datum(entry.getKey(), entry.getValue()))
+                .toList();
     }
 
     private List<DashboardDtos.Datum> rows(String sql, Object... args) {

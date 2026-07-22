@@ -68,6 +68,13 @@ public class ExamService {
     public void deletePeriod(String id) {
         ExamPeriod p = requirePeriod(id);
         if (!"DRAFT".equals(p.getStatus())) throw ApiException.conflict("Chỉ được xóa kỳ thi đang ở trạng thái nháp");
+        adjustments.deleteAll(adjustments.findByExamPeriodIdOrderByAdjustedAtDesc(id));
+        reviews.deleteAll(reviews.findByExamPeriodId(id));
+        results.deleteAll(results.findByExamPeriodId(id));
+        candidates.deleteAll(candidates.findByExamPeriodId(id));
+        List<ExamSchedule> periodSchedules = schedules.findByExamPeriodId(id);
+        periodSchedules.forEach(schedule -> rooms.deleteAll(rooms.findByScheduleId(schedule.getId())));
+        schedules.deleteAll(periodSchedules);
         periods.delete(p);
     }
 

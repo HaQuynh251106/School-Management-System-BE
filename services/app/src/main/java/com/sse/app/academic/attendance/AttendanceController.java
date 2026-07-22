@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
 import java.util.List;
+import com.sse.app.academic.leave.LeaveRequest;
 
 /** B3/C3/D2: Sổ điểm danh. Route /attendance khớp json-server. */
 @RestController
@@ -69,6 +70,14 @@ public class AttendanceController {
         CurrentUser me = CurrentUserHolder.require();
         attendance.assertCanManageSlot(me, slotId);
         return attendance.sessionStatus(slotId, date);
+    }
+
+    @GetMapping("/attendance/approved-leaves")
+    public List<LeaveRequest> approvedLeaves(
+            @RequestParam String slotId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
+        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        return attendance.approvedLeaves(slotId, date, CurrentUserHolder.require());
     }
 
     @PostMapping("/attendance/unlock")

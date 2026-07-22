@@ -198,12 +198,22 @@ public class NotificationService {
         if (!List.of("IN_APP", "PUSH", "EMAIL").contains(channel)) {
             throw ApiException.badRequest("Kênh thông báo không hợp lệ");
         }
+        if ("IN_APP".equals(channel) && Boolean.FALSE.equals(request.enabled())) {
+            throw ApiException.badRequest("Thông báo trong ứng dụng là kênh bắt buộc và không thể tắt");
+        }
+        if (Boolean.TRUE.equals(request.enabled()) && !dispatcher.capabilities().getOrDefault(channel, false)) {
+            throw ApiException.badRequest("Kênh " + channel + " chưa được nhà trường cấu hình");
+        }
         NotificationPreference preference = preferences.findByUserIdAndChannel(userId, channel)
                 .orElseGet(() -> NotificationPreference.builder().id(Ids.gen("np"))
                         .userId(userId).channel(channel).build());
         preference.setEnabled(!Boolean.FALSE.equals(request.enabled()));
         preference.setUpdatedAt(Instant.now());
         return preferences.save(preference);
+    }
+
+    public Map<String, Boolean> channelCapabilities() {
+        return dispatcher.capabilities();
     }
 
     public List<NotificationDeliveryLog> deliveryLogs() {

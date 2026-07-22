@@ -85,7 +85,7 @@ public class GradeController {
     @GetMapping("/grades/{id}/change-logs")
     public List<GradeChangeLog> changeLogs(@PathVariable String id) {
         CurrentUserHolder.requireRole("TEACHER", "ADMIN");
-        return grades.changeLogs(id);
+        return grades.changeLogs(id, CurrentUserHolder.require());
     }
 
     @GetMapping("/exam-categories")
@@ -98,5 +98,17 @@ public class GradeController {
     public ExamCategory createCategory(@Valid @RequestBody CreateExamCategoryRequest r) {
         CurrentUserHolder.requireRole("ADMIN");
         return grades.createCategory(r);
+    }
+
+    @PutMapping("/exam-categories/{id}")
+    public ExamCategory updateCategory(@PathVariable String id, @Valid @RequestBody CreateExamCategoryRequest r) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return grades.updateCategory(id, r);
+    }
+
+    @DeleteMapping("/exam-categories/{id}")
+    public void deleteCategory(@PathVariable String id) {
+        CurrentUserHolder.requireRole("ADMIN");
+        grades.deleteCategory(id);
     }
 }
