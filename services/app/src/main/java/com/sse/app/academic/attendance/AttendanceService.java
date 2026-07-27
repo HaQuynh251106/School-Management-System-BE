@@ -143,9 +143,23 @@ public class AttendanceService {
             if (!isScheduledOccurrence(slot, date)) continue;
             LocalTime start = parseTime(slot.getStartTime());
             LocalTime end = parseTime(slot.getEndTime());
-            if (start == null || end == null || schoolNow.toLocalTime().isBefore(start)
-                    || !schoolNow.toLocalTime().isBefore(end)) continue;
+            if (start == null || end == null || schoolNow.toLocalTime().isBefore(start)) continue;
             if (records.existsBySlotIdAndDate(slot.getId(), date)) continue;
+
+            String occurrenceId = slot.getId() + ":" + date;
+            if (!schoolNow.toLocalTime().isBefore(end)) {
+                if (notifications.hasNotification(slot.getTeacherId(), "ATTENDANCE_MISSED", occurrenceId)) continue;
+                String classCode = structure.getClass(slot.getClassId()).getCode();
+                notifications.notifyUser(slot.getTeacherId(), "ATTENDANCE_MISSED", "URGENT",
+                        "Chưa hoàn tất điểm danh tiết " + slot.getPeriodNo(),
+                        "Môn " + slot.getSubjectName() + " · Lớp " + classCode + " · "
+                                + slot.getStartTime() + "–" + slot.getEndTime()
+                                + ". Tiết học đã kết thúc nhưng chưa có dữ liệu điểm danh. "
+                                + "Thầy/cô vui lòng mở sổ, ghi rõ lý do và mở khóa điểm danh muộn.",
+                        "ATTENDANCE_MISSED", occurrenceId);
+                sent++;
+                continue;
+            }
 
             AttendanceSessionAccess access = accessFor(slot, date);
             if (access.getReminderSentAt() != null) continue;

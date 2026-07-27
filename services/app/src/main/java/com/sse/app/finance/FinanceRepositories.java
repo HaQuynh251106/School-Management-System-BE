@@ -1,6 +1,7 @@
 package com.sse.app.finance;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 
 import java.util.List;
 import java.util.Optional;
@@ -15,7 +16,7 @@ interface FeePeriodItemRepository extends JpaRepository<FeePeriodItem, String> {
     void deleteByFeePeriodId(String feePeriodId);
 }
 
-interface InvoiceRepository extends JpaRepository<Invoice, String> {
+interface InvoiceRepository extends JpaRepository<Invoice, String>, JpaSpecificationExecutor<Invoice> {
     List<Invoice> findByStudentId(String studentId);
     List<Invoice> findByParentId(String parentId);
     List<Invoice> findByFeePeriodId(String feePeriodId);

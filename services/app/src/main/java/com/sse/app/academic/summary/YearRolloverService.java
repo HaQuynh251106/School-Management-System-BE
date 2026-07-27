@@ -91,7 +91,8 @@ public class YearRolloverService {
         List<RolloverClassPlan> classPlan = buildClassPlan(structure.listClasses(academicYearId, null), createIntake);
         for (RolloverClassPlan plan : classPlan) {
             structure.createClass(new CreateClassRequest(null, plan.targetClassCode(),
-                    "Lớp " + plan.targetClassCode(), plan.targetGradeLevel(), nextYear.getId(), null, plan.capacity()));
+                    "Lớp " + plan.targetClassCode(), plan.targetGradeLevel(), nextYear.getId(), null,
+                    plan.studyShift(), plan.capacity(), null));
         }
 
         List<StudentYearlySummary> finalized = yearEnd.finalizeYear(academicYearId, actorId);
@@ -142,7 +143,7 @@ public class YearRolloverService {
         String targetCode = replaceGradePrefix(source.getCode(), targetGrade);
         String key = targetGrade + "|" + targetCode.toUpperCase(Locale.ROOT);
         plan.putIfAbsent(key, new RolloverClassPlan(source.getId(), source.getCode(), targetCode,
-                "K" + targetGrade, type, source.getCapacity()));
+                "K" + targetGrade, type, source.getCapacity(), source.getStudyShift()));
     }
 
     private String replaceGradePrefix(String code, int grade) {

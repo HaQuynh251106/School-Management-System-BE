@@ -60,14 +60,16 @@ sse:
   password-reset:
     expose-token: false
   payments:
-    # Production must configure a verified gateway adapter before enabling payments.
+    # sandbox = mô phỏng nội bộ; momo-sandbox = cổng MoMo Test với credentials M4B.
     mode: ${SSE_PAYMENT_MODE:disabled}
     callback-secret: ${SSE_PAYMENT_CALLBACK_SECRET:}
-    vnpay:
-      tmn-code: ${SSE_VNPAY_TMN_CODE:}
-      hash-secret: ${SSE_VNPAY_HASH_SECRET:}
-      payment-url: ${SSE_VNPAY_PAYMENT_URL:}
-      return-url: ${SSE_VNPAY_RETURN_URL:}
+    momo:
+      endpoint: ${SSE_MOMO_ENDPOINT:https://test-payment.momo.vn/v2/gateway/api/create}
+      partner-code: ${SSE_MOMO_PARTNER_CODE:}
+      access-key: ${SSE_MOMO_ACCESS_KEY:}
+      secret-key: ${SSE_MOMO_SECRET_KEY:}
+      redirect-url: ${SSE_MOMO_REDIRECT_URL:}
+      ipn-url: ${SSE_MOMO_IPN_URL:}
   storage:
     path: ${SSE_STORAGE_PATH:/data/sse/uploads}
     max-file-bytes: ${SSE_STORAGE_MAX_FILE_BYTES:10485760}
@@ -76,6 +78,12 @@ sse:
     enabled: ${SSE_MAIL_ENABLED:false}
     from: ${SSE_MAIL_FROM:no-reply@smartschool.local}
     reset-url: ${SSE_PASSWORD_RESET_URL:http://localhost:5173/reset-password}
+  push:
+    firebase:
+      enabled: ${SSE_FIREBASE_ENABLED:false}
+      project-id: ${SSE_FIREBASE_PROJECT_ID:}
+      credentials-path: ${SSE_FIREBASE_CREDENTIALS_PATH:}
+      credentials-base64: ${SSE_FIREBASE_CREDENTIALS_BASE64:}
   attendance-reminders:
     enabled: ${SSE_ATTENDANCE_REMINDERS_ENABLED:true}
     interval-ms: ${SSE_ATTENDANCE_REMINDER_INTERVAL_MS:60000}

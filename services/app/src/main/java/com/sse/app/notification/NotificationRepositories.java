@@ -1,12 +1,14 @@
 package com.sse.app.notification;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 
 import java.util.List;
 import java.util.Optional;
 import java.time.LocalDate;
+import java.time.Instant;
 
-interface NotificationRepository extends JpaRepository<Notification, String> {
+interface NotificationRepository extends JpaRepository<Notification, String>, JpaSpecificationExecutor<Notification> {
     List<Notification> findByRecipientIdOrderByCreatedAtDesc(String recipientId);
     List<Notification> findByRecipientIdAndReadIsFalseOrderByCreatedAtDesc(String recipientId);
     long countByRecipientIdAndReadIsFalse(String recipientId);
@@ -29,6 +31,8 @@ interface NotificationPreferenceRepository extends JpaRepository<NotificationPre
 
 interface NotificationDeliveryLogRepository extends JpaRepository<NotificationDeliveryLog, String> {
     List<NotificationDeliveryLog> findTop200ByOrderByCreatedAtDesc();
+    List<NotificationDeliveryLog> findTop100ByStatusInAndAttemptsLessThanAndNextAttemptAtLessThanEqualOrderByNextAttemptAtAsc(
+            List<String> statuses, int maxAttempts, Instant now);
 }
 
 interface UserDeviceRepository extends JpaRepository<UserDevice, String> {

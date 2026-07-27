@@ -63,12 +63,17 @@ Compose khởi động một PostgreSQL 16 và một Backend. Dữ liệu Postgr
 | `SSE_COOKIE_SECURE` | Đặt `true` khi website chạy HTTPS để bảo vệ cookie phiên |
 | `SSE_MAIL_ENABLED` | Chỉ bật sau khi SMTP đã được cấu hình và kiểm thử |
 | `SSE_MAIL_*` | SMTP cho email reset mật khẩu/thông báo |
-| `SSE_PAYMENT_MODE` | `disabled`, `sandbox` (local) hoặc `vnpay`/`production` |
+| `SSE_FIREBASE_ENABLED`, `SSE_FIREBASE_PROJECT_ID` | Bật Firebase Cloud Messaging cho push notification |
+| `SSE_FIREBASE_CREDENTIALS_PATH` | Đường dẫn service-account JSON khi chạy trực tiếp |
+| `SSE_FIREBASE_CREDENTIALS_BASE64` | Service-account JSON dạng Base64, phù hợp Docker/secret manager |
+| `SSE_PAYMENT_MODE` | `disabled`, `sandbox` (mô phỏng nội bộ) hoặc `momo-sandbox` |
 | `SSE_PAYMENT_CALLBACK_SECRET` | Khóa HMAC callback sandbox, tối thiểu 32 ký tự |
-| `SSE_VNPAY_TMN_CODE` | Mã website do VNPAY cấp |
-| `SSE_VNPAY_HASH_SECRET` | Khóa bí mật ký HMAC-SHA512 do VNPAY cấp |
-| `SSE_VNPAY_PAYMENT_URL` | URL cổng thanh toán VNPAY (HTTPS ở production) |
-| `SSE_VNPAY_RETURN_URL` | URL HTTPS đưa người dùng về giao diện sau thanh toán |
+| `SSE_MOMO_PARTNER_CODE` | Partner Code do MoMo for Business cấp |
+| `SSE_MOMO_ACCESS_KEY` | Access Key của môi trường MoMo Testing |
+| `SSE_MOMO_SECRET_KEY` | Secret Key ký HMAC-SHA256, không đưa lên Git |
+| `SSE_MOMO_ENDPOINT` | Mặc định `https://test-payment.momo.vn/v2/gateway/api/create` |
+| `SSE_MOMO_REDIRECT_URL` | URL đưa phụ huynh trở lại trang khoản thu |
+| `SSE_MOMO_IPN_URL` | URL HTTPS công khai để MoMo gửi kết quả server-to-server |
 
 ## Quy tắc an toàn đã áp dụng
 

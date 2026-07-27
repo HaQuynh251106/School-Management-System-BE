@@ -1,6 +1,10 @@
 package com.sse.app.audit;
 
 import com.sse.app.common.Ids;
+import com.sse.app.common.PageResponse;
+import com.sse.app.common.Paging;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -32,6 +36,29 @@ public class AuditService {
         if (module != null && !module.isBlank()) return repo.findByModuleOrderByCreatedAtDesc(module);
         if (action != null && !action.isBlank()) return repo.findByActionOrderByCreatedAtDesc(action);
         return repo.findTop200ByOrderByCreatedAtDesc();
+    }
+
+    public PageResponse<AuditLog> page(String module, String action, String query, int page, int size) {
+        Specification<AuditLog> specification = Specification.where(null);
+        if (module != null && !module.isBlank()) {
+            specification = specification.and((root, ignored, builder) ->
+                    builder.equal(builder.lower(root.get("module")), module.trim().toLowerCase(Locale.ROOT)));
+        }
+        if (action != null && !action.isBlank()) {
+            specification = specification.and((root, ignored, builder) ->
+                    builder.equal(builder.upper(root.get("action")), action.trim().toUpperCase(Locale.ROOT)));
+        }
+        if (query != null && !query.isBlank()) {
+            String pattern = "%" + query.trim().toLowerCase(Locale.ROOT) + "%";
+            specification = specification.and((root, ignored, builder) -> builder.or(
+                    builder.like(builder.lower(root.get("actorName")), pattern),
+                    builder.like(builder.lower(root.get("detail")), pattern),
+                    builder.like(builder.lower(root.get("entityType")), pattern),
+                    builder.like(builder.lower(root.get("entityId")), pattern)
+            ));
+        }
+        return PageResponse.from(repo.findAll(specification,
+                Paging.request(page, size, Sort.by(Sort.Direction.DESC, "createdAt"))));
     }
 
     public Map<String, Object> stats() {

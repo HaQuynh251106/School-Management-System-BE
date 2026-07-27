@@ -16,12 +16,17 @@ public class SchoolClass {
     private String code;            // 10A1
     private String name;            // Lớp 10A1
     private String gradeLevel;      // K10
+    @Builder.Default
+    @Column(nullable = false)
+    private String studyShift = "MORNING";
     @Column(nullable = false)
     private String academicYearId;
     private String homeroomTeacherId;
     private String homeroomTeacherName;
     private Instant homeroomAssignedAt;
     private String homeroomAssignedBy;
+    private String roomId;
+    private String roomCode;
     @Builder.Default
     @Column(nullable = false)
     private int capacity = 45;

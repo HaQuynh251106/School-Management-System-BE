@@ -6,16 +6,23 @@ import com.sse.app.academic.timetable.TeachingAssignment;
 import com.sse.app.academic.timetable.TeachingAssignmentService;
 import com.sse.app.common.ApiException;
 import com.sse.app.common.Ids;
+import com.sse.app.common.PageResponse;
+import com.sse.app.common.Paging;
 import com.sse.app.notification.NotificationDtos.*;
 import com.sse.app.identity.UserDto;
 import com.sse.app.identity.UserService;
+import com.sse.app.realtime.RealtimeEventHub;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -38,6 +45,7 @@ public class NotificationService {
     private final NotificationDeliveryLogRepository deliveryLogs;
     private final UserDeviceRepository devices;
     private final NotificationChannelDispatcher dispatcher;
+    private final RealtimeEventHub realtime;
 
     public NotificationService(NotificationRepository notifications,
                                NotificationTemplateRepository templates,
@@ -48,7 +56,8 @@ public class NotificationService {
                                NotificationPreferenceRepository preferences,
                                NotificationDeliveryLogRepository deliveryLogs,
                                UserDeviceRepository devices,
-                               NotificationChannelDispatcher dispatcher) {
+                               NotificationChannelDispatcher dispatcher,
+                               RealtimeEventHub realtime) {
         this.notifications = notifications;
         this.templates = templates;
         this.announcements = announcements;
@@ -59,6 +68,7 @@ public class NotificationService {
         this.deliveryLogs = deliveryLogs;
         this.devices = devices;
         this.dispatcher = dispatcher;
+        this.realtime = realtime;
     }
 
     // ---------- Phát thông báo in-app ----------
@@ -83,8 +93,27 @@ public class NotificationService {
             deliveryLogs.save(NotificationDeliveryLog.builder().id(Ids.gen("ndl"))
                     .notificationId(notification.getId()).recipientId(recipientId).channel("IN_APP")
                     .status("DELIVERED").attempts(1).createdAt(Instant.now()).build());
+            publishInboxChanged(recipientId, notification);
         }
         dispatcher.dispatch(recipientId, notification == null ? null : notification.getId(), title, body);
+        return notification;
+    }
+
+    /**
+     * Lưu thông báo trong ứng dụng và luôn thử gửi email giao dịch.
+     * Trạng thái gửi/không gửi được vẫn được ghi trong notification_delivery_logs.
+     */
+    public Notification notifyUserWithTransactionalEmail(String recipientId, String type, String title, String body,
+                                                         String refType, String refId) {
+        Notification notification = notifications.save(Notification.builder()
+                .id(Ids.gen("noti")).recipientId(recipientId).type(type)
+                .priority("IMPORTANT").title(title).body(body).read(false)
+                .refType(refType).refId(refId).createdAt(Instant.now()).build());
+        deliveryLogs.save(NotificationDeliveryLog.builder().id(Ids.gen("ndl"))
+                .notificationId(notification.getId()).recipientId(recipientId).channel("IN_APP")
+                .status("DELIVERED").attempts(1).createdAt(Instant.now()).build());
+        publishInboxChanged(recipientId, notification);
+        dispatcher.dispatchTransactionalEmail(recipientId, notification.getId(), title, body);
         return notification;
     }
 
@@ -122,6 +151,46 @@ public class NotificationService {
                 : notifications.findByRecipientIdOrderByCreatedAtDesc(recipientId);
     }
 
+    public PageResponse<Notification> inboxPage(String recipientId, String readFilter, String type,
+                                                 String priority, String query, int page, int size) {
+        Specification<Notification> owner = (root, ignored, builder) ->
+                builder.equal(root.get("recipientId"), recipientId);
+        Specification<Notification> filtered = owner;
+        if ("READ".equalsIgnoreCase(readFilter)) {
+            filtered = filtered.and((root, ignored, builder) -> builder.isTrue(root.get("read")));
+        } else if ("UNREAD".equalsIgnoreCase(readFilter)) {
+            filtered = filtered.and((root, ignored, builder) -> builder.isFalse(root.get("read")));
+        }
+        if (type != null && !type.isBlank() && !"ALL".equalsIgnoreCase(type)) {
+            filtered = filtered.and((root, ignored, builder) ->
+                    builder.equal(builder.upper(root.get("type")), type.trim().toUpperCase(Locale.ROOT)));
+        }
+        if (priority != null && !priority.isBlank() && !"ALL".equalsIgnoreCase(priority)) {
+            filtered = filtered.and((root, ignored, builder) ->
+                    builder.equal(builder.upper(root.get("priority")), priority.trim().toUpperCase(Locale.ROOT)));
+        }
+        if (query != null && !query.isBlank()) {
+            String pattern = "%" + query.trim().toLowerCase(Locale.ROOT) + "%";
+            filtered = filtered.and((root, ignored, builder) -> builder.or(
+                    builder.like(builder.lower(root.get("title")), pattern),
+                    builder.like(builder.lower(root.get("body")), pattern)
+            ));
+        }
+
+        Instant today = LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant();
+        Map<String, Long> summary = new LinkedHashMap<>();
+        summary.put("total", notifications.count(owner));
+        summary.put("unread", notifications.count(owner.and(
+                (root, ignored, builder) -> builder.isFalse(root.get("read")))));
+        summary.put("important", notifications.count(owner.and(
+                (root, ignored, builder) -> root.get("priority").in("IMPORTANT", "URGENT"))));
+        summary.put("today", notifications.count(owner.and(
+                (root, ignored, builder) -> builder.greaterThanOrEqualTo(root.get("createdAt"), today))));
+
+        return PageResponse.from(notifications.findAll(filtered,
+                Paging.request(page, size, Sort.by(Sort.Direction.DESC, "createdAt"))), summary);
+    }
+
     public long unreadCount(String recipientId) {
         return notifications.countByRecipientIdAndReadIsFalse(recipientId);
     }
@@ -130,20 +199,32 @@ public class NotificationService {
         Notification n = notifications.findById(id).orElseThrow(() -> ApiException.notFound("Thông báo"));
         if (!recipientId.equals(n.getRecipientId())) throw ApiException.forbidden("Không phải thông báo của bạn");
         n.setRead(true);
-        return notifications.save(n);
+        Notification saved = notifications.save(n);
+        publishInboxChanged(recipientId, saved);
+        return saved;
     }
 
     public Notification markUnread(String id, String recipientId) {
         Notification n = notifications.findById(id).orElseThrow(() -> ApiException.notFound("Thông báo"));
         if (!recipientId.equals(n.getRecipientId())) throw ApiException.forbidden("Không phải thông báo của bạn");
         n.setRead(false);
-        return notifications.save(n);
+        Notification saved = notifications.save(n);
+        publishInboxChanged(recipientId, saved);
+        return saved;
     }
 
     public void markAllRead(String recipientId) {
         var list = notifications.findByRecipientIdAndReadIsFalseOrderByCreatedAtDesc(recipientId);
         list.forEach(n -> n.setRead(true));
         notifications.saveAll(list);
+        realtime.publish(recipientId, "NOTIFICATION", Map.of("action", "READ_ALL"));
+    }
+
+    private void publishInboxChanged(String recipientId, Notification notification) {
+        realtime.publish(recipientId, "NOTIFICATION", Map.of(
+                "id", notification.getId(),
+                "type", notification.getType(),
+                "read", notification.isRead()));
     }
 
     /**

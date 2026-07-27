@@ -4,69 +4,111 @@ import com.sse.app.academic.structure.SchoolClass;
 import com.sse.app.academic.structure.StructureService;
 import com.sse.app.common.ApiException;
 import com.sse.app.identity.IdentityDtos.CreateUserRequest;
+import com.sse.app.identity.IdentityDtos.ImportPreview;
+import com.sse.app.identity.IdentityDtos.ImportPreviewRow;
 import com.sse.app.identity.IdentityDtos.ImportResult;
 import com.sse.app.identity.IdentityDtos.ImportRowError;
 import org.apache.poi.ss.usermodel.*;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.text.Normalizer;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.*;
-import java.io.ByteArrayOutputStream;
 
-/** Nhập tài khoản từ Excel với kiểm tra từng dòng và báo lỗi không làm hỏng cả tệp. */
+/**
+ * Safe Excel import:
+ * 1. Preview parses and validates every row without changing the database.
+ * 2. The confirmation token is signed and bound to the exact file checksum.
+ * 3. Commit parses the file again and writes in a single transaction.
+ */
 @Service
 public class UserImportService {
     private static final int MAX_ROWS = 5_000;
+    private static final long MAX_FILE_BYTES = 10L * 1024 * 1024;
+    private static final long PREVIEW_TTL_SECONDS = 15 * 60;
+
     private final UserService users;
     private final StructureService structure;
+    private final byte[] signingKey;
 
-    public UserImportService(UserService users, StructureService structure) {
+    public UserImportService(UserService users, StructureService structure,
+                             @Value("${sse.jwt.secret}") String signingSecret) {
         this.users = users;
         this.structure = structure;
+        this.signingKey = signingSecret.getBytes(StandardCharsets.UTF_8);
     }
 
+    public ImportPreview preview(MultipartFile file) {
+        byte[] bytes = readAndValidate(file);
+        ParsedFile parsed = parse(bytes);
+        String checksum = sha256(bytes);
+        long expiresAt = Instant.now().plusSeconds(PREVIEW_TTL_SECONDS).toEpochMilli();
+        String token = signToken(checksum, expiresAt, parsed.validRows(), parsed.rows().size());
+        return new ImportPreview(
+                token,
+                checksum,
+                expiresAt,
+                parsed.rows().size(),
+                parsed.validRows(),
+                parsed.rows().size() - parsed.validRows(),
+                parsed.rows().stream().map(ParsedRow::preview).toList()
+        );
+    }
+
+    @Transactional
+    public ImportResult commit(MultipartFile file, String token, String strategy) {
+        byte[] bytes = readAndValidate(file);
+        ParsedFile parsed = parse(bytes);
+        verifyToken(token, sha256(bytes), parsed.validRows(), parsed.rows().size());
+        return commitParsed(parsed, normalizeStrategy(strategy));
+    }
+
+    /**
+     * Backward-compatible endpoint. It is intentionally all-or-nothing now:
+     * a legacy client receives validation errors without creating partial data.
+     */
+    @Transactional
     public ImportResult importExcel(MultipartFile file) {
-        if (file == null || file.isEmpty()) throw ApiException.badRequest("Vui lòng chọn tệp Excel");
-        if (file.getSize() > 10 * 1024 * 1024) throw ApiException.badRequest("Tệp Excel không được vượt quá 10 MB");
-        String name = Optional.ofNullable(file.getOriginalFilename()).orElse("").toLowerCase();
-        if (!name.endsWith(".xlsx") && !name.endsWith(".xls")) {
-            throw ApiException.badRequest("Chỉ hỗ trợ tệp .xlsx hoặc .xls");
+        ParsedFile parsed = parse(readAndValidate(file));
+        return commitParsed(parsed, "ALL_OR_NOTHING");
+    }
+
+    private ImportResult commitParsed(ParsedFile parsed, String strategy) {
+        List<ImportRowError> validationErrors = parsed.rows().stream()
+                .filter(row -> row.request() == null)
+                .map(row -> new ImportRowError(row.preview().row(), row.preview().username(), row.preview().error()))
+                .toList();
+        if ("ALL_OR_NOTHING".equals(strategy) && !validationErrors.isEmpty()) {
+            return new ImportResult(parsed.rows().size(), 0, validationErrors.size(), validationErrors);
         }
 
-        List<ImportRowError> errors = new ArrayList<>();
-        int total = 0;
         int imported = 0;
-        DataFormatter formatter = new DataFormatter(Locale.forLanguageTag("vi-VN"));
-        try (Workbook workbook = WorkbookFactory.create(file.getInputStream())) {
-            Sheet sheet = workbook.getSheetAt(0);
-            if (sheet.getPhysicalNumberOfRows() < 2) throw ApiException.badRequest("Tệp không có dòng dữ liệu");
-            Map<String, Integer> headers = headers(sheet.getRow(sheet.getFirstRowNum()), formatter);
-            require(headers, "username", "Tên đăng nhập");
-            require(headers, "fullname", "Họ tên");
-            require(headers, "role", "Vai trò");
-
-            for (int i = sheet.getFirstRowNum() + 1; i <= sheet.getLastRowNum(); i++) {
-                Row row = sheet.getRow(i);
-                if (row == null || rowIsEmpty(row, formatter)) continue;
-                total++;
-                if (total > MAX_ROWS) throw ApiException.badRequest("Tệp vượt quá " + MAX_ROWS + " dòng dữ liệu");
-                try {
-                    importRow(row, headers, formatter);
-                    imported++;
-                } catch (Exception e) {
-                    errors.add(new ImportRowError(i + 1, cell(row, headers, "username", formatter), cleanMessage(e)));
+        for (ParsedRow row : parsed.rows()) {
+            if (row.request() == null) continue;
+            UserDto created = users.create(row.request());
+            users.requirePasswordChange(created.id());
+            if (row.linkedUser() != null) {
+                if ("PARENT".equals(row.request().role())) {
+                    users.linkChild(created.id(), row.linkedUser().getId(), true);
+                } else if ("STUDENT".equals(row.request().role())) {
+                    users.linkChild(row.linkedUser().getId(), created.id(), true);
                 }
             }
-        } catch (ApiException e) {
-            throw e;
-        } catch (Exception e) {
-            throw ApiException.badRequest("Không thể đọc tệp Excel: " + cleanMessage(e));
+            imported++;
         }
-        return new ImportResult(total, imported, errors.size(), errors);
+        return new ImportResult(parsed.rows().size(), imported, validationErrors.size(), validationErrors);
     }
 
     public byte[] template() {
@@ -79,9 +121,12 @@ public class UserImportService {
             Row header = sheet.createRow(0);
             CellStyle style = workbook.createCellStyle();
             Font font = workbook.createFont();
-            font.setBold(true); style.setFont(font);
+            font.setBold(true);
+            style.setFont(font);
             for (int i = 0; i < headers.length; i++) {
-                Cell cell = header.createCell(i); cell.setCellValue(headers[i]); cell.setCellStyle(style);
+                Cell cell = header.createCell(i);
+                cell.setCellValue(headers[i]);
+                cell.setCellStyle(style);
                 sheet.setColumnWidth(i, Math.min(40, Math.max(14, headers[i].length() + 4)) * 256);
             }
             Row example = sheet.createRow(1);
@@ -96,56 +141,208 @@ public class UserImportService {
         }
     }
 
-    private void importRow(Row row, Map<String, Integer> h, DataFormatter f) {
-        String username = required(cell(row, h, "username", f), "Tên đăng nhập");
-        String fullName = required(cell(row, h, "fullname", f), "Họ tên");
-        String role = normalizeRole(required(cell(row, h, "role", f), "Vai trò"));
+    private ParsedFile parse(byte[] bytes) {
+        List<ParsedRow> rows = new ArrayList<>();
+        Set<String> usernamesInFile = new HashSet<>();
+        DataFormatter formatter = new DataFormatter(Locale.forLanguageTag("vi-VN"));
+        try (Workbook workbook = WorkbookFactory.create(new ByteArrayInputStream(bytes))) {
+            if (workbook.getNumberOfSheets() == 0) throw ApiException.badRequest("Tệp Excel không có trang dữ liệu");
+            Sheet sheet = workbook.getSheetAt(0);
+            if (sheet.getPhysicalNumberOfRows() < 2) throw ApiException.badRequest("Tệp không có dòng dữ liệu");
+            Map<String, Integer> headers = headers(sheet.getRow(sheet.getFirstRowNum()), formatter);
+            require(headers, "username", "Tên đăng nhập");
+            require(headers, "fullname", "Họ tên");
+            require(headers, "role", "Vai trò");
+            require(headers, "password", "Mật khẩu");
+
+            for (int i = sheet.getFirstRowNum() + 1; i <= sheet.getLastRowNum(); i++) {
+                Row row = sheet.getRow(i);
+                if (row == null || rowIsEmpty(row, formatter)) continue;
+                if (rows.size() >= MAX_ROWS) throw ApiException.badRequest("Tệp vượt quá " + MAX_ROWS + " dòng dữ liệu");
+                rows.add(parseRow(row, i + 1, headers, formatter, usernamesInFile));
+            }
+        } catch (ApiException e) {
+            throw e;
+        } catch (Exception e) {
+            throw ApiException.badRequest("Không thể đọc tệp Excel: " + cleanMessage(e));
+        }
+        if (rows.isEmpty()) throw ApiException.badRequest("Tệp không có dòng dữ liệu hợp lệ để kiểm tra");
+        int valid = (int) rows.stream().filter(row -> row.request() != null).count();
+        return new ParsedFile(List.copyOf(rows), valid);
+    }
+
+    private ParsedRow parseRow(Row row, int rowNumber, Map<String, Integer> h, DataFormatter f,
+                               Set<String> usernamesInFile) {
+        String username = cell(row, h, "username", f);
+        String fullName = cell(row, h, "fullname", f);
+        String roleText = cell(row, h, "role", f);
         String classCode = cell(row, h, "classcode", f);
-        SchoolClass schoolClass = null;
-        if ("STUDENT".equals(role)) {
-            schoolClass = structure.classByCode(classCode)
-                    .orElseThrow(() -> ApiException.badRequest("Không tìm thấy lớp " + classCode));
-        }
-        String password = required(cell(row, h, "password", f), "Mật khẩu tạm");
-        if (password.length() < 10) throw ApiException.badRequest("Mật khẩu tạm phải có ít nhất 10 ký tự");
         String linkedUsername = cell(row, h, "linkedusername", f);
-        User linked = linkedUsername.isBlank() ? null : users.findByUsername(linkedUsername)
-                .orElseThrow(() -> ApiException.badRequest("Không tìm thấy tài khoản liên kết " + linkedUsername));
-        if (linked != null && "PARENT".equals(role) && !"STUDENT".equals(linked.getRole())) {
-            throw ApiException.badRequest("Tài khoản liên kết phải là học sinh");
-        }
-        if (linked != null && "STUDENT".equals(role) && !"PARENT".equals(linked.getRole())) {
-            throw ApiException.badRequest("Tài khoản liên kết phải là phụ huynh");
-        }
-        UserDto created = users.create(new CreateUserRequest(null, username, password, fullName, role,
-                emptyToNull(cell(row, h, "email", f)), emptyToNull(cell(row, h, "phone", f)), null,
-                emptyToNull(cell(row, h, "teachercode", f)), emptyToNull(cell(row, h, "mainsubject", f)),
-                emptyToNull(cell(row, h, "studentcode", f)), schoolClass == null ? null : schoolClass.getId(),
-                schoolClass == null ? null : schoolClass.getCode(), parseDate(cell(row, h, "dateofbirth", f)),
-                emptyToNull(cell(row, h, "gender", f)), emptyToNull(cell(row, h, "placeofbirth", f)),
-                emptyToNull(cell(row, h, "ethnicity", f)), emptyToNull(cell(row, h, "nationality", f)),
-                emptyToNull(cell(row, h, "address", f)), parseDate(cell(row, h, "enrollmentdate", f)),
-                emptyToNull(cell(row, h, "guardianname", f)), emptyToNull(cell(row, h, "guardianphone", f))));
-        users.requirePasswordChange(created.id());
-        if (linked != null) {
-            if ("PARENT".equals(role)) users.linkChild(created.id(), linked.getId(), true);
-            else if ("STUDENT".equals(role)) users.linkChild(linked.getId(), created.id(), true);
+        try {
+            username = required(username, "Tên đăng nhập");
+            fullName = required(fullName, "Họ tên");
+            String role = normalizeRole(required(roleText, "Vai trò"));
+            String normalizedUsername = username.toLowerCase(Locale.ROOT);
+            if (!usernamesInFile.add(normalizedUsername)) {
+                throw ApiException.badRequest("Tên đăng nhập bị trùng trong tệp");
+            }
+            if (users.findByUsername(username).isPresent()) {
+                throw ApiException.conflict("Tên đăng nhập đã tồn tại trong hệ thống");
+            }
+
+            SchoolClass schoolClass = null;
+            if ("STUDENT".equals(role)) {
+                classCode = required(classCode, "Mã lớp");
+                String requestedClassCode = classCode;
+                schoolClass = structure.classByCode(requestedClassCode)
+                        .orElseThrow(() -> ApiException.badRequest("Không tìm thấy lớp " + requestedClassCode));
+            }
+
+            String password = required(cell(row, h, "password", f), "Mật khẩu tạm");
+            if (password.length() < 10) throw ApiException.badRequest("Mật khẩu tạm phải có ít nhất 10 ký tự");
+            String email = emptyToNull(cell(row, h, "email", f));
+            if (email != null && !email.matches("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")) {
+                throw ApiException.badRequest("Email không hợp lệ");
+            }
+
+            User linked = linkedUsername.isBlank() ? null : users.findByUsername(linkedUsername)
+                    .orElseThrow(() -> ApiException.badRequest("Không tìm thấy tài khoản liên kết " + linkedUsername));
+            if (linked != null && "PARENT".equals(role) && !"STUDENT".equals(linked.getRole())) {
+                throw ApiException.badRequest("Tài khoản liên kết phải là học sinh");
+            }
+            if (linked != null && "STUDENT".equals(role) && !"PARENT".equals(linked.getRole())) {
+                throw ApiException.badRequest("Tài khoản liên kết phải là phụ huynh");
+            }
+
+            CreateUserRequest request = new CreateUserRequest(
+                    null, username, password, fullName, role,
+                    email, emptyToNull(cell(row, h, "phone", f)), null,
+                    emptyToNull(cell(row, h, "teachercode", f)),
+                    emptyToNull(cell(row, h, "mainsubject", f)),
+                    emptyToNull(cell(row, h, "studentcode", f)),
+                    schoolClass == null ? null : schoolClass.getId(),
+                    schoolClass == null ? null : schoolClass.getCode(),
+                    parseDate(cell(row, h, "dateofbirth", f)),
+                    emptyToNull(cell(row, h, "gender", f)),
+                    emptyToNull(cell(row, h, "placeofbirth", f)),
+                    emptyToNull(cell(row, h, "ethnicity", f)),
+                    emptyToNull(cell(row, h, "nationality", f)),
+                    emptyToNull(cell(row, h, "address", f)),
+                    parseDate(cell(row, h, "enrollmentdate", f)),
+                    emptyToNull(cell(row, h, "guardianname", f)),
+                    emptyToNull(cell(row, h, "guardianphone", f))
+            );
+            ImportPreviewRow preview = new ImportPreviewRow(
+                    rowNumber, username, fullName, role,
+                    schoolClass == null ? classCode : schoolClass.getCode(),
+                    linkedUsername, true, null
+            );
+            return new ParsedRow(preview, request, linked);
+        } catch (Exception e) {
+            ImportPreviewRow preview = new ImportPreviewRow(
+                    rowNumber, username, fullName, roleText, classCode, linkedUsername, false, cleanMessage(e)
+            );
+            return new ParsedRow(preview, null, null);
         }
     }
 
-    private Map<String, Integer> headers(Row row, DataFormatter f) {
+    private byte[] readAndValidate(MultipartFile file) {
+        if (file == null || file.isEmpty()) throw ApiException.badRequest("Vui lòng chọn tệp Excel");
+        if (file.getSize() > MAX_FILE_BYTES) throw ApiException.badRequest("Tệp Excel không được vượt quá 10 MB");
+        String name = Optional.ofNullable(file.getOriginalFilename()).orElse("").toLowerCase(Locale.ROOT);
+        if (!name.endsWith(".xlsx") && !name.endsWith(".xls")) {
+            throw ApiException.badRequest("Chỉ hỗ trợ tệp .xlsx hoặc .xls");
+        }
+        try {
+            return file.getBytes();
+        } catch (Exception e) {
+            throw ApiException.badRequest("Không thể đọc tệp Excel");
+        }
+    }
+
+    private String normalizeStrategy(String strategy) {
+        String value = strategy == null ? "ALL_OR_NOTHING" : strategy.trim().toUpperCase(Locale.ROOT);
+        if (!Set.of("ALL_OR_NOTHING", "SKIP_ERRORS").contains(value)) {
+            throw ApiException.badRequest("Chiến lược import không hợp lệ");
+        }
+        return value;
+    }
+
+    private String signToken(String checksum, long expiresAt, int validRows, int totalRows) {
+        String payload = checksum + ":" + expiresAt + ":" + validRows + ":" + totalRows;
+        String encoded = Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(payload.getBytes(StandardCharsets.UTF_8));
+        return encoded + "." + hmac(encoded);
+    }
+
+    private void verifyToken(String token, String checksum, int validRows, int totalRows) {
+        try {
+            String[] parts = token == null ? new String[0] : token.split("\\.", 2);
+            if (parts.length != 2 || !MessageDigest.isEqual(
+                    parts[1].getBytes(StandardCharsets.UTF_8),
+                    hmac(parts[0]).getBytes(StandardCharsets.UTF_8))) {
+                throw ApiException.badRequest("Phiên xem trước import không hợp lệ");
+            }
+            String payload = new String(Base64.getUrlDecoder().decode(parts[0]), StandardCharsets.UTF_8);
+            String[] values = payload.split(":", 4);
+            if (values.length != 4
+                    || !values[0].equals(checksum)
+                    || Integer.parseInt(values[2]) != validRows
+                    || Integer.parseInt(values[3]) != totalRows) {
+                throw ApiException.badRequest("Tệp đã thay đổi sau khi xem trước");
+            }
+            if (Long.parseLong(values[1]) < System.currentTimeMillis()) {
+                throw ApiException.badRequest("Phiên xem trước đã hết hạn, vui lòng kiểm tra lại tệp");
+            }
+        } catch (ApiException e) {
+            throw e;
+        } catch (Exception e) {
+            throw ApiException.badRequest("Phiên xem trước import không hợp lệ");
+        }
+    }
+
+    private String hmac(String value) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(signingKey, "HmacSHA256"));
+            return Base64.getUrlEncoder().withoutPadding()
+                    .encodeToString(mac.doFinal(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception e) {
+            throw new IllegalStateException("Không thể ký phiên import", e);
+        }
+    }
+
+    private String sha256(byte[] bytes) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes);
+            return HexFormat.of().formatHex(digest);
+        } catch (Exception e) {
+            throw new IllegalStateException("Không thể kiểm tra tệp import", e);
+        }
+    }
+
+    private Map<String, Integer> headers(Row row, DataFormatter formatter) {
         if (row == null) throw ApiException.badRequest("Thiếu dòng tiêu đề");
         Map<String, Integer> out = new HashMap<>();
-        for (Cell c : row) out.put(normalizeHeader(f.formatCellValue(c)), c.getColumnIndex());
-        alias(out, "tendangnhap", "username"); alias(out, "hoten", "fullname");
-        alias(out, "vaitro", "role"); alias(out, "matkhau", "password");
-        alias(out, "malop", "classcode"); alias(out, "mahocsinh", "studentcode");
-        alias(out, "magiaovien", "teachercode"); alias(out, "monchinh", "mainsubject");
-        alias(out, "sodienthoai", "phone"); alias(out, "ngaysinh", "dateofbirth");
-        alias(out, "gioitinh", "gender"); alias(out, "noisinh", "placeofbirth");
-        alias(out, "dantoc", "ethnicity"); alias(out, "quoctich", "nationality");
-        alias(out, "diachi", "address"); alias(out, "ngaynhaphoc", "enrollmentdate");
-        alias(out, "nguoigiamho", "guardianname"); alias(out, "sdtnguoigiamho", "guardianphone");
+        for (Cell cell : row) out.put(normalizeHeader(formatter.formatCellValue(cell)), cell.getColumnIndex());
+        alias(out, "tendangnhap", "username");
+        alias(out, "hoten", "fullname");
+        alias(out, "vaitro", "role");
+        alias(out, "matkhau", "password");
+        alias(out, "malop", "classcode");
+        alias(out, "mahocsinh", "studentcode");
+        alias(out, "magiaovien", "teachercode");
+        alias(out, "monchinh", "mainsubject");
+        alias(out, "sodienthoai", "phone");
+        alias(out, "ngaysinh", "dateofbirth");
+        alias(out, "gioitinh", "gender");
+        alias(out, "noisinh", "placeofbirth");
+        alias(out, "dantoc", "ethnicity");
+        alias(out, "quoctich", "nationality");
+        alias(out, "diachi", "address");
+        alias(out, "ngaynhaphoc", "enrollmentdate");
+        alias(out, "nguoigiamho", "guardianname");
+        alias(out, "sdtnguoigiamho", "guardianphone");
         alias(out, "tendangnhaplienket", "linkedusername");
         return out;
     }
@@ -158,24 +355,27 @@ public class UserImportService {
         if (!headers.containsKey(key)) throw ApiException.badRequest("Thiếu cột bắt buộc: " + label);
     }
 
-    private String cell(Row row, Map<String, Integer> h, String key, DataFormatter f) {
-        Integer index = h.get(key);
-        return index == null ? "" : f.formatCellValue(row.getCell(index, Row.MissingCellPolicy.CREATE_NULL_AS_BLANK)).trim();
+    private String cell(Row row, Map<String, Integer> headers, String key, DataFormatter formatter) {
+        Integer index = headers.get(key);
+        return index == null ? "" : formatter
+                .formatCellValue(row.getCell(index, Row.MissingCellPolicy.CREATE_NULL_AS_BLANK)).trim();
     }
 
-    private boolean rowIsEmpty(Row row, DataFormatter f) {
-        for (Cell cell : row) if (!f.formatCellValue(cell).isBlank()) return false;
+    private boolean rowIsEmpty(Row row, DataFormatter formatter) {
+        for (Cell cell : row) if (!formatter.formatCellValue(cell).isBlank()) return false;
         return true;
     }
 
     private String normalizeHeader(String value) {
-        return Normalizer.normalize(value, Normalizer.Form.NFD).replaceAll("\\p{M}", "")
-                .toLowerCase(Locale.ROOT).replace('đ', 'd').replaceAll("[^a-z0-9]", "");
+        return Normalizer.normalize(value, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .toLowerCase(Locale.ROOT)
+                .replace('đ', 'd')
+                .replaceAll("[^a-z0-9]", "");
     }
 
     private String normalizeRole(String value) {
-        String normalized = normalizeHeader(value);
-        return switch (normalized) {
+        return switch (normalizeHeader(value)) {
             case "admin", "quantrivien" -> "ADMIN";
             case "teacher", "giaovien" -> "TEACHER";
             case "student", "hocsinh" -> "STUDENT";
@@ -186,10 +386,14 @@ public class UserImportService {
 
     private LocalDate parseDate(String value) {
         if (value == null || value.isBlank()) return null;
-        for (DateTimeFormatter formatter : List.of(DateTimeFormatter.ISO_LOCAL_DATE,
-                DateTimeFormatter.ofPattern("d/M/uuuu"), DateTimeFormatter.ofPattern("d-M-uuuu"))) {
-            try { return LocalDate.parse(value, formatter); }
-            catch (DateTimeParseException ignored) { }
+        for (DateTimeFormatter formatter : List.of(
+                DateTimeFormatter.ISO_LOCAL_DATE,
+                DateTimeFormatter.ofPattern("d/M/uuuu"),
+                DateTimeFormatter.ofPattern("d-M-uuuu"))) {
+            try {
+                return LocalDate.parse(value, formatter);
+            } catch (DateTimeParseException ignored) {
+            }
         }
         throw ApiException.badRequest("Ngày không hợp lệ: " + value);
     }
@@ -199,6 +403,17 @@ public class UserImportService {
         return value.trim();
     }
 
-    private String emptyToNull(String value) { return value == null || value.isBlank() ? null : value.trim(); }
-    private String cleanMessage(Exception e) { return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage(); }
+    private String emptyToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private String cleanMessage(Exception exception) {
+        return exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
+    }
+
+    private record ParsedRow(ImportPreviewRow preview, CreateUserRequest request, User linkedUser) {
+    }
+
+    private record ParsedFile(List<ParsedRow> rows, int validRows) {
+    }
 }

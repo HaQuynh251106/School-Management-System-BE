@@ -35,6 +35,7 @@ data/
 # Maven
 .mvn/wrapper/maven-wrapper.jar
 dependency-reduced-pom.xml
+tmp/
 
 # Test coverage
 coverage/

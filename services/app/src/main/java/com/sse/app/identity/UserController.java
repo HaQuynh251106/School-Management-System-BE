@@ -2,6 +2,7 @@ package com.sse.app.identity;
 
 import com.sse.app.identity.IdentityDtos.*;
 import com.sse.app.common.ApiException;
+import com.sse.app.common.PageResponse;
 import com.sse.app.security.CurrentUserHolder;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
@@ -39,6 +40,22 @@ public class UserController {
                 : users.listSummaries(role, q, classId);
     }
 
+    @GetMapping("/page")
+    public PageResponse<UserDto> page(@RequestParam(required = false) String role,
+                                      @RequestParam(required = false) String q,
+                                      @RequestParam(required = false) String classId,
+                                      @RequestParam(required = false) String gradeLevel,
+                                      @RequestParam(required = false) String status,
+                                      @RequestParam(defaultValue = "0") int page,
+                                      @RequestParam(defaultValue = "10") int size,
+                                      @RequestParam(defaultValue = "fullName") String sort) {
+        CurrentUserHolder.requireRole("ADMIN", "TEACHER");
+        var current = CurrentUserHolder.require();
+        return current.isAdmin()
+                ? users.page(role, q, classId, gradeLevel, status, page, size, sort)
+                : users.summaryPage(role, q, classId, gradeLevel, status, page, size, sort);
+    }
+
     @GetMapping("/{id}")
     public UserDto get(@PathVariable String id) {
         var current = CurrentUserHolder.require();
@@ -62,6 +79,20 @@ public class UserController {
     public ImportResult importUsers(@RequestParam("file") MultipartFile file) {
         CurrentUserHolder.requireRole("ADMIN");
         return imports.importExcel(file);
+    }
+
+    @PostMapping(value = "/import/preview", consumes = "multipart/form-data")
+    public ImportPreview previewImport(@RequestParam("file") MultipartFile file) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return imports.preview(file);
+    }
+
+    @PostMapping(value = "/import/commit", consumes = "multipart/form-data")
+    public ImportResult commitImport(@RequestParam("file") MultipartFile file,
+                                     @RequestParam("token") String token,
+                                     @RequestParam(defaultValue = "ALL_OR_NOTHING") String strategy) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return imports.commit(file, token, strategy);
     }
 
     @GetMapping("/import-template")

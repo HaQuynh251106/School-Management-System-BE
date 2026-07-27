@@ -1,5 +1,6 @@
 package com.sse.app.chat;
 
+import com.sse.app.common.PageResponse;
 import com.sse.app.security.CurrentUser;
 import com.sse.app.security.CurrentUserHolder;
 import com.sse.app.identity.UserService;
@@ -41,6 +42,11 @@ public class ChatController {
         return chat.contacts(CurrentUserHolder.require());
     }
 
+    @GetMapping("/contact-scopes")
+    public Map<String, List<ChatService.ChatContactScope>> contactScopes() {
+        return chat.contactScopes(CurrentUserHolder.require());
+    }
+
     @GetMapping("/unread-count")
     public Map<String, Long> unreadCount() {
         return Map.of("count", chat.unreadCount(CurrentUserHolder.require().id()));
@@ -51,6 +57,15 @@ public class ChatController {
         CurrentUser current = CurrentUserHolder.require();
         chat.assertCanContact(current, withUserId);
         return chat.conversation(current.id(), withUserId);
+    }
+
+    @GetMapping("/messages/page")
+    public PageResponse<ChatMessage> messagePage(@RequestParam String withUserId,
+                                                  @RequestParam(defaultValue = "0") int page,
+                                                  @RequestParam(defaultValue = "50") int size) {
+        CurrentUser current = CurrentUserHolder.require();
+        chat.assertCanContact(current, withUserId);
+        return chat.conversationPage(current.id(), withUserId, page, size);
     }
 
     @PostMapping("/messages")

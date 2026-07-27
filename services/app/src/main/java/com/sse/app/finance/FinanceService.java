@@ -4,6 +4,8 @@ import com.sse.app.academic.structure.SchoolClass;
 import com.sse.app.academic.structure.StructureService;
 import com.sse.app.common.ApiException;
 import com.sse.app.common.Ids;
+import com.sse.app.common.PageResponse;
+import com.sse.app.common.Paging;
 import com.sse.app.finance.FinanceDtos.*;
 import com.sse.app.identity.UserDto;
 import com.sse.app.identity.UserService;
@@ -12,17 +14,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
-import java.net.URLEncoder;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.ZoneId;
-import java.time.ZonedDateTime;
-import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 
@@ -39,24 +39,17 @@ public class FinanceService {
     private final StructureService structure;
     private final UserService users;
     private final NotificationService notifications;
+    private final MomoGatewayClient momoGateway;
     private final String paymentMode;
     private final String callbackSecret;
-    private final String vnpayTmnCode;
-    private final String vnpayHashSecret;
-    private final String vnpayPaymentUrl;
-    private final String vnpayReturnUrl;
 
     public FinanceService(FeePeriodRepository periods, FeePeriodItemRepository periodItems,
                           InvoiceRepository invoices, InvoiceItemRepository invoiceItems,
                           PaymentRepository payments, PaymentGatewayTransactionRepository gatewayTransactions,
                           StructureService structure,
-                          UserService users, NotificationService notifications,
+                          UserService users, NotificationService notifications, MomoGatewayClient momoGateway,
                           @Value("${sse.payments.mode:disabled}") String paymentMode,
-                          @Value("${sse.payments.callback-secret:}") String callbackSecret,
-                          @Value("${sse.payments.vnpay.tmn-code:}") String vnpayTmnCode,
-                          @Value("${sse.payments.vnpay.hash-secret:}") String vnpayHashSecret,
-                          @Value("${sse.payments.vnpay.payment-url:}") String vnpayPaymentUrl,
-                          @Value("${sse.payments.vnpay.return-url:}") String vnpayReturnUrl) {
+                          @Value("${sse.payments.callback-secret:}") String callbackSecret) {
         this.periods = periods;
         this.periodItems = periodItems;
         this.invoices = invoices;
@@ -66,12 +59,9 @@ public class FinanceService {
         this.structure = structure;
         this.users = users;
         this.notifications = notifications;
+        this.momoGateway = momoGateway;
         this.paymentMode = paymentMode;
         this.callbackSecret = callbackSecret;
-        this.vnpayTmnCode = vnpayTmnCode;
-        this.vnpayHashSecret = vnpayHashSecret;
-        this.vnpayPaymentUrl = vnpayPaymentUrl;
-        this.vnpayReturnUrl = vnpayReturnUrl;
     }
 
     // ---------- Đợt thu ----------
@@ -138,7 +128,8 @@ public class FinanceService {
         if ("OPEN".equals(p.getStatus())) return p;
         if (!"DRAFT".equals(p.getStatus())) throw ApiException.conflict("Đợt thu không còn ở trạng thái nháp");
         if (periodItems.findByFeePeriodId(periodId).isEmpty()) {
-            throw ApiException.badRequest("Cần thêm ít nhất một khoản thu trước khi mở đợt thu");
+            throw ApiException.badRequest(
+                    "Đợt thu chưa có khoản thu. Hãy thêm ít nhất một khoản với số tiền hợp lệ trước khi mở đợt");
         }
         p.setStatus("OPEN");
         return periods.save(p);
@@ -221,6 +212,10 @@ public class FinanceService {
                         "INVOICE", inv.getId());
             }
         }
+        if (created.isEmpty()) {
+            throw ApiException.badRequest(
+                    "Không có học sinh phù hợp để phát hành. Hãy kiểm tra khối áp dụng, lớp học và dữ liệu học sinh");
+        }
         return created;
     }
 
@@ -253,6 +248,54 @@ public class FinanceService {
                 .sorted(Comparator.comparing(Invoice::getIssuedAt,
                         Comparator.nullsLast(Comparator.reverseOrder())))
                 .toList();
+    }
+
+    public PageResponse<Invoice> pageInvoices(String studentId, String parentId, String status,
+                                              String periodId, String query, String classId,
+                                              String gradeLevel, int page, int size) {
+        Specification<Invoice> specification = Specification.where(null);
+        if (studentId != null && !studentId.isBlank()) {
+            specification = specification.and((root, ignored, builder) ->
+                    builder.equal(root.get("studentId"), studentId));
+        }
+        if (parentId != null && !parentId.isBlank()) {
+            specification = specification.and((root, ignored, builder) ->
+                    builder.equal(root.get("parentId"), parentId));
+        }
+        if (periodId != null && !periodId.isBlank()) {
+            specification = specification.and((root, ignored, builder) ->
+                    builder.equal(root.get("feePeriodId"), periodId));
+        }
+        if (classId != null && !classId.isBlank()) {
+            specification = specification.and((root, ignored, builder) ->
+                    builder.equal(root.get("classId"), classId));
+        }
+        if (gradeLevel != null && !gradeLevel.isBlank()) {
+            specification = specification.and((root, ignored, builder) ->
+                    builder.equal(root.get("gradeLevel"), gradeLevel));
+        }
+        if (status != null && !status.isBlank()) {
+            if ("OVERDUE".equalsIgnoreCase(status)) {
+                specification = specification.and((root, ignored, builder) -> builder.and(
+                        builder.lessThan(root.get("dueDate"), LocalDate.now()),
+                        builder.lt(root.get("paidAmount"), root.get("totalAmount"))
+                ));
+            } else {
+                specification = specification.and((root, ignored, builder) ->
+                        builder.equal(builder.upper(root.get("status")), status.trim().toUpperCase(Locale.ROOT)));
+            }
+        }
+        if (query != null && !query.isBlank()) {
+            String pattern = "%" + query.trim().toLowerCase(Locale.ROOT) + "%";
+            specification = specification.and((root, ignored, builder) -> builder.or(
+                    builder.like(builder.lower(root.get("code")), pattern),
+                    builder.like(builder.lower(root.get("studentName")), pattern),
+                    builder.like(builder.lower(root.get("classCode")), pattern),
+                    builder.like(builder.lower(root.get("gradeLevel")), pattern)
+            ));
+        }
+        return PageResponse.from(invoices.findAll(specification,
+                Paging.request(page, size, Sort.by(Sort.Direction.DESC, "issuedAt"))));
     }
 
     private boolean invoiceMatchesStatus(Invoice invoice, String status, LocalDate today) {
@@ -288,9 +331,9 @@ public class FinanceService {
 
     @Transactional
     public Map<String, Object> pay(PayRequest r, String clientIp) {
-        boolean sandbox = "sandbox".equalsIgnoreCase(paymentMode);
-        boolean production = "production".equalsIgnoreCase(paymentMode) || "vnpay".equalsIgnoreCase(paymentMode);
-        if (!sandbox && !production) {
+        boolean simulatedSandbox = "sandbox".equalsIgnoreCase(paymentMode);
+        boolean momoSandbox = "momo-sandbox".equalsIgnoreCase(paymentMode);
+        if (!simulatedSandbox && !momoSandbox) {
             throw ApiException.serviceUnavailable(
                     "Cổng thanh toán chưa được cấu hình. Không có giao dịch nào được tạo.");
         }
@@ -298,25 +341,25 @@ public class FinanceService {
         long remaining = inv.getTotalAmount() - inv.getPaidAmount();
         if (remaining <= 0) throw ApiException.badRequest("Hóa đơn đã thanh toán đủ");
 
-        String method = r.method() == null ? "VNPAY" : r.method().toUpperCase();
-        if (!Set.of("VNPAY", "MOMO").contains(method) || (production && !"VNPAY".equals(method))) {
-            throw ApiException.badRequest("Phương thức thanh toán chỉ hỗ trợ VNPAY hoặc MOMO");
+        String method = r.method() == null ? "MOMO" : r.method().toUpperCase(Locale.ROOT);
+        if (!"MOMO".equals(method)) {
+            throw ApiException.badRequest("Hệ thống chỉ hỗ trợ thanh toán trực tuyến qua MoMo");
         }
-        if (sandbox) requireSandboxSecret(); else requireVnpayConfig();
+        if (simulatedSandbox) requireSandboxSecret();
 
         Optional<Payment> pending = payments.findFirstByInvoiceIdAndStatusOrderByCreatedAtDesc(inv.getId(), "PENDING");
         if (pending.isPresent()) return paymentResponse(inv, pending.get(),
                 gatewayTransactions.findByPaymentId(pending.get().getId()).orElseThrow(), clientIp);
 
-        String txnRef = sandbox
+        String txnRef = simulatedSandbox
                 ? "SANDBOX" + UUID.randomUUID().toString().replace("-", "").substring(0, 16).toUpperCase(Locale.ROOT)
-                : "SSE" + System.currentTimeMillis() + UUID.randomUUID().toString().replace("-", "").substring(0, 6).toUpperCase(Locale.ROOT);
+                : "MOMO" + System.currentTimeMillis() + UUID.randomUUID().toString().replace("-", "").substring(0, 6).toUpperCase(Locale.ROOT);
         Payment payment = payments.save(Payment.builder()
                 .id(Ids.gen("pay")).invoiceId(inv.getId()).amount(remaining).method(method)
                 .status("PENDING").txnRef(txnRef).createdAt(Instant.now()).build());
         PaymentGatewayTransaction transaction = gatewayTransactions.save(PaymentGatewayTransaction.builder()
                 .id(Ids.gen("pgt")).paymentId(payment.getId()).txnRef(txnRef).gateway(method)
-                .status("PENDING").requestPayload(sandbox ? canonical(txnRef, "SUCCESS", remaining) : "VNPAY_2.1.0")
+                .status("PENDING").requestPayload(simulatedSandbox ? canonical(txnRef, "SUCCESS", remaining) : "MOMO_SANDBOX")
                 .signatureValid(false).createdAt(Instant.now()).updatedAt(Instant.now()).build());
         return paymentResponse(inv, payment, transaction, clientIp);
     }
@@ -338,7 +381,7 @@ public class FinanceService {
         invoice.setStatus(invoice.getPaidAmount() >= invoice.getTotalAmount() ? "PAID" : "PARTIAL");
         invoices.save(invoice);
         if (invoice.getParentId() != null) {
-            notifications.notifyUser(invoice.getParentId(), "INVOICE", "Nhà trường đã xác nhận học phí",
+            notifications.notifyUserWithTransactionalEmail(invoice.getParentId(), "INVOICE", "Biên nhận thanh toán học phí",
                     String.format("Biên nhận %s: %,d₫ (tiền mặt). Còn lại: %,d₫",
                             invoice.getCode(), amount, invoice.getTotalAmount() - invoice.getPaidAmount()),
                     "PAYMENT", payment.getId());
@@ -621,8 +664,9 @@ public class FinanceService {
             invoice.setStatus(invoice.getPaidAmount() >= invoice.getTotalAmount() ? "PAID" : "PARTIAL");
             invoices.save(invoice);
             if (invoice.getParentId() != null) {
-                notifications.notifyUser(invoice.getParentId(), "INVOICE", "Thanh toán thành công",
-                        String.format("Biên nhận %s: %,d₫ (%s)", invoice.getCode(), payment.getAmount(), payment.getMethod()),
+                notifications.notifyUserWithTransactionalEmail(invoice.getParentId(), "INVOICE", "Thanh toán thành công",
+                        String.format("Biên nhận %s%nHọc sinh: %s%nSố tiền: %,d₫%nPhương thức: Mô phỏng MoMo%nMã giao dịch: %s%nTrạng thái: Thành công",
+                                invoice.getCode(), invoice.getStudentName(), payment.getAmount(), payment.getTxnRef()),
                         "PAYMENT", payment.getId());
             }
         }
@@ -653,14 +697,15 @@ public class FinanceService {
 
     private Map<String, Object> paymentResponse(Invoice invoice, Payment payment,
                                                 PaymentGatewayTransaction transaction, String clientIp) {
-        if ("production".equalsIgnoreCase(paymentMode) || "vnpay".equalsIgnoreCase(paymentMode)) {
+        if ("momo-sandbox".equalsIgnoreCase(paymentMode)) {
             Map<String, Object> result = callbackResult(invoice, payment, transaction);
-            String paymentUrl = buildVnpayPaymentUrl(invoice, payment, clientIp);
-            transaction.setRequestPayload(paymentUrl.substring(0, Math.min(paymentUrl.length(), 4000)));
+            MomoGatewayClient.MomoCreateResult created =
+                    momoGateway.createPayment(payment.getTxnRef(), payment.getAmount(), invoice.getCode());
+            transaction.setRequestPayload("MOMO_SANDBOX_CREATE:" + created.resultCode());
             transaction.setUpdatedAt(Instant.now());
             gatewayTransactions.save(transaction);
-            result.put("paymentUrl", paymentUrl);
-            result.put("gateway", "VNPAY");
+            result.put("paymentUrl", created.payUrl());
+            result.put("gateway", "MOMO");
             return result;
         }
         PaymentCallbackRequest callback = new PaymentCallbackRequest(transaction.getTxnRef(), "SUCCESS",
@@ -672,103 +717,74 @@ public class FinanceService {
     }
 
     @Transactional
-    public Map<String, Object> completeVnpay(Map<String, String> params) {
-        requireVnpayConfig();
-        String txnRef = params.get("vnp_TxnRef");
-        String receivedHash = params.get("vnp_SecureHash");
-        if (txnRef == null || receivedHash == null || !verifyVnpay(params, receivedHash)) {
-            return Map.of("RspCode", "97", "Message", "Invalid Checksum");
-        }
+    public Map<String, Object> completeMomo(Map<String, Object> payload) {
+        String txnRef = Objects.toString(payload.get("orderId"), "");
+        if (txnRef.isBlank()) return momoIpnResponse(payload, 1001, "Thiếu mã giao dịch");
+
         Optional<PaymentGatewayTransaction> found = gatewayTransactions.findByTxnRef(txnRef);
-        if (found.isEmpty()) return Map.of("RspCode", "01", "Message", "Order not Found");
+        if (found.isEmpty()) return momoIpnResponse(payload, 1002, "Không tìm thấy giao dịch");
         PaymentGatewayTransaction transaction = found.get();
         Payment payment = payments.findById(transaction.getPaymentId()).orElse(null);
-        if (payment == null) return Map.of("RspCode", "01", "Message", "Order not Found");
+        if (payment == null) return momoIpnResponse(payload, 1002, "Không tìm thấy thanh toán");
         Invoice invoice = getInvoice(payment.getInvoiceId());
-        long amount;
-        try { amount = Long.parseLong(params.getOrDefault("vnp_Amount", "0")) / 100; }
-        catch (NumberFormatException ignored) { return Map.of("RspCode", "04", "Message", "Invalid Amount"); }
-        if (amount != payment.getAmount()) return Map.of("RspCode", "04", "Message", "Invalid Amount");
-        if ("SUCCESS".equals(payment.getStatus())) return Map.of("RspCode", "02", "Message", "Order already Confirmed");
 
-        boolean success = "00".equals(params.get("vnp_ResponseCode")) && "00".equals(params.get("vnp_TransactionStatus"));
-        String callbackPayload = vnpayHashData(params);
-        transaction.setCallbackPayload(callbackPayload.substring(0, Math.min(callbackPayload.length(), 4000)));
-        transaction.setSignatureValid(true);
+        transaction.setCallbackPayload(momoGateway.safeCallbackPayload(payload));
         transaction.setUpdatedAt(Instant.now());
-        if (success) {
+        boolean signatureValid = momoGateway.verifyIpn(payload);
+        transaction.setSignatureValid(signatureValid);
+        if (!signatureValid) {
+            transaction.setStatus("REJECTED");
+            gatewayTransactions.save(transaction);
+            return momoIpnResponse(payload, 1003, "Chữ ký không hợp lệ");
+        }
+
+        long amount;
+        int resultCode;
+        try {
+            amount = Long.parseLong(Objects.toString(payload.get("amount"), "0"));
+            resultCode = Integer.parseInt(Objects.toString(payload.get("resultCode"), "-1"));
+        } catch (NumberFormatException ignored) {
+            transaction.setStatus("REJECTED");
+            gatewayTransactions.save(transaction);
+            return momoIpnResponse(payload, 1004, "Dữ liệu giao dịch không hợp lệ");
+        }
+        if (amount != payment.getAmount()) {
+            transaction.setStatus("REJECTED");
+            gatewayTransactions.save(transaction);
+            return momoIpnResponse(payload, 1004, "Số tiền không khớp");
+        }
+        if ("SUCCESS".equals(payment.getStatus())) {
+            return momoIpnResponse(payload, 0, "Giao dịch đã được xác nhận");
+        }
+
+        if (resultCode == 0) {
             payment.setStatus("SUCCESS");
             payment.setPaidAt(Instant.now());
             transaction.setStatus("SUCCESS");
             invoice.setPaidAmount(Math.min(invoice.getTotalAmount(), invoice.getPaidAmount() + payment.getAmount()));
             invoice.setStatus(invoice.getPaidAmount() >= invoice.getTotalAmount() ? "PAID" : "PARTIAL");
             invoices.save(invoice);
-            if (invoice.getParentId() != null) notifications.notifyUser(invoice.getParentId(), "INVOICE", "Thanh toán thành công",
-                    String.format("Biên nhận %s: %,d₫ (VNPAY)", invoice.getCode(), payment.getAmount()), "PAYMENT", payment.getId());
+            if (invoice.getParentId() != null) {
+                notifications.notifyUserWithTransactionalEmail(invoice.getParentId(), "INVOICE", "Thanh toán thành công",
+                        String.format("Biên nhận %s%nHọc sinh: %s%nSố tiền: %,d₫%nPhương thức: MoMo%nMã giao dịch: %s%nTrạng thái: Thành công",
+                                invoice.getCode(), invoice.getStudentName(), payment.getAmount(), payment.getTxnRef()),
+                        "PAYMENT", payment.getId());
+            }
         } else {
             payment.setStatus("FAILED");
             transaction.setStatus("FAILED");
         }
         payments.save(payment);
         gatewayTransactions.save(transaction);
-        return Map.of("RspCode", "00", "Message", "Confirm Success");
+        return momoIpnResponse(payload, 0, "Đã tiếp nhận kết quả");
     }
 
-    private String buildVnpayPaymentUrl(Invoice invoice, Payment payment, String clientIp) {
-        ZoneId zone = ZoneId.of("Asia/Ho_Chi_Minh");
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
-        ZonedDateTime now = ZonedDateTime.now(zone);
-        Map<String, String> params = new TreeMap<>();
-        params.put("vnp_Version", "2.1.0");
-        params.put("vnp_Command", "pay");
-        params.put("vnp_TmnCode", vnpayTmnCode);
-        params.put("vnp_Amount", String.valueOf(Math.multiplyExact(payment.getAmount(), 100)));
-        params.put("vnp_CurrCode", "VND");
-        params.put("vnp_TxnRef", payment.getTxnRef());
-        params.put("vnp_OrderInfo", "Thanh toan hoa don " + invoice.getCode());
-        params.put("vnp_OrderType", "other");
-        params.put("vnp_Locale", "vn");
-        params.put("vnp_ReturnUrl", vnpayReturnUrl);
-        params.put("vnp_IpAddr", clientIp == null || clientIp.isBlank() ? "127.0.0.1" : clientIp.replace("0:0:0:0:0:0:0:1", "127.0.0.1"));
-        params.put("vnp_CreateDate", formatter.format(now));
-        params.put("vnp_ExpireDate", formatter.format(now.plusMinutes(15)));
-        String hashData = vnpayHashData(params);
-        return vnpayPaymentUrl + "?" + hashData + "&vnp_SecureHash=" + hmacSha512(vnpayHashSecret, hashData);
-    }
-
-    private boolean verifyVnpay(Map<String, String> params, String signature) {
-        byte[] expected = hmacSha512(vnpayHashSecret, vnpayHashData(params)).getBytes(StandardCharsets.US_ASCII);
-        byte[] actual = signature.toLowerCase(Locale.ROOT).getBytes(StandardCharsets.US_ASCII);
-        return MessageDigest.isEqual(expected, actual);
-    }
-
-    private String vnpayHashData(Map<String, String> source) {
-        return source.entrySet().stream()
-                .filter(entry -> entry.getKey().startsWith("vnp_") && !"vnp_SecureHash".equals(entry.getKey())
-                        && !"vnp_SecureHashType".equals(entry.getKey()) && entry.getValue() != null && !entry.getValue().isBlank())
-                .sorted(Map.Entry.comparingByKey())
-                .map(entry -> url(entry.getKey()) + "=" + url(entry.getValue()))
-                .collect(java.util.stream.Collectors.joining("&"));
-    }
-
-    private String url(String value) {
-        return URLEncoder.encode(value, StandardCharsets.UTF_8);
-    }
-
-    private String hmacSha512(String secret, String value) {
-        try {
-            Mac mac = Mac.getInstance("HmacSHA512");
-            mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA512"));
-            return HexFormat.of().formatHex(mac.doFinal(value.getBytes(StandardCharsets.UTF_8)));
-        } catch (Exception ex) { throw new IllegalStateException("Không thể ký yêu cầu VNPAY", ex); }
-    }
-
-    private void requireVnpayConfig() {
-        if (vnpayTmnCode == null || vnpayTmnCode.isBlank() || vnpayHashSecret == null || vnpayHashSecret.length() < 8
-                || vnpayPaymentUrl == null || !vnpayPaymentUrl.startsWith("https://")
-                || vnpayReturnUrl == null || !vnpayReturnUrl.startsWith("https://")) {
-            throw ApiException.serviceUnavailable("Thiếu cấu hình merchant VNPAY an toàn (TmnCode, HashSecret, Payment URL, Return URL HTTPS)");
-        }
+    private Map<String, Object> momoIpnResponse(Map<String, Object> payload, int resultCode, String message) {
+        return momoGateway.ipnResponse(
+                Objects.toString(payload.get("orderId"), ""),
+                Objects.toString(payload.get("requestId"), ""),
+                resultCode,
+                message);
     }
 
     private Map<String, Object> callbackResult(Invoice invoice, Payment payment,

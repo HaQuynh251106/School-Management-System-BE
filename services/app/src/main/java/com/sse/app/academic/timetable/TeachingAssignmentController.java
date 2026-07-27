@@ -34,7 +34,9 @@ public class TeachingAssignmentController {
             @RequestParam(required = false) String teacherId,
             @RequestParam(required = false) String semesterId,
             @RequestParam(required = false) String dayOfWeek,
-            @RequestParam(required = false) Integer periodNo) {
+            @RequestParam(required = false) Integer periodNo,
+            @RequestParam(required = false) String startTime,
+            @RequestParam(required = false) String endTime) {
         CurrentUser current = CurrentUserHolder.require();
         CurrentUserHolder.requireRole("ADMIN", "TEACHER");
         if (current.isTeacher()) {
@@ -46,14 +48,14 @@ public class TeachingAssignmentController {
         if ((dayOfWeek == null) != (periodNo == null)) {
             throw ApiException.badRequest("Phải cung cấp đồng thời thứ và tiết để kiểm tra lịch bận");
         }
-        return assignments.list(classId, subjectId, teacherId, semesterId, dayOfWeek, periodNo);
+        return assignments.list(classId, subjectId, teacherId, semesterId, dayOfWeek, periodNo, startTime, endTime);
     }
 
     @GetMapping("/me/teaching-assignments")
     public List<TeachingAssignmentResponse> mine(@RequestParam(required = false) String semesterId) {
         CurrentUserHolder.requireRole("TEACHER");
         CurrentUser current = CurrentUserHolder.require();
-        return assignments.list(null, null, current.id(), semesterId, null, null);
+        return assignments.list(null, null, current.id(), semesterId, null, null, null, null);
     }
 
     @GetMapping("/teaching-assignments/workloads")

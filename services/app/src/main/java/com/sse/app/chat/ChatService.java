@@ -1,9 +1,12 @@
 package com.sse.app.chat;
 
 import com.sse.app.common.Ids;
+import com.sse.app.common.PageResponse;
+import com.sse.app.common.Paging;
 import com.sse.app.identity.UserService;
 import com.sse.app.identity.UserDto;
 import com.sse.app.security.CurrentUser;
+import com.sse.app.realtime.RealtimeEventHub;
 import com.sse.app.academic.structure.StructureService;
 import com.sse.app.academic.timetable.TeachingAssignmentService;
 import com.sse.app.common.ApiException;
@@ -11,27 +14,35 @@ import com.sse.app.file.FileStorageService;
 import com.sse.app.file.StoredFile;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.data.domain.Sort;
 
 import java.time.Instant;
 import java.util.*;
 
-/** B6/D3: Chat 1-1 (polling). */
+/** B6/D3: Chat 1-1, phân trang REST và cập nhật tức thời qua SSE. */
 @Service
 public class ChatService {
+
+    public record ChatContactScope(String classId, String classCode, String relation) {}
 
     private final ChatRepository repo;
     private final UserService users;
     private final StructureService structure;
     private final TeachingAssignmentService teachingAssignments;
     private final FileStorageService storage;
+    private final RealtimeEventHub realtime;
 
     public ChatService(ChatRepository repo, UserService users, StructureService structure,
-                       TeachingAssignmentService teachingAssignments, FileStorageService storage) {
+                       TeachingAssignmentService teachingAssignments, FileStorageService storage,
+                       RealtimeEventHub realtime) {
         this.repo = repo;
         this.users = users;
         this.structure = structure;
         this.teachingAssignments = teachingAssignments;
         this.storage = storage;
+        this.realtime = realtime;
     }
 
     private List<ChatMessage> involving(String meId) {
@@ -42,10 +53,27 @@ public class ChatService {
     @Transactional
     public List<ChatMessage> conversation(String meId, String otherId) {
         repo.markConversationRead(meId, otherId, Instant.now());
-        return involving(meId).stream()
-                .filter(m -> (meId.equals(m.getSenderId()) && otherId.equals(m.getRecipientId()))
-                        || (otherId.equals(m.getSenderId()) && meId.equals(m.getRecipientId())))
-                .toList();
+        List<ChatMessage> newest = repo.findConversation(meId, otherId,
+                Paging.request(0, 200, Sort.by(Sort.Direction.DESC, "createdAt"))).getContent();
+        List<ChatMessage> chronological = new ArrayList<>(newest);
+        Collections.reverse(chronological);
+        return chronological;
+    }
+
+    /** Page zero contains the newest messages; clients can prepend older pages when scrolling upward. */
+    @Transactional
+    public PageResponse<ChatMessage> conversationPage(String meId, String otherId, int page, int size) {
+        int marked = repo.markConversationRead(meId, otherId, Instant.now());
+        if (marked > 0) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    realtime.publish(otherId, "CHAT_READ", Map.of("readByUserId", meId));
+                }
+            });
+        }
+        return PageResponse.from(repo.findConversation(meId, otherId,
+                Paging.request(page, size, Sort.by(Sort.Direction.DESC, "createdAt"))));
     }
 
     /** Danh sách hội thoại: mỗi đối tác + tin nhắn cuối + số chưa đọc. */
@@ -92,13 +120,18 @@ public class ChatService {
         if (normalizedBody.length() > 2000) {
             throw ApiException.badRequest("Tin nhắn không được vượt quá 2.000 ký tự");
         }
-        return repo.save(ChatMessage.builder()
+        ChatMessage saved = repo.save(ChatMessage.builder()
                 .id(Ids.gen("msg")).senderId(meId).senderName(meName)
                 .recipientId(toId).recipientName(users.fullNameOf(toId))
                 .body(normalizedBody.isEmpty() ? null : normalizedBody)
                 .attachmentFileId(attachment == null ? null : attachment.getId())
                 .attachmentName(attachment == null ? null : attachment.getOriginalName())
                 .readFlag(false).createdAt(Instant.now()).build());
+        realtime.publish(toId, "CHAT", Map.of(
+                "messageId", saved.getId(), "fromUserId", meId));
+        realtime.publish(meId, "CHAT", Map.of(
+                "messageId", saved.getId(), "toUserId", toId));
+        return saved;
     }
 
     public boolean canAccessFile(String fileId, CurrentUser actor) {
@@ -150,6 +183,47 @@ public class ChatService {
         LinkedHashSet<String> ids = contactIds(current);
         return ids.stream().map(users::getById).filter(user -> "ACTIVE".equals(user.getStatus()))
                 .map(users::toSummaryDto).sorted(Comparator.comparing(UserDto::fullName)).toList();
+    }
+
+    /** Phạm vi lớp của từng liên hệ để client lọc danh bạ mà không làm lộ lớp ngoài nhiệm vụ hiện tại. */
+    public Map<String, List<ChatContactScope>> contactScopes(CurrentUser current) {
+        Set<String> visibleClassIds = new LinkedHashSet<>();
+        if (current.isTeacher()) {
+            structure.classesOfHomeroom(current.id()).forEach(item -> visibleClassIds.add(item.getId()));
+            teachingAssignments.assignmentsOfTeacher(current.id())
+                    .forEach(item -> visibleClassIds.add(item.getClassId()));
+        } else if (current.isStudent()) {
+            UserDto student = users.dtoById(current.id());
+            if (student.classId() != null) visibleClassIds.add(student.classId());
+        } else if (current.isParent()) {
+            users.childrenOf(current.id()).stream().map(UserDto::classId).filter(Objects::nonNull)
+                    .forEach(visibleClassIds::add);
+        }
+
+        Map<String, List<ChatContactScope>> result = new LinkedHashMap<>();
+        for (String contactId : contactIds(current)) {
+            UserDto contact = users.dtoById(contactId);
+            LinkedHashMap<String, ChatContactScope> scopes = new LinkedHashMap<>();
+            if ("STUDENT".equals(contact.role()) && contact.classId() != null) {
+                addContactScope(scopes, contact.classId(), "Học sinh");
+            } else if ("PARENT".equals(contact.role())) {
+                users.childrenOf(contactId).stream().map(UserDto::classId).filter(Objects::nonNull)
+                        .forEach(classId -> addContactScope(scopes, classId, "Phụ huynh"));
+            } else if ("TEACHER".equals(contact.role())) {
+                structure.classesOfHomeroom(contactId)
+                        .forEach(schoolClass -> addContactScope(scopes, schoolClass.getId(), "Giáo viên chủ nhiệm"));
+            }
+            List<ChatContactScope> filtered = scopes.values().stream()
+                    .filter(scope -> current.isAdmin() || visibleClassIds.contains(scope.classId()))
+                    .toList();
+            result.put(contactId, filtered);
+        }
+        return result;
+    }
+
+    private void addContactScope(Map<String, ChatContactScope> scopes, String classId, String relation) {
+        var schoolClass = structure.getClass(classId);
+        scopes.putIfAbsent(classId, new ChatContactScope(classId, schoolClass.getCode(), relation));
     }
 
     public void assertCanContact(CurrentUser current, String otherId) {

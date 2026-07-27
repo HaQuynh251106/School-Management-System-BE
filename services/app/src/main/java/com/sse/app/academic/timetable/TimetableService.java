@@ -9,6 +9,8 @@ import com.sse.app.identity.UserService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalTime;
+import java.time.format.DateTimeParseException;
 import java.util.List;
 
 /** Xếp thời khóa biểu và xử lý xung đột lớp, giáo viên, phòng học. */
@@ -52,6 +54,7 @@ public class TimetableService {
                 .id(request.id() == null || request.id().isBlank() ? Ids.gen("tt") : request.id())
                 .classId(request.classId())
                 .classCode(context.classCode())
+                .studyShift(context.studyShift())
                 .subjectId(request.subjectId())
                 .subjectName(context.subjectName())
                 .teacherId(request.teacherId())
@@ -72,6 +75,7 @@ public class TimetableService {
         checkConflicts(request, id);
         slot.setClassId(request.classId());
         slot.setClassCode(context.classCode());
+        slot.setStudyShift(context.studyShift());
         slot.setSubjectId(request.subjectId());
         slot.setSubjectName(context.subjectName());
         slot.setTeacherId(request.teacherId());
@@ -86,7 +90,13 @@ public class TimetableService {
     }
 
     private SlotContext validateSlot(CreateSlotRequest request, String ignoredSlotId) {
-        String classCode = structure.getClass(request.classId()).getCode();
+        LocalTime start = parseTime(request.startTime());
+        LocalTime end = parseTime(request.endTime());
+        if (start == null || end == null || !start.isBefore(end)) {
+            throw ApiException.badRequest("Khung giờ tiết học không hợp lệ");
+        }
+        var schoolClass = structure.getClass(request.classId());
+        String classCode = schoolClass.getCode();
         structure.assertSemesterWritable(request.semesterId());
         String subjectName = structure.requireSubjectName(request.subjectId());
         User teacher = users.getById(request.teacherId());
@@ -96,28 +106,51 @@ public class TimetableService {
         TeachingAssignment assignment = teachingAssignments.requireForSlot(
                 request.classId(), request.subjectId(), request.teacherId(), request.semesterId());
         teachingAssignments.assertCanSchedule(assignment, ignoredSlotId);
-        return new SlotContext(classCode, subjectName, teacher);
+        // Kiểm tra điều kiện nghiệp vụ cốt lõi trước điều kiện phòng học để thông báo
+        // đúng việc người dùng cần xử lý (phân công giáo viên) thay vì lỗi thứ cấp.
+        structure.requireRoomForClass(request.roomCode(), request.classId());
+        return new SlotContext(classCode, schoolClass.getStudyShift(), subjectName, teacher);
     }
 
     private void checkConflicts(CreateSlotRequest request, String ignoredSlotId) {
-        List<TimetableSlot> sameCell = slots.findByDayOfWeekAndPeriodNo(
-                request.dayOfWeek().toUpperCase(), request.periodNo());
-        for (TimetableSlot existing : sameCell) {
+        for (TimetableSlot existing : slots.findByDayOfWeek(request.dayOfWeek().toUpperCase())) {
             if (existing.getId().equals(ignoredSlotId)) continue;
             if (differentSemester(request.semesterId(), existing.getSemesterId())) continue;
+            if (!overlaps(request, existing)) continue;
             if (request.classId().equals(existing.getClassId())) {
-                throw ApiException.conflict("Lớp đã có tiết khác ở " + vietnameseDay(request.dayOfWeek())
-                        + ", tiết " + request.periodNo());
+                throw ApiException.conflict("Lớp đã có tiết khác trùng khung giờ "
+                        + request.startTime() + "–" + request.endTime() + " vào " + vietnameseDay(request.dayOfWeek()));
             }
             if (request.teacherId().equals(existing.getTeacherId())) {
                 String classCode = structure.getClass(existing.getClassId()).getCode();
-                throw ApiException.conflict("Giáo viên đã kín lịch ở tiết này: đang dạy "
-                        + existing.getSubjectName() + " tại lớp " + classCode);
+                throw ApiException.conflict("Giáo viên đã kín lịch do trùng khung giờ: đang dạy "
+                        + existing.getSubjectName() + " tại lớp " + classCode + " ("
+                        + existing.getStartTime() + "–" + existing.getEndTime() + ")");
             }
             if (request.roomCode() != null && !request.roomCode().isBlank()
                     && request.roomCode().equals(existing.getRoomCode())) {
-                throw ApiException.conflict("Phòng " + request.roomCode() + " đang được sử dụng ở tiết này");
+                throw ApiException.conflict("Phòng " + request.roomCode() + " đang được sử dụng trong khung giờ này");
             }
+        }
+    }
+
+    private boolean overlaps(CreateSlotRequest request, TimetableSlot existing) {
+        LocalTime requestedStart = parseTime(request.startTime());
+        LocalTime requestedEnd = parseTime(request.endTime());
+        LocalTime existingStart = parseTime(existing.getStartTime());
+        LocalTime existingEnd = parseTime(existing.getEndTime());
+        if (requestedStart == null || requestedEnd == null || existingStart == null || existingEnd == null) {
+            return request.periodNo().equals(existing.getPeriodNo());
+        }
+        return requestedStart.isBefore(existingEnd) && existingStart.isBefore(requestedEnd);
+    }
+
+    private LocalTime parseTime(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return LocalTime.parse(value.trim());
+        } catch (DateTimeParseException ignored) {
+            return null;
         }
     }
 
@@ -174,8 +207,12 @@ public class TimetableService {
     }
 
     private void attachClassCode(TimetableSlot slot) {
-        if (slot.getClassId() != null) slot.setClassCode(structure.getClass(slot.getClassId()).getCode());
+        if (slot.getClassId() != null) {
+            var schoolClass = structure.getClass(slot.getClassId());
+            slot.setClassCode(schoolClass.getCode());
+            slot.setStudyShift(schoolClass.getStudyShift());
+        }
     }
 
-    private record SlotContext(String classCode, String subjectName, User teacher) {}
+    private record SlotContext(String classCode, String studyShift, String subjectName, User teacher) {}
 }

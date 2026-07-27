@@ -8,5 +8,6 @@ interface TimetableRepository extends JpaRepository<TimetableSlot, String> {
     List<TimetableSlot> findByClassId(String classId);
     List<TimetableSlot> findByTeacherId(String teacherId);
     List<TimetableSlot> findBySemesterId(String semesterId);
+    List<TimetableSlot> findByDayOfWeek(String dayOfWeek);
     List<TimetableSlot> findByDayOfWeekAndPeriodNo(String dayOfWeek, int periodNo);
 }

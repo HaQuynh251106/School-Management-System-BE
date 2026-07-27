@@ -14,4 +14,10 @@ public class Room {
     private String code;    // P201
     private String name;
     private Integer capacity;
+    @Builder.Default
+    @Column(nullable = false)
+    private boolean supportsMorning = true;
+    @Builder.Default
+    @Column(nullable = false)
+    private boolean supportsAfternoon = true;
 }

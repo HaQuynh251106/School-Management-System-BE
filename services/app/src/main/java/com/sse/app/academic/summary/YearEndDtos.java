@@ -26,7 +26,7 @@ public final class YearEndDtos {
     public record RolloverClassPlan(
             String sourceClassId, String sourceClassCode,
             String targetClassCode, String targetGradeLevel,
-            String type, int capacity) {}
+            String type, int capacity, String studyShift) {}
 
     public record RolloverPreview(
             String academicYearId, String academicYearCode, String status,

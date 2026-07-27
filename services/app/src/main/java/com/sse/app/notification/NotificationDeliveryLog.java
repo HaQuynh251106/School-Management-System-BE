@@ -1,5 +1,6 @@
 package com.sse.app.notification;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -20,5 +21,13 @@ public class NotificationDeliveryLog {
     private int attempts;
     @Column(length = 1000)
     private String detail;
+    @JsonIgnore
+    @Column(length = 255)
+    private String title;
+    @JsonIgnore
+    @Column(length = 4000)
+    private String payload;
+    private Instant nextAttemptAt;
     private Instant createdAt;
+    private Instant updatedAt;
 }

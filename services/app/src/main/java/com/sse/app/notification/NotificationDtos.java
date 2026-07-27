@@ -39,4 +39,5 @@ public final class NotificationDtos {
     public record RegisterDeviceRequest(
             @NotBlank @Size(max = 1000) String deviceToken,
             @NotBlank @Pattern(regexp = "ANDROID|IOS|WEB") String platform) {}
+
 }

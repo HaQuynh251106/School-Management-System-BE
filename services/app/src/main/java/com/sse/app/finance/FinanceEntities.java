@@ -93,7 +93,7 @@ class Payment {
     private String id;
     private String invoiceId;
     private long amount;
-    /** VNPAY | MOMO | CASH */
+    /** MOMO | CASH */
     private String method;
     /** PENDING | SUCCESS | FAILED */
     private String status;

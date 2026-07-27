@@ -6,6 +6,7 @@ import com.sse.app.security.CurrentUserHolder;
 import com.sse.app.academic.structure.StructureService;
 import com.sse.app.academic.timetable.TeachingAssignmentService;
 import com.sse.app.common.ApiException;
+import com.sse.app.common.PageResponse;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 
@@ -33,6 +34,19 @@ public class NotificationController {
         CurrentUser user = CurrentUserHolder.require();
         notifications.syncAnnouncementsForUser(user.id(), user.role());
         return notifications.inbox(user.id(), unread);
+    }
+
+    @GetMapping("/notifications/page")
+    public PageResponse<Notification> inboxPage(
+            @RequestParam(required = false, defaultValue = "ALL") String read,
+            @RequestParam(required = false) String type,
+            @RequestParam(required = false) String priority,
+            @RequestParam(required = false, name = "q") String query,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        CurrentUser user = CurrentUserHolder.require();
+        notifications.syncAnnouncementsForUser(user.id(), user.role());
+        return notifications.inboxPage(user.id(), read, type, priority, query, page, size);
     }
 
     @GetMapping("/notifications/unread-count")

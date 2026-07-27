@@ -13,7 +13,7 @@ main                 ← production-ready, chỉ tag release, PROTECTED
     └── hotfix/<short-desc>         ← khi cần fix gấp trên main
 ```
 
-Ví dụ: `feature/p2/timetable-conflict-check`, `feature/p4/vnpay-callback`.
+Ví dụ: `feature/p2/timetable-conflict-check`, `feature/p4/momo-ipn`.
 
 ## Quy tắc PR
 

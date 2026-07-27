@@ -38,12 +38,16 @@ public final class StructureDtos {
     public record CreateClassRequest(
             String id, @NotBlank String code, String name, @NotBlank String gradeLevel,
             String academicYearId, String homeroomTeacherId,
-            @Min(1) @Max(100) Integer capacity) {}
+            @Pattern(regexp = "MORNING|AFTERNOON") String studyShift,
+            @Min(1) @Max(100) Integer capacity,
+            String roomId) {}
 
     public record UpdateClassRequest(
             @NotBlank String code, String name, @NotBlank String gradeLevel,
             @NotBlank String academicYearId,
-            @Min(1) @Max(100) Integer capacity) {}
+            @Pattern(regexp = "MORNING|AFTERNOON") String studyShift,
+            @Min(1) @Max(100) Integer capacity,
+            String roomId) {}
 
     public record AssignHomeroomTeacherRequest(@NotBlank String teacherId) {}
 
@@ -53,9 +57,11 @@ public final class StructureDtos {
     public record UpdateSubjectRequest(String code, @NotBlank String name, Double coefficient) {}
 
     public record CreateRoomRequest(String id, @NotBlank String code, String name,
-                                    @Min(1) @Max(1000) Integer capacity) {}
+                                    @Min(1) @Max(1000) Integer capacity,
+                                    Boolean supportsMorning, Boolean supportsAfternoon) {}
 
     public record UpdateRoomRequest(@NotBlank String code, String name,
-                                    @Min(1) @Max(1000) Integer capacity) {}
+                                    @Min(1) @Max(1000) Integer capacity,
+                                    Boolean supportsMorning, Boolean supportsAfternoon) {}
 
 }

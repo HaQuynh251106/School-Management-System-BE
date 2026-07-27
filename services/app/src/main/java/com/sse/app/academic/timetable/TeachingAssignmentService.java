@@ -17,6 +17,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.time.LocalTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
@@ -43,7 +45,8 @@ public class TeachingAssignmentService {
     }
 
     public List<TeachingAssignmentResponse> list(String classId, String subjectId, String teacherId,
-                                                  String semesterId, String dayOfWeek, Integer periodNo) {
+                                                  String semesterId, String dayOfWeek, Integer periodNo,
+                                                  String startTime, String endTime) {
         return assignments.findAll().stream()
                 .filter(item -> classId == null || classId.equals(item.getClassId()))
                 .filter(item -> subjectId == null || subjectId.equals(item.getSubjectId()))
@@ -53,7 +56,7 @@ public class TeachingAssignmentService {
                     int byClass = left.getClassCode().compareToIgnoreCase(right.getClassCode());
                     return byClass != 0 ? byClass : left.getSubjectName().compareToIgnoreCase(right.getSubjectName());
                 })
-                .map(item -> response(item, dayOfWeek, periodNo))
+                .map(item -> response(item, dayOfWeek, periodNo, startTime, endTime))
                 .toList();
     }
 
@@ -100,7 +103,7 @@ public class TeachingAssignmentService {
                     throw ApiException.conflict("Lớp đã có giáo viên phụ trách môn này trong học kỳ đã chọn");
                 });
         TeachingAssignment created = assignments.save(newAssignment(request, scope, actorId, Instant.now()));
-        return response(created, null, null);
+        return response(created, null, null, null, null);
     }
 
     @Transactional
@@ -149,7 +152,7 @@ public class TeachingAssignmentService {
             created.add(newAssignment(requests.get(index), scopes.get(index), actorId, now));
         }
         return assignments.saveAll(created).stream()
-                .map(item -> response(item, null, null))
+                .map(item -> response(item, null, null, null, null))
                 .toList();
     }
 
@@ -183,7 +186,7 @@ public class TeachingAssignmentService {
         current.setSemesterId(scope.semester().getId());
         current.setWeeklyPeriods(request.weeklyPeriods());
         current.setUpdatedAt(Instant.now());
-        return response(assignments.save(current), null, null);
+        return response(assignments.save(current), null, null, null, null);
     }
 
     @Transactional
@@ -296,7 +299,8 @@ public class TeachingAssignmentService {
                 .build();
     }
 
-    private TeachingAssignmentResponse response(TeachingAssignment item, String dayOfWeek, Integer periodNo) {
+    private TeachingAssignmentResponse response(TeachingAssignment item, String dayOfWeek, Integer periodNo,
+                                                String startTime, String endTime) {
         int scheduled = scheduledCount(item, null);
         int remaining = Math.max(0, item.getWeeklyPeriods() - scheduled);
         boolean full = remaining == 0;
@@ -312,9 +316,10 @@ public class TeachingAssignmentService {
                 .count();
         TimetableSlot busySlot = null;
         if (dayOfWeek != null && periodNo != null) {
-            busySlot = slots.findByDayOfWeekAndPeriodNo(dayOfWeek.toUpperCase(), periodNo).stream()
+            busySlot = slots.findByDayOfWeek(dayOfWeek.toUpperCase()).stream()
                     .filter(slot -> item.getSemesterId().equals(slot.getSemesterId()))
                     .filter(slot -> item.getTeacherId().equals(slot.getTeacherId()))
+                    .filter(slot -> overlaps(slot, periodNo, startTime, endTime))
                     .findFirst().orElse(null);
         }
         boolean busy = busySlot != null;
@@ -331,6 +336,26 @@ public class TeachingAssignmentService {
                 item.getSemesterId(), item.getWeeklyPeriods(), scheduled, remaining,
                 teacherClassCount, teacherWeeklyPeriods, teacherScheduledPeriods, full, busy,
                 !full && !busy, message, item.getAssignedAt(), item.getAssignedBy(), item.getUpdatedAt());
+    }
+
+    private boolean overlaps(TimetableSlot slot, Integer periodNo, String startTime, String endTime) {
+        LocalTime requestedStart = parseTime(startTime);
+        LocalTime requestedEnd = parseTime(endTime);
+        LocalTime existingStart = parseTime(slot.getStartTime());
+        LocalTime existingEnd = parseTime(slot.getEndTime());
+        if (requestedStart == null || requestedEnd == null || existingStart == null || existingEnd == null) {
+            return periodNo != null && periodNo == slot.getPeriodNo();
+        }
+        return requestedStart.isBefore(existingEnd) && existingStart.isBefore(requestedEnd);
+    }
+
+    private LocalTime parseTime(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return LocalTime.parse(value.trim());
+        } catch (DateTimeParseException ignored) {
+            return null;
+        }
     }
 
     private int scheduledCount(TeachingAssignment item, String ignoredSlotId) {

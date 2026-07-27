@@ -347,6 +347,17 @@ class SecurityIntegrationTest {
                 .andExpect(jsonPath("$[0].type").value("ATTENDANCE_REMINDER"))
                 .andExpect(jsonPath("$[0].refType").value("ATTENDANCE_SESSION"));
 
+        assertTrue(attendanceService.sendDueReminders(lessonTime.withHour(8).withMinute(0)) >= 1);
+        org.junit.jupiter.api.Assertions.assertEquals(0,
+                attendanceService.sendDueReminders(lessonTime.withHour(8).withMinute(1)));
+
+        mvc.perform(get("/notifications")
+                        .header("Authorization", "Bearer " + teacher))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].type").value("ATTENDANCE_MISSED"))
+                .andExpect(jsonPath("$[0].priority").value("URGENT"))
+                .andExpect(jsonPath("$[0].refType").value("ATTENDANCE_MISSED"));
+
         mvc.perform(get("/attendance/session-status")
                         .queryParam("slotId", "tt-1")
                         .queryParam("date", "2026-01-05")
@@ -870,7 +881,7 @@ class SecurityIntegrationTest {
         JsonNode initiated = body(mvc.perform(post("/payments")
                         .header("Authorization", "Bearer " + parent)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"invoiceId\":\"" + invoice.path("id").asText() + "\",\"method\":\"VNPAY\"}"))
+                        .content("{\"invoiceId\":\"" + invoice.path("id").asText() + "\",\"method\":\"MOMO\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.payment.status").value("PENDING"))
                 .andReturn().getResponse().getContentAsString());
@@ -1387,6 +1398,51 @@ class SecurityIntegrationTest {
     }
 
     @Test
+    void roomCanServeMorningAndAfternoonButCannotBeAssignedTwiceInSameShift() throws Exception {
+        String admin = login("admin", "admin@123");
+
+        mvc.perform(post("/rooms")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"id":"rm-shift-test","code":"SHIFT-TEST","name":"Phòng kiểm thử ca",
+                                 "capacity":60,"supportsMorning":true,"supportsAfternoon":true}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.supportsMorning").value(true))
+                .andExpect(jsonPath("$.supportsAfternoon").value(true));
+
+        mvc.perform(post("/classes")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"id":"c-shift-morning-1","code":"10S1","name":"Lớp ca sáng 1","gradeLevel":"K10",
+                                 "academicYearId":"ay-2025","studyShift":"MORNING","capacity":45,"roomId":"rm-shift-test"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.roomCode").value("SHIFT-TEST"));
+
+        mvc.perform(post("/classes")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"id":"c-shift-morning-2","code":"10S2","name":"Lớp ca sáng 2","gradeLevel":"K10",
+                                 "academicYearId":"ay-2025","studyShift":"MORNING","capacity":45,"roomId":"rm-shift-test"}
+                                """))
+                .andExpect(status().isConflict());
+
+        mvc.perform(post("/classes")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"id":"c-shift-afternoon","code":"10C1","name":"Lớp ca chiều","gradeLevel":"K10",
+                                 "academicYearId":"ay-2025","studyShift":"AFTERNOON","capacity":45,"roomId":"rm-shift-test"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.roomCode").value("SHIFT-TEST"));
+    }
+
+    @Test
     void adminCanSendCategorizedAnnouncementToOneRoleOnly() throws Exception {
         String admin = login("admin", "admin@123");
         String student = login("hs.an", "student@123");
@@ -1775,6 +1831,20 @@ class SecurityIntegrationTest {
                 .andExpect(jsonPath("$[0].canSchedule").value(false))
                 .andExpect(jsonPath("$[0].availabilityMessage")
                         .value(org.hamcrest.Matchers.containsString("đang dạy")));
+
+        mvc.perform(get("/teaching-assignments")
+                        .queryParam("classId", "c-8a1")
+                        .queryParam("subjectId", "sj-math")
+                        .queryParam("semesterId", "sm-2025-2")
+                        .queryParam("dayOfWeek", "MON")
+                        .queryParam("periodNo", "1")
+                        .queryParam("startTime", "13:00")
+                        .queryParam("endTime", "13:45")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].teacherBusy").value(false))
+                .andExpect(jsonPath("$[0].canSchedule").value(true));
+
         String teacherConflictSlot = """
                 {"classId":"c-8a1","subjectId":"sj-math","teacherId":"u-teacher-1",
                  "roomCode":"P105","dayOfWeek":"MON","periodNo":1,
@@ -1786,6 +1856,19 @@ class SecurityIntegrationTest {
                         .content(teacherConflictSlot))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("kín lịch")));
+
+        String afternoonSlotWithSamePeriodNumber = """
+                {"classId":"c-8a1","subjectId":"sj-math","teacherId":"u-teacher-1",
+                 "roomCode":"P105","dayOfWeek":"MON","periodNo":1,
+                 "startTime":"13:00","endTime":"13:45","semesterId":"sm-2025-2"}
+                """;
+        mvc.perform(post("/timetableSlots")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(afternoonSlotWithSamePeriodNumber))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.periodNo").value(1))
+                .andExpect(jsonPath("$.startTime").value("13:00"));
 
         String extraSlot = """
                 {"classId":"c-10a2","subjectId":"sj-math","teacherId":"u-teacher-1",
@@ -1881,6 +1964,111 @@ class SecurityIntegrationTest {
     }
 
     @Test
+    void backendPaginationGlobalSearchAndSafeImportWorkTogether() throws Exception {
+        String admin = login("admin", "admin@123");
+
+        mvc.perform(get("/users/page")
+                        .queryParam("role", "STUDENT")
+                        .queryParam("page", "0")
+                        .queryParam("size", "5")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(greaterThanOrEqualTo(1)))
+                .andExpect(jsonPath("$.totalElements").value(greaterThanOrEqualTo(1)))
+                .andExpect(jsonPath("$.summary.active").value(greaterThanOrEqualTo(1)));
+
+        mvc.perform(get("/search")
+                        .queryParam("q", "10A1")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(greaterThanOrEqualTo(1)))
+                .andExpect(jsonPath("$.items[*].pageId").value(hasItem("A2")));
+
+        mvc.perform(get("/audit-logs/page")
+                        .queryParam("page", "0")
+                        .queryParam("size", "5")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items").isArray())
+                .andExpect(jsonPath("$.size").value(5))
+                .andExpect(jsonPath("$.totalElements").value(greaterThanOrEqualTo(1)));
+
+        mvc.perform(get("/notifications/page")
+                        .queryParam("read", "ALL")
+                        .queryParam("page", "0")
+                        .queryParam("size", "5")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items").isArray())
+                .andExpect(jsonPath("$.summary.unread").value(greaterThanOrEqualTo(0)));
+
+        mvc.perform(get("/invoices/page")
+                        .queryParam("page", "0")
+                        .queryParam("size", "5")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items").isArray())
+                .andExpect(jsonPath("$.size").value(5));
+
+        mvc.perform(post("/chat/messages")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"toUserId\":\"u-student-1\",\"body\":\"Kiểm thử phân trang hội thoại\"}"))
+                .andExpect(status().isOk());
+        mvc.perform(get("/chat/messages/page")
+                        .queryParam("withUserId", "u-student-1")
+                        .queryParam("page", "0")
+                        .queryParam("size", "1")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.totalElements").value(greaterThanOrEqualTo(1)));
+
+        byte[] workbook = safeImportWorkbook();
+        MockMultipartFile previewFile = new MockMultipartFile(
+                "file", "safe-import.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", workbook);
+        JsonNode preview = body(mvc.perform(multipart("/users/import/preview")
+                        .file(previewFile)
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalRows").value(2))
+                .andExpect(jsonPath("$.validRows").value(1))
+                .andExpect(jsonPath("$.invalidRows").value(1))
+                .andReturn().getResponse().getContentAsString());
+
+        MockMultipartFile strictFile = new MockMultipartFile(
+                "file", "safe-import.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", workbook);
+        mvc.perform(multipart("/users/import/commit")
+                        .file(strictFile)
+                        .param("token", preview.path("token").asText())
+                        .param("strategy", "ALL_OR_NOTHING")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.importedRows").value(0))
+                .andExpect(jsonPath("$.failedRows").value(1));
+
+        mvc.perform(get("/users")
+                        .queryParam("q", "safe.import.student")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+
+        MockMultipartFile skipFile = new MockMultipartFile(
+                "file", "safe-import.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", workbook);
+        mvc.perform(multipart("/users/import/commit")
+                        .file(skipFile)
+                        .param("token", preview.path("token").asText())
+                        .param("strategy", "SKIP_ERRORS")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.importedRows").value(1))
+                .andExpect(jsonPath("$.failedRows").value(1));
+    }
+
+    @Test
     void removedFeatureEndpointsReturnNotFound() throws Exception {
         String admin = login("admin", "admin@123");
 
@@ -1921,6 +2109,35 @@ class SecurityIntegrationTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         return body(response).path("id").asText();
+    }
+
+    private byte[] safeImportWorkbook() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook();
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            var sheet = workbook.createSheet("Nguoi dung");
+            var header = sheet.createRow(0);
+            header.createCell(0).setCellValue("Tên đăng nhập");
+            header.createCell(1).setCellValue("Họ tên");
+            header.createCell(2).setCellValue("Vai trò");
+            header.createCell(3).setCellValue("Mật khẩu");
+            header.createCell(4).setCellValue("Mã lớp");
+
+            var valid = sheet.createRow(1);
+            valid.createCell(0).setCellValue("safe.import.student");
+            valid.createCell(1).setCellValue("Học sinh Import An Toàn");
+            valid.createCell(2).setCellValue("Học sinh");
+            valid.createCell(3).setCellValue("Safe@123456");
+            valid.createCell(4).setCellValue("10A1");
+
+            var invalid = sheet.createRow(2);
+            invalid.createCell(0).setCellValue("admin");
+            invalid.createCell(1).setCellValue("Tài khoản trùng");
+            invalid.createCell(2).setCellValue("Quản trị viên");
+            invalid.createCell(3).setCellValue("Safe@123456");
+
+            workbook.write(output);
+            return output.toByteArray();
+        }
     }
 
     private record Login(String username, String password) {}

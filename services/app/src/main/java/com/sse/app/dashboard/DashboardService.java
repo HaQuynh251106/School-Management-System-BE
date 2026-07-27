@@ -44,17 +44,23 @@ public class DashboardService {
                 select coalesce(100.0 * sum(case when status = 'PRESENT' then 1 else 0 end) / nullif(count(*), 0), 0)
                 from attendance_records where date = current_date
                 """);
-        double openAlerts = number("""
-                select (select count(*) from invoices where status in ('PENDING', 'PARTIAL', 'OVERDUE'))
-                     + (select count(*) from attendance_records where date = current_date
-                        and status in ('ABSENT_EXCUSED', 'ABSENT_UNEXCUSED', 'LATE'))
+        double attendanceRecords = number("select count(*) from attendance_records where date = current_date");
+        double openDebts = number("select count(*) from invoices where status in ('PENDING', 'PARTIAL', 'OVERDUE')");
+        double attendanceAlerts = number("""
+                select count(*) from attendance_records where date = current_date
+                and status in ('ABSENT_EXCUSED', 'ABSENT_UNEXCUSED', 'LATE')
                 """);
+        double openAlerts = openDebts + attendanceAlerts;
 
         List<DashboardDtos.Metric> metrics = List.of(
                 metric("users", "Tài khoản hoạt động", activeUsers, "NUMBER", "Người dùng đang có quyền truy cập", "blue"),
                 metric("classes", "Lớp học", classes, "NUMBER", "Quy mô lớp trong hệ thống", "violet"),
-                metric("attendance", "Chuyên cần hôm nay", attendance, "PERCENT", "Tỷ lệ có mặt toàn trường", "green"),
-                metric("alerts", "Cần xử lý", openAlerts, "NUMBER", "Vắng, trễ và công nợ đang mở", openAlerts > 0 ? "orange" : "green")
+                metric("attendance", "Chuyên cần hôm nay", attendance,
+                        attendanceRecords == 0 ? "PERCENT_OR_EMPTY" : "PERCENT",
+                        attendanceRecords == 0 ? "Hôm nay chưa có dữ liệu điểm danh" : "Tỷ lệ có mặt toàn trường", "green"),
+                metric("alerts", "Cần xử lý", openAlerts, "NUMBER",
+                        Math.round(attendanceAlerts) + " vắng/trễ · " + Math.round(openDebts) + " công nợ",
+                        openAlerts > 0 ? "orange" : "green")
         );
         List<DashboardDtos.Chart> charts = List.of(
                 chart("Cơ cấu người dùng", "Số tài khoản theo từng vai trò", "BAR", "", rows("""

@@ -38,7 +38,7 @@ S5     : P3 → grading
 S7     : P4 → file-service ──┐
               P3 → assignment─┘ (P3 gọi file-service upload)
 S8     : P5 → notification (consume mọi event)
-S9-S10 : P4 → finance + VNPAY
+S9-S10 : P4 → finance + MoMo
 S11    : P3 → extracurricular ──► P4 sinh invoice tự động
 S11    : P3 → year finalize
 S12    : P5 → chat + bulk noti stress test
@@ -235,8 +235,7 @@ com.sse.finance
 ├── dto/{request,response}/
 ├── mapper/
 ├── event/{publisher,listener}/
-├── gateway/        # vnpay/ + momo/ (chỉ là helper, không phải sub-domain)
-│   ├── vnpay/
+├── gateway/        # momo/ (chỉ là helper, không phải sub-domain)
 │   └── momo/
 ├── exception/
 └── util/
@@ -267,7 +266,7 @@ com.sse.file
 |---|---|
 | **S7** | File Service: MinIO bucket setup, presigned URL upload/download. Coordinate với P3 về `file_key`. |
 | **S9** | Finance migration toàn bộ. CRUD fee_categories, fee_periods, items. `POST /fee-periods/{id}/generate-invoices` sinh bulk. Publish `finance.invoice.issued`. |
-| **S10** | VNPAY + MoMo sandbox: build request HMAC, callback verify, idempotent. Refund flow. Publish `finance.invoice.paid`, `finance.payment.failed`. |
+| **S10** | MoMo sandbox: build request HMAC, IPN verify, idempotent. Refund flow. Publish `finance.invoice.paid`, `finance.payment.failed`. |
 | **S11** | Consume `academic.extracurricular.enrolled` → tự sinh invoice. Report doanh thu (A8). |
 
 **Endpoint chính (finance):**
@@ -275,7 +274,7 @@ com.sse.file
 POST   /fee-categories | /fee-periods | /fee-periods/{id}/items | /fee-periods/{id}/generate-invoices
 GET    /invoices?studentId&status | /invoices/{id}
 POST   /payments
-GET    /payments/vnpay/callback             (verify HMAC)
+POST   /payments/momo/ipn                   (verify HMAC-SHA256)
 GET    /payments/momo/callback
 POST   /refunds
 GET    /reports/revenue?from&to             (A8)
@@ -294,7 +293,7 @@ DELETE /files/{fileKey}
 **Event consume:** `academic.extracurricular.enrolled` (S11).
 
 **Acceptance:**
-- VNPAY sandbox: thanh toán đúng → `invoices.status=PAID`, có log `payment_gateway_transactions`.
+- MoMo Sandbox: thanh toán đúng → `invoices.status=PAID`, có log `payment_gateway_transactions`.
 - Chữ ký sai → `signature_valid=false`, không đổi trạng thái.
 - Idempotent: replay callback 3 lần chỉ update 1 lần.
 - Upload 50MB qua presigned, không qua backend.
@@ -439,7 +438,7 @@ Mọi consumer event PHẢI idempotent: check `event.id` trong Mongo `processed_
 | P1 | Hoàn thiện `common`. Skeleton 6 service. CI workflow build. |
 | P2 | OpenAPI cho structure. ERD `academic_db` phần 1. |
 | P3 | OpenAPI cho grading + assignment. ERD phần 2. |
-| P4 | OpenAPI finance + file. Nghiên cứu VNPAY spec + MinIO SDK. |
+| P4 | OpenAPI finance + file. Nghiên cứu MoMo spec + MinIO SDK. |
 | P5 | RabbitMQ topology + `definitions.json`. Schema MongoDB. |
 
 ### Ngày 4-5
@@ -551,7 +550,7 @@ git push -u origin feature/p1/refresh-token
 | 39 | `invoices` | P4 | Hóa đơn của HS |
 | 40 | `invoice_items` | P4 | Dòng chi tiết hóa đơn (S9) |
 | 41 | `payments` | P4 | Thanh toán |
-| 42 | `payment_gateway_transactions` | P4 | Log raw callback VNPAY/MoMo (S8) |
+| 42 | `payment_gateway_transactions` | P4 | Log IPN MoMo đã loại bỏ chữ ký bí mật (S8) |
 | 43 | `refunds` | P4 | Hoàn tiền |
 
 ### 8.4 `notification_db` — P5 (4 bảng)
@@ -691,7 +690,7 @@ git push -u origin feature/p1/refresh-token
 | PATCH | /invoices/{id}/cancel | A7 | Hủy hóa đơn |
 | POST | /payments | D4 | PH tạo payment → trả redirect URL |
 | GET | /payments/{id} | D4 | Trạng thái payment |
-| GET | /payments/vnpay/callback | D4,S8 | IPN VNPAY — verify HMAC, idempotent |
+| POST | /payments/momo/ipn | D4,S8 | IPN MoMo — verify HMAC-SHA256, idempotent |
 | GET | /payments/momo/callback | D4,S8 | IPN MoMo |
 | POST | /refunds | A7 | Yêu cầu hoàn tiền |
 | PATCH | /refunds/{id}/approve | A7 | Duyệt hoàn |

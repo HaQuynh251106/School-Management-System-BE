@@ -2,8 +2,15 @@ package com.sse.app.identity;
 
 import com.sse.app.common.ApiException;
 import com.sse.app.common.Ids;
+import com.sse.app.common.PageResponse;
 import com.sse.app.identity.IdentityDtos.*;
 import com.sse.app.academic.structure.StructureService;
+import jakarta.persistence.criteria.Predicate;
+import jakarta.persistence.criteria.Root;
+import jakarta.persistence.criteria.Subquery;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -147,6 +154,32 @@ public class UserService {
                 .toList();
     }
 
+    public PageResponse<UserDto> page(String role, String q, String classId, String gradeLevel,
+                                      String status, int page, int size, String sort) {
+        int safePage = Math.max(0, page);
+        int safeSize = Math.max(5, Math.min(size, 100));
+        Sort ordering = userSort(sort);
+        Specification<User> scope = userSpecification(role, q, classId, gradeLevel, null);
+        Specification<User> filtered = userSpecification(role, q, classId, gradeLevel, status);
+        var result = users.findAll(filtered, PageRequest.of(safePage, safeSize, ordering))
+                .map(this::toDto);
+        Map<String, Long> summary = new LinkedHashMap<>();
+        summary.put("total", users.count(scope));
+        summary.put("active", users.count(scope.and((root, query, cb) -> cb.equal(root.get("status"), "ACTIVE"))));
+        summary.put("locked", users.count(scope.and((root, query, cb) -> cb.notEqual(root.get("status"), "ACTIVE"))));
+        return PageResponse.from(result, summary);
+    }
+
+    public PageResponse<UserDto> summaryPage(String role, String q, String classId, String gradeLevel,
+                                             String status, int page, int size, String sort) {
+        int safePage = Math.max(0, page);
+        int safeSize = Math.max(5, Math.min(size, 100));
+        var result = users.findAll(userSpecification(role, q, classId, gradeLevel, status),
+                        PageRequest.of(safePage, safeSize, userSort(sort)))
+                .map(this::toSummaryDto);
+        return PageResponse.from(result);
+    }
+
     public int studentCountOfClass(String classId) {
         return Math.toIntExact(users.countByClassIdAndRole(classId, "STUDENT"));
     }
@@ -217,6 +250,67 @@ public class UserService {
                         || classId.equals(u.getClassId()))
                 .filter(u -> needle == null || needle.isEmpty() || matches(u, needle))
                 .toList();
+    }
+
+    private Specification<User> userSpecification(String role, String q, String classId,
+                                                  String gradeLevel, String status) {
+        List<String> gradeClassIds = gradeLevel == null || gradeLevel.isBlank()
+                ? List.of()
+                : structure.listClasses(null, gradeLevel).stream().map(c -> c.getId()).toList();
+        return (root, query, cb) -> {
+            List<Predicate> predicates = new ArrayList<>();
+            if (role != null && !role.isBlank()) predicates.add(cb.equal(root.get("role"), role.toUpperCase(Locale.ROOT)));
+            if (status != null && !status.isBlank()) predicates.add(cb.equal(root.get("status"), status.toUpperCase(Locale.ROOT)));
+            if (q != null && !q.isBlank()) {
+                String pattern = "%" + q.trim().toLowerCase(Locale.ROOT) + "%";
+                predicates.add(cb.or(
+                        cb.like(cb.lower(root.get("fullName")), pattern),
+                        cb.like(cb.lower(root.get("username")), pattern),
+                        cb.like(cb.lower(root.get("email")), pattern),
+                        cb.like(cb.lower(root.get("studentCode")), pattern),
+                        cb.like(cb.lower(root.get("teacherCode")), pattern),
+                        cb.like(cb.lower(root.get("phone")), pattern)
+                ));
+            }
+            List<String> scopedClasses = classId != null && !classId.isBlank()
+                    ? List.of(classId)
+                    : gradeClassIds;
+            if ((classId != null && !classId.isBlank()) || (gradeLevel != null && !gradeLevel.isBlank())) {
+                if (scopedClasses.isEmpty()) {
+                    predicates.add(cb.disjunction());
+                } else {
+                    Predicate directClass = root.get("classId").in(scopedClasses);
+                    Subquery<String> parentScope = query.subquery(String.class);
+                    Root<ParentStudent> relation = parentScope.from(ParentStudent.class);
+                    Root<User> student = parentScope.from(User.class);
+                    parentScope.select(relation.get("parentId"))
+                            .where(
+                                    cb.equal(relation.get("parentId"), root.get("id")),
+                                    cb.equal(relation.get("studentId"), student.get("id")),
+                                    student.get("classId").in(scopedClasses)
+                            );
+                    predicates.add(cb.or(directClass,
+                            cb.and(cb.equal(root.get("role"), "PARENT"), cb.exists(parentScope))));
+                }
+            }
+            return cb.and(predicates.toArray(Predicate[]::new));
+        };
+    }
+
+    private Sort userSort(String value) {
+        String normalized = value == null ? "" : value.trim();
+        boolean descending = normalized.startsWith("-");
+        String requested = descending ? normalized.substring(1) : normalized;
+        String property = switch (requested) {
+            case "username" -> "username";
+            case "createdAt" -> "createdAt";
+            case "status" -> "status";
+            case "studentCode" -> "studentCode";
+            case "teacherCode" -> "teacherCode";
+            default -> "fullName";
+        };
+        return Sort.by(descending ? Sort.Direction.DESC : Sort.Direction.ASC, property)
+                .and(Sort.by(Sort.Direction.ASC, "id"));
     }
 
     private boolean matches(User u, String needle) {

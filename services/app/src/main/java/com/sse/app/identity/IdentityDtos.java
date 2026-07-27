@@ -86,4 +86,25 @@ public final class IdentityDtos {
 
     public record ImportRowError(int row, String username, String error) {}
     public record ImportResult(int totalRows, int importedRows, int failedRows, List<ImportRowError> errors) {}
+
+    public record ImportPreviewRow(
+            int row,
+            String username,
+            String fullName,
+            String role,
+            String classCode,
+            String linkedUsername,
+            boolean valid,
+            String error
+    ) {}
+
+    public record ImportPreview(
+            String token,
+            String checksum,
+            long expiresAt,
+            int totalRows,
+            int validRows,
+            int invalidRows,
+            List<ImportPreviewRow> rows
+    ) {}
 }

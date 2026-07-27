@@ -6,6 +6,7 @@ import com.sse.app.academic.structure.StructureService;
 import com.sse.app.identity.UserService;
 import com.sse.app.security.CurrentUser;
 import com.sse.app.security.CurrentUserHolder;
+import com.sse.app.common.PageResponse;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 import jakarta.servlet.http.HttpServletRequest;
@@ -111,6 +112,29 @@ public class FinanceController {
         return finance.listInvoices(studentId, parentId, status, periodId, query, classId, gradeLevel);
     }
 
+    @GetMapping("/invoices/page")
+    public PageResponse<Invoice> invoicePage(@RequestParam(required = false) String studentId,
+                                              @RequestParam(required = false) String parentId,
+                                              @RequestParam(required = false) String status,
+                                              @RequestParam(required = false) String periodId,
+                                              @RequestParam(required = false, name = "q") String query,
+                                              @RequestParam(required = false) String classId,
+                                              @RequestParam(required = false) String gradeLevel,
+                                              @RequestParam(defaultValue = "0") int page,
+                                              @RequestParam(defaultValue = "20") int size) {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("ADMIN", "TEACHER", "PARENT", "STUDENT");
+        if (me.isParent()) {
+            if (studentId != null) users.assertParentOf(me.id(), studentId);
+            else parentId = me.id();
+        } else if (me.isStudent()) {
+            studentId = me.id();
+        } else if (me.isTeacher()) {
+            assertHomeroomClass(me.id(), classId);
+        }
+        return finance.pageInvoices(studentId, parentId, status, periodId, query, classId, gradeLevel, page, size);
+    }
+
     @GetMapping("/finance/classes")
     public List<FinanceClassSummary> classSummaries(@RequestParam(required = false) String periodId,
                                                      @RequestParam(required = false) String gradeLevel,
@@ -212,9 +236,9 @@ public class FinanceController {
         return finance.completeGatewayPayment(gateway, request);
     }
 
-    @GetMapping("/payments/vnpay/ipn")
-    public Map<String, Object> vnpayIpn(@RequestParam Map<String, String> params) {
-        return finance.completeVnpay(params);
+    @PostMapping("/payments/momo/ipn")
+    public Map<String, Object> momoIpn(@RequestBody Map<String, Object> payload) {
+        return finance.completeMomo(payload);
     }
 
     @GetMapping("/payments")

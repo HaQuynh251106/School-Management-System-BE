@@ -1,10 +1,11 @@
 package com.sse.app.audit;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 
 import java.util.List;
 
-interface AuditLogRepository extends JpaRepository<AuditLog, String> {
+interface AuditLogRepository extends JpaRepository<AuditLog, String>, JpaSpecificationExecutor<AuditLog> {
     List<AuditLog> findTop200ByOrderByCreatedAtDesc();
     List<AuditLog> findByModuleOrderByCreatedAtDesc(String module);
     List<AuditLog> findByActionOrderByCreatedAtDesc(String action);

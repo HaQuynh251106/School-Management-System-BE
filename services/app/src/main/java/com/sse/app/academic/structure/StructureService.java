@@ -230,15 +230,21 @@ public class StructureService {
     public SchoolClass createClass(CreateClassRequest r) {
         String code = normalizeCode(r.code());
         AcademicYear year = getYear(r.academicYearId());
+        String studyShift = normalizeStudyShift(r.studyShift());
+        int capacity = r.capacity() == null ? 45 : r.capacity();
         requireNotClosed(year.getStatus(), "Không thể tạo lớp trong năm học đã đóng");
         if (classes.findByAcademicYearIdAndCode(year.getId(), code).isPresent()) {
             throw ApiException.conflict("Mã lớp đã tồn tại trong năm học " + year.getCode());
         }
+        Room room = validateRoomAssignment(null, year.getId(), studyShift, r.roomId(), capacity);
         return classes.save(SchoolClass.builder()
                 .id(orGen(r.id(), "c")).code(code)
                 .name(defaultName(r.name(), "Lớp " + code))
                 .gradeLevel(normalizeCode(r.gradeLevel())).academicYearId(year.getId())
-                .capacity(r.capacity() == null ? 45 : r.capacity())
+                .studyShift(studyShift)
+                .roomId(room == null ? null : room.getId())
+                .roomCode(room == null ? null : room.getCode())
+                .capacity(capacity)
                 .studentCount(0).build());
     }
 
@@ -255,10 +261,16 @@ public class StructureService {
         if (capacity < studentCount) {
             throw ApiException.badRequest("Sức chứa không thể nhỏ hơn sĩ số hiện tại (" + studentCount + ")");
         }
+        String studyShift = r.studyShift() == null || r.studyShift().isBlank()
+                ? schoolClass.getStudyShift() : normalizeStudyShift(r.studyShift());
+        Room room = validateRoomAssignment(id, year.getId(), studyShift, r.roomId(), capacity);
         schoolClass.setCode(code);
         schoolClass.setName(defaultName(r.name(), "Lớp " + code));
         schoolClass.setGradeLevel(normalizeCode(r.gradeLevel()));
         schoolClass.setAcademicYearId(year.getId());
+        schoolClass.setStudyShift(studyShift);
+        schoolClass.setRoomId(room == null ? null : room.getId());
+        schoolClass.setRoomCode(room == null ? null : room.getCode());
         schoolClass.setCapacity(capacity);
         return classes.save(schoolClass);
     }
@@ -462,15 +474,29 @@ public class StructureService {
     @Transactional
     public Room createRoom(CreateRoomRequest r) {
         String code = normalizeCode(r.code());
+        boolean supportsMorning = r.supportsMorning() == null || r.supportsMorning();
+        boolean supportsAfternoon = r.supportsAfternoon() == null || r.supportsAfternoon();
+        validateRoomShifts(supportsMorning, supportsAfternoon);
         if (rooms.findByCode(code).isPresent()) throw ApiException.conflict("Mã phòng đã tồn tại");
         return rooms.save(Room.builder().id(orGen(r.id(), "rm")).code(code)
-                .name(defaultName(r.name(), "Phòng " + code)).capacity(r.capacity()).build());
+                .name(defaultName(r.name(), "Phòng " + code)).capacity(r.capacity())
+                .supportsMorning(supportsMorning).supportsAfternoon(supportsAfternoon).build());
     }
 
     @Transactional
     public Room updateRoom(String id, UpdateRoomRequest r) {
         Room room = rooms.findById(id).orElseThrow(() -> ApiException.notFound("Phòng học"));
         String code = normalizeCode(r.code());
+        boolean supportsMorning = r.supportsMorning() == null || r.supportsMorning();
+        boolean supportsAfternoon = r.supportsAfternoon() == null || r.supportsAfternoon();
+        validateRoomShifts(supportsMorning, supportsAfternoon);
+        List<SchoolClass> assignedClasses = classes.findByRoomId(id);
+        if (!supportsMorning && assignedClasses.stream().anyMatch(item -> "MORNING".equals(item.getStudyShift()))) {
+            throw ApiException.conflict("Phòng đang được giao cho lớp ca sáng");
+        }
+        if (!supportsAfternoon && assignedClasses.stream().anyMatch(item -> "AFTERNOON".equals(item.getStudyShift()))) {
+            throw ApiException.conflict("Phòng đang được giao cho lớp ca chiều");
+        }
         rooms.findByCode(code).filter(item -> !item.getId().equals(id))
                 .ifPresent(item -> { throw ApiException.conflict("Mã phòng đã tồn tại"); });
         if (!code.equals(room.getCode()) && hasReference(room.getCode(), "timetable_slots", "room_code")) {
@@ -479,16 +505,73 @@ public class StructureService {
         room.setCode(code);
         room.setName(defaultName(r.name(), "Phòng " + code));
         room.setCapacity(r.capacity());
-        return rooms.save(room);
+        room.setSupportsMorning(supportsMorning);
+        room.setSupportsAfternoon(supportsAfternoon);
+        Room saved = rooms.save(room);
+        assignedClasses.forEach(item -> item.setRoomCode(saved.getCode()));
+        classes.saveAll(assignedClasses);
+        return saved;
     }
 
     @Transactional
     public void deleteRoom(String id) {
         Room room = rooms.findById(id).orElseThrow(() -> ApiException.notFound("Phòng học"));
-        if (hasReference(room.getCode(), "timetable_slots", "room_code")) {
+        if (!classes.findByRoomId(id).isEmpty() || hasReference(room.getCode(), "timetable_slots", "room_code")) {
             throw ApiException.badRequest("Không thể xóa phòng đang được sử dụng trong thời khóa biểu");
         }
         rooms.delete(room);
+    }
+
+    public Room requireRoomForClass(String roomCode, String classId) {
+        if (roomCode == null || roomCode.isBlank()) return null;
+        Room room = rooms.findByCode(normalizeCode(roomCode))
+                .orElseThrow(() -> ApiException.badRequest("Phòng học không tồn tại"));
+        SchoolClass schoolClass = getClass(classId);
+        validateRoomSupportsShift(room, schoolClass.getStudyShift());
+        classes.findByAcademicYearIdAndStudyShiftAndRoomId(
+                        schoolClass.getAcademicYearId(), schoolClass.getStudyShift(), room.getId())
+                .filter(item -> !item.getId().equals(classId))
+                .ifPresent(item -> {
+                    throw ApiException.conflict("Phòng " + room.getCode() + " đã được giao cho lớp "
+                            + item.getCode() + " trong cùng ca học");
+                });
+        if (room.getCapacity() != null && room.getCapacity() < schoolClass.getStudentCount()) {
+            throw ApiException.badRequest("Sức chứa phòng nhỏ hơn sĩ số lớp");
+        }
+        return room;
+    }
+
+    private Room validateRoomAssignment(String currentClassId, String academicYearId,
+                                        String studyShift, String roomId, int classCapacity) {
+        if (roomId == null || roomId.isBlank()) return null;
+        Room room = rooms.findById(roomId).orElseThrow(() -> ApiException.notFound("Phòng học"));
+        validateRoomSupportsShift(room, studyShift);
+        classes.findByAcademicYearIdAndStudyShiftAndRoomId(academicYearId, studyShift, roomId)
+                .filter(item -> currentClassId == null || !item.getId().equals(currentClassId))
+                .ifPresent(item -> {
+                    throw ApiException.conflict("Phòng " + room.getCode() + " đã được giao cho lớp "
+                            + item.getCode() + " trong cùng ca học");
+                });
+        if (room.getCapacity() != null && room.getCapacity() < classCapacity) {
+            throw ApiException.badRequest("Sức chứa phòng " + room.getCode()
+                    + " nhỏ hơn sức chứa dự kiến của lớp");
+        }
+        return room;
+    }
+
+    private void validateRoomSupportsShift(Room room, String studyShift) {
+        if ("MORNING".equals(studyShift) && !room.isSupportsMorning()) {
+            throw ApiException.badRequest("Phòng " + room.getCode() + " không phục vụ ca sáng");
+        }
+        if ("AFTERNOON".equals(studyShift) && !room.isSupportsAfternoon()) {
+            throw ApiException.badRequest("Phòng " + room.getCode() + " không phục vụ ca chiều");
+        }
+    }
+
+    private void validateRoomShifts(boolean supportsMorning, boolean supportsAfternoon) {
+        if (!supportsMorning && !supportsAfternoon) {
+            throw ApiException.badRequest("Phòng phải phục vụ ít nhất một ca học");
+        }
     }
 
     // ---------- Seed (raw insert, dùng bởi DataSeeder) ----------
@@ -565,6 +648,15 @@ public class StructureService {
     private String normalizeCode(String code) {
         if (code == null || code.isBlank()) throw ApiException.badRequest("Mã không được để trống");
         return code.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private String normalizeStudyShift(String studyShift) {
+        if (studyShift == null || studyShift.isBlank()) return "MORNING";
+        String normalized = studyShift.trim().toUpperCase(Locale.ROOT);
+        if (!List.of("MORNING", "AFTERNOON").contains(normalized)) {
+            throw ApiException.badRequest("Ca học chỉ nhận giá trị MORNING hoặc AFTERNOON");
+        }
+        return normalized;
     }
 
     private String defaultName(String value, String fallback) {
