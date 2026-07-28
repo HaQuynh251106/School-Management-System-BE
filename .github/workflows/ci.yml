@@ -2,12 +2,15 @@ name: Backend CI
 
 on:
   pull_request:
-    branches: [develop, main]
   push:
-    branches: [develop, main]
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   verify:

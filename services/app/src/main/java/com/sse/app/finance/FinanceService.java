@@ -235,7 +235,7 @@ public class FinanceService {
         else base = invoices.findAll();
         String normalizedQuery = query == null ? null : query.trim().toLowerCase(Locale.ROOT);
         LocalDate today = LocalDate.now();
-        return base.stream()
+        List<Invoice> result = base.stream()
                 .filter(i -> periodId == null || periodId.isBlank() || periodId.equals(i.getFeePeriodId()))
                 .filter(i -> classId == null || classId.isBlank() || classId.equals(i.getClassId()))
                 .filter(i -> gradeLevel == null || gradeLevel.isBlank() || gradeLevel.equals(i.getGradeLevel()))
@@ -248,6 +248,8 @@ public class FinanceService {
                 .sorted(Comparator.comparing(Invoice::getIssuedAt,
                         Comparator.nullsLast(Comparator.reverseOrder())))
                 .toList();
+        enrichParentNames(result);
+        return result;
     }
 
     public PageResponse<Invoice> pageInvoices(String studentId, String parentId, String status,
@@ -294,8 +296,19 @@ public class FinanceService {
                     builder.like(builder.lower(root.get("gradeLevel")), pattern)
             ));
         }
-        return PageResponse.from(invoices.findAll(specification,
+        PageResponse<Invoice> result = PageResponse.from(invoices.findAll(specification,
                 Paging.request(page, size, Sort.by(Sort.Direction.DESC, "issuedAt"))));
+        enrichParentNames(result.items());
+        return result;
+    }
+
+    private void enrichParentNames(List<Invoice> rows) {
+        Map<String, String> names = new HashMap<>();
+        for (Invoice invoice : rows) {
+            String parentId = invoice.getParentId();
+            if (parentId == null || parentId.isBlank()) continue;
+            invoice.setParentName(names.computeIfAbsent(parentId, users::fullNameOf));
+        }
     }
 
     private boolean invoiceMatchesStatus(Invoice invoice, String status, LocalDate today) {

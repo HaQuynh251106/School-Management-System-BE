@@ -98,3 +98,21 @@ services/app/src/main/java/com/sse/app/
 ```
 
 Các tài liệu mô tả sáu microservice trong `docs/architecture` là thiết kế lịch sử, không phải cấu trúc runtime hiện tại.
+
+## CI/CD và triển khai production
+
+- `Backend CI` chạy Maven `clean verify` trên mọi push, pull request hoặc khi chạy thủ công.
+- `Backend Release` chạy trên `main`, tag `v*` hoặc thủ công; image được phát hành tại `ghcr.io/<owner>/<repository>`.
+- `docker-compose.prod.yml` chạy Web, Backend và PostgreSQL bằng image đã phát hành, volume bền vững, healthcheck và `SSE_COOKIE_SECURE=true`.
+
+Trên máy chủ:
+
+```bash
+cp .env.production.example .env.production
+# Thay toàn bộ mật khẩu, secret, domain và cấu hình tích hợp.
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d
+```
+
+Nên đặt Web và Backend sau reverse proxy HTTPS. Repository Web phải có variable `VITE_API_BASE` trỏ tới URL HTTPS công khai của Backend trước khi phát hành image.
+
+Để GitHub Actions tự cập nhật VPS, đặt repository variable `DEPLOY_ENABLED=true`, tạo Environment `production` và thêm các secret `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS`, `DEPLOY_PATH`. Thư mục `DEPLOY_PATH` trên máy chủ phải chứa `docker-compose.prod.yml` và file `.env` production mà Docker Compose tự đọc.

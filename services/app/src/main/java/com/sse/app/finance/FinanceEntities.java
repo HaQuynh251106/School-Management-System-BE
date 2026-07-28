@@ -62,6 +62,9 @@ class Invoice {
     private String classCode;
     private String gradeLevel;
     private String parentId;
+    /** Tên phụ huynh được bổ sung khi trả API, không lưu lặp trong hóa đơn. */
+    @Transient
+    private String parentName;
     private String feePeriodId;
     private long totalAmount;
     private long paidAmount;

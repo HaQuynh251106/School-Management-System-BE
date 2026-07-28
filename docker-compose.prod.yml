@@ -1,0 +1,82 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${SSE_DB_NAME:-sse_db}
+      POSTGRES_USER: ${SSE_DB_USER:-sse}
+      POSTGRES_PASSWORD: ${SSE_DB_PASSWORD:?SSE_DB_PASSWORD is required}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${SSE_DB_USER:-sse} -d ${SSE_DB_NAME:-sse_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [school-internal]
+
+  backend:
+    image: ${SSE_BACKEND_IMAGE:-ghcr.io/haquynh251106/school-management-system-be:latest}
+    pull_policy: always
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SSE_DB_URL: jdbc:postgresql://postgres:5432/${SSE_DB_NAME:-sse_db}
+      SSE_DB_USER: ${SSE_DB_USER:-sse}
+      SSE_DB_PASSWORD: ${SSE_DB_PASSWORD:?SSE_DB_PASSWORD is required}
+      SSE_JWT_SECRET: ${SSE_JWT_SECRET:?SSE_JWT_SECRET is required}
+      SSE_CORS_ALLOWED_ORIGINS: ${SSE_CORS_ALLOWED_ORIGINS:?SSE_CORS_ALLOWED_ORIGINS is required}
+      SSE_COOKIE_SECURE: "true"
+      SSE_SEED_ENABLED: "false"
+      SSE_STORAGE_PATH: /data/uploads
+      SSE_PAYMENT_MODE: ${SSE_PAYMENT_MODE:-disabled}
+      SSE_PAYMENT_CALLBACK_SECRET: ${SSE_PAYMENT_CALLBACK_SECRET:-}
+      SSE_MOMO_ENDPOINT: ${SSE_MOMO_ENDPOINT:-https://test-payment.momo.vn/v2/gateway/api/create}
+      SSE_MOMO_PARTNER_CODE: ${SSE_MOMO_PARTNER_CODE:-}
+      SSE_MOMO_ACCESS_KEY: ${SSE_MOMO_ACCESS_KEY:-}
+      SSE_MOMO_SECRET_KEY: ${SSE_MOMO_SECRET_KEY:-}
+      SSE_MOMO_REDIRECT_URL: ${SSE_MOMO_REDIRECT_URL:-}
+      SSE_MOMO_IPN_URL: ${SSE_MOMO_IPN_URL:-}
+      SSE_MAIL_ENABLED: ${SSE_MAIL_ENABLED:-false}
+      SSE_MAIL_HOST: ${SSE_MAIL_HOST:-localhost}
+      SSE_MAIL_PORT: ${SSE_MAIL_PORT:-587}
+      SSE_MAIL_USERNAME: ${SSE_MAIL_USERNAME:-}
+      SSE_MAIL_PASSWORD: ${SSE_MAIL_PASSWORD:-}
+      SSE_MAIL_FROM: ${SSE_MAIL_FROM:-no-reply@smartschool.local}
+      SSE_PASSWORD_RESET_URL: ${SSE_PASSWORD_RESET_URL:?SSE_PASSWORD_RESET_URL is required}
+      SSE_FIREBASE_ENABLED: ${SSE_FIREBASE_ENABLED:-false}
+      SSE_FIREBASE_PROJECT_ID: ${SSE_FIREBASE_PROJECT_ID:-}
+      SSE_FIREBASE_CREDENTIALS_BASE64: ${SSE_FIREBASE_CREDENTIALS_BASE64:-}
+    ports:
+      - "${SSE_BACKEND_PORT:-4000}:4000"
+    volumes:
+      - uploads-data:/data/uploads
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4000/actuator/health | grep -q UP"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [school-internal]
+
+  web:
+    image: ${SSE_WEB_IMAGE:-ghcr.io/haquynh251106/school-management-system-web-fe:latest}
+    pull_policy: always
+    restart: unless-stopped
+    ports:
+      - "${SSE_WEB_PORT:-80}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/ >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    networks: [school-internal]
+
+networks:
+  school-internal:
+
+volumes:
+  postgres-data:
+  uploads-data:
