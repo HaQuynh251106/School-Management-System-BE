@@ -3,6 +3,7 @@ package com.sse.app.academic.exam;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import java.time.LocalDate;
+import java.time.Instant;
 import java.util.List;
 
 public final class ExamDtos {
@@ -17,6 +18,8 @@ public final class ExamDtos {
             @Min(15) @Max(480) int durationMinutes, String notes) {}
     public record SaveRoomRequest(String id, @NotBlank String roomCode, @Min(1) @Max(1000) int capacity,
             String proctorOneId, String proctorTwoId) {}
+    public record SaveGradingAssignmentRequest(@NotBlank String classId, @NotBlank String teacherId) {}
+    public record EligibleGrader(String teacherId, String teacherCode, String teacherName) {}
     public record AllocateCandidatesRequest(@NotBlank String classId) {}
     public record ResultEntry(@NotBlank String studentId, @Min(0) @Max(10) Double score, String note, Long expectedVersion) {}
     public record SaveResultsRequest(@NotBlank String scheduleId, @NotNull @Size(min = 1) List<@Valid ResultEntry> entries) {}
@@ -37,7 +40,8 @@ public final class ExamDtos {
             String resultId, Double score, String note, String resultStatus, Long version) {}
     public record TeacherGradingTask(String examPeriodId, String examPeriodName, String scheduleId,
             String subjectId, String subjectName, String classId, String classCode,
-            LocalDate examDate, String startTime, boolean scoreEntryLocked,
+            LocalDate examDate, String startTime, Instant scoreEntryOpensAt,
+            boolean scoreEntryAvailable, boolean scoreEntryLocked,
             List<TeacherExamCandidateRow> candidates) {}
     public record StudentExamResultView(String resultId, String examPeriodId, String examPeriodName,
             String scheduleId, String subjectId, String subjectName, Double score, String note,

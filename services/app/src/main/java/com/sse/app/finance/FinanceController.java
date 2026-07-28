@@ -230,15 +230,35 @@ public class FinanceController {
         finance.remindInvoice(id);
     }
 
-    @PostMapping("/payments/callback/{gateway}")
-    public Map<String, Object> paymentCallback(@PathVariable String gateway,
-                                               @Valid @RequestBody PaymentCallbackRequest request) {
-        return finance.completeGatewayPayment(gateway, request);
+    @PostMapping("/payments/{paymentId}/submitted")
+    public Map<String, Object> markVietQrSubmitted(@PathVariable String paymentId) {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("PARENT", "ADMIN");
+        Payment payment = finance.getPayment(paymentId);
+        Invoice invoice = finance.getInvoice(payment.getInvoiceId());
+        if (me.isParent() && !me.id().equals(invoice.getParentId())) {
+            users.assertParentOf(me.id(), invoice.getStudentId());
+        }
+        return finance.markVietQrSubmitted(paymentId);
     }
 
-    @PostMapping("/payments/momo/ipn")
-    public Map<String, Object> momoIpn(@RequestBody Map<String, Object> payload) {
-        return finance.completeMomo(payload);
+    @GetMapping("/payments/vietqr/pending")
+    public List<Map<String, Object>> pendingVietQrPayments() {
+        CurrentUserHolder.requireRole("ADMIN");
+        return finance.pendingVietQrPayments();
+    }
+
+    @PostMapping("/payments/{paymentId}/confirm-vietqr")
+    public Map<String, Object> confirmVietQr(@PathVariable String paymentId,
+                                             @RequestBody(required = false) VietQrConfirmationRequest request) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return finance.confirmVietQrPayment(paymentId, request == null ? null : request.bankTransactionRef());
+    }
+
+    @PostMapping("/payments/{paymentId}/reject-vietqr")
+    public Map<String, Object> rejectVietQr(@PathVariable String paymentId) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return finance.rejectVietQrPayment(paymentId);
     }
 
     @GetMapping("/payments")

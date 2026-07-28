@@ -17,16 +17,12 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 
-/** A7: Tài chính nội bộ — đợt thu, sinh hóa đơn (2.8), thanh toán (2.9, sandbox). */
+/** A7: Tài chính nội bộ — đợt thu, sinh hóa đơn, VietQR và đối soát. */
 @Service
 public class FinanceService {
 
@@ -39,17 +35,15 @@ public class FinanceService {
     private final StructureService structure;
     private final UserService users;
     private final NotificationService notifications;
-    private final MomoGatewayClient momoGateway;
+    private final VietQrGateway vietQrGateway;
     private final String paymentMode;
-    private final String callbackSecret;
 
     public FinanceService(FeePeriodRepository periods, FeePeriodItemRepository periodItems,
                           InvoiceRepository invoices, InvoiceItemRepository invoiceItems,
                           PaymentRepository payments, PaymentGatewayTransactionRepository gatewayTransactions,
                           StructureService structure,
-                          UserService users, NotificationService notifications, MomoGatewayClient momoGateway,
-                          @Value("${sse.payments.mode:disabled}") String paymentMode,
-                          @Value("${sse.payments.callback-secret:}") String callbackSecret) {
+                          UserService users, NotificationService notifications, VietQrGateway vietQrGateway,
+                          @Value("${sse.payments.mode:disabled}") String paymentMode) {
         this.periods = periods;
         this.periodItems = periodItems;
         this.invoices = invoices;
@@ -59,9 +53,8 @@ public class FinanceService {
         this.structure = structure;
         this.users = users;
         this.notifications = notifications;
-        this.momoGateway = momoGateway;
+        this.vietQrGateway = vietQrGateway;
         this.paymentMode = paymentMode;
-        this.callbackSecret = callbackSecret;
     }
 
     // ---------- Đợt thu ----------
@@ -336,7 +329,7 @@ public class FinanceService {
         return m;
     }
 
-    // ---------- Thanh toán: tạo PENDING, chỉ callback có chữ ký mới ghi nhận thành công ----------
+    // ---------- Thanh toán VietQR: tạo QR, chờ đối soát rồi Admin xác nhận ----------
     @Transactional
     public Map<String, Object> pay(PayRequest r) {
         return pay(r, "127.0.0.1");
@@ -344,37 +337,41 @@ public class FinanceService {
 
     @Transactional
     public Map<String, Object> pay(PayRequest r, String clientIp) {
-        boolean simulatedSandbox = "sandbox".equalsIgnoreCase(paymentMode);
-        boolean momoSandbox = "momo-sandbox".equalsIgnoreCase(paymentMode);
-        if (!simulatedSandbox && !momoSandbox) {
+        if (!"vietqr".equalsIgnoreCase(paymentMode)) {
             throw ApiException.serviceUnavailable(
-                    "Cổng thanh toán chưa được cấu hình. Không có giao dịch nào được tạo.");
+                    "Thanh toán VietQR chưa được bật. Không có giao dịch nào được tạo.");
         }
         Invoice inv = getInvoice(r.invoiceId());
         long remaining = inv.getTotalAmount() - inv.getPaidAmount();
         if (remaining <= 0) throw ApiException.badRequest("Hóa đơn đã thanh toán đủ");
 
-        String method = r.method() == null ? "MOMO" : r.method().toUpperCase(Locale.ROOT);
-        if (!"MOMO".equals(method)) {
-            throw ApiException.badRequest("Hệ thống chỉ hỗ trợ thanh toán trực tuyến qua MoMo");
+        String method = r.method() == null ? "VIETQR" : r.method().toUpperCase(Locale.ROOT);
+        if (!"VIETQR".equals(method)) {
+            throw ApiException.badRequest("Hệ thống chỉ hỗ trợ thanh toán trực tuyến qua VietQR");
         }
-        if (simulatedSandbox) requireSandboxSecret();
 
         Optional<Payment> pending = payments.findFirstByInvoiceIdAndStatusOrderByCreatedAtDesc(inv.getId(), "PENDING");
-        if (pending.isPresent()) return paymentResponse(inv, pending.get(),
-                gatewayTransactions.findByPaymentId(pending.get().getId()).orElseThrow(), clientIp);
+        if (pending.isPresent()) {
+            PaymentGatewayTransaction transaction = gatewayTransactions.findByPaymentId(pending.get().getId())
+                    .orElseThrow(() -> ApiException.notFound("Giao dịch VietQR"));
+            if ("VIETQR".equals(transaction.getGateway())) {
+                return paymentResponse(inv, pending.get(), transaction);
+            }
+            pending.get().setStatus("FAILED");
+            payments.save(pending.get());
+        }
 
-        String txnRef = simulatedSandbox
-                ? "SANDBOX" + UUID.randomUUID().toString().replace("-", "").substring(0, 16).toUpperCase(Locale.ROOT)
-                : "MOMO" + System.currentTimeMillis() + UUID.randomUUID().toString().replace("-", "").substring(0, 6).toUpperCase(Locale.ROOT);
+        String txnRef = "VQR" + UUID.randomUUID().toString().replace("-", "")
+                .substring(0, 20).toUpperCase(Locale.ROOT);
         Payment payment = payments.save(Payment.builder()
                 .id(Ids.gen("pay")).invoiceId(inv.getId()).amount(remaining).method(method)
                 .status("PENDING").txnRef(txnRef).createdAt(Instant.now()).build());
+        VietQrGateway.VietQrPayment qr = vietQrGateway.create(txnRef, remaining);
         PaymentGatewayTransaction transaction = gatewayTransactions.save(PaymentGatewayTransaction.builder()
                 .id(Ids.gen("pgt")).paymentId(payment.getId()).txnRef(txnRef).gateway(method)
-                .status("PENDING").requestPayload(simulatedSandbox ? canonical(txnRef, "SUCCESS", remaining) : "MOMO_SANDBOX")
+                .status("PENDING").requestPayload(qr.qrImageUrl())
                 .signatureValid(false).createdAt(Instant.now()).updatedAt(Instant.now()).build());
-        return paymentResponse(inv, payment, transaction, clientIp);
+        return paymentResponse(inv, payment, transaction);
     }
 
     @Transactional
@@ -629,63 +626,86 @@ public class FinanceService {
         return completionRef(periodId, classId) + ":" + LocalDate.now();
     }
 
-    @Transactional(noRollbackFor = ApiException.class)
-    public Map<String, Object> completeGatewayPayment(String gateway, PaymentCallbackRequest request) {
-        if (!"sandbox".equalsIgnoreCase(paymentMode)) {
-            throw ApiException.serviceUnavailable("Callback sandbox đang bị tắt");
+    @Transactional
+    public Map<String, Object> markVietQrSubmitted(String paymentId) {
+        Payment payment = getVietQrPayment(paymentId);
+        PaymentGatewayTransaction transaction = gatewayTransactions.findByPaymentId(paymentId)
+                .orElseThrow(() -> ApiException.notFound("Giao dịch VietQR"));
+        if ("SUCCESS".equals(payment.getStatus())) {
+            return callbackResult(getInvoice(payment.getInvoiceId()), payment, transaction);
         }
-        requireSandboxSecret();
-        String normalizedGateway = gateway.toUpperCase(Locale.ROOT);
-        PaymentGatewayTransaction transaction = gatewayTransactions.findByTxnRef(request.txnRef())
-                .orElseThrow(() -> ApiException.notFound("Giao dịch cổng thanh toán"));
-        if (!normalizedGateway.equals(transaction.getGateway())) {
-            throw ApiException.badRequest("Cổng thanh toán không khớp với giao dịch");
+        if (!"PENDING".equals(payment.getStatus())) {
+            throw ApiException.badRequest("Giao dịch VietQR không còn chờ thanh toán");
         }
-        Payment payment = payments.findById(transaction.getPaymentId())
-                .orElseThrow(() -> ApiException.notFound("Thanh toán"));
-        Invoice invoice = getInvoice(payment.getInvoiceId());
-
-        String status = request.status().toUpperCase(Locale.ROOT);
-        if (!Set.of("SUCCESS", "FAILED").contains(status)) {
-            throw ApiException.badRequest("Trạng thái callback không hợp lệ");
-        }
-        String payload = canonical(request.txnRef(), status, request.amount());
-        boolean signatureValid = verify(payload, request.signature());
-        transaction.setCallbackPayload(payload);
-        transaction.setSignatureValid(signatureValid);
+        transaction.setStatus("AWAITING_CONFIRMATION");
         transaction.setUpdatedAt(Instant.now());
-        if (!signatureValid) {
-            transaction.setStatus("REJECTED");
-            gatewayTransactions.save(transaction);
-            throw ApiException.forbidden("Chữ ký callback thanh toán không hợp lệ");
-        }
-        if (request.amount() != payment.getAmount()) {
-            transaction.setStatus("REJECTED");
-            gatewayTransactions.save(transaction);
-            throw ApiException.badRequest("Số tiền callback không khớp");
-        }
-        if ("SUCCESS".equals(payment.getStatus())) return callbackResult(invoice, payment, transaction);
+        gatewayTransactions.save(transaction);
+        return callbackResult(getInvoice(payment.getInvoiceId()), payment, transaction);
+    }
 
-        if ("FAILED".equals(status)) {
-            payment.setStatus("FAILED");
-            transaction.setStatus("FAILED");
-        } else {
-            payment.setStatus("SUCCESS");
-            payment.setPaidAt(Instant.now());
-            transaction.setStatus("SUCCESS");
-            invoice.setPaidAmount(Math.min(invoice.getTotalAmount(), invoice.getPaidAmount() + payment.getAmount()));
-            invoice.setStatus(invoice.getPaidAmount() >= invoice.getTotalAmount() ? "PAID" : "PARTIAL");
-            invoices.save(invoice);
-            if (invoice.getParentId() != null) {
-                notifications.notifyUserWithTransactionalEmail(invoice.getParentId(), "INVOICE", "Thanh toán thành công",
-                        String.format("Biên nhận %s%nHọc sinh: %s%nSố tiền: %,d₫%nPhương thức: Mô phỏng MoMo%nMã giao dịch: %s%nTrạng thái: Thành công",
-                                invoice.getCode(), invoice.getStudentName(), payment.getAmount(), payment.getTxnRef()),
-                        "PAYMENT", payment.getId());
-            }
+    public List<Map<String, Object>> pendingVietQrPayments() {
+        return gatewayTransactions
+                .findByGatewayAndStatusInOrderByCreatedAtDesc(
+                        "VIETQR", List.of("PENDING", "AWAITING_CONFIRMATION"))
+                .stream()
+                .map(transaction -> {
+                    Payment payment = payments.findById(transaction.getPaymentId()).orElse(null);
+                    if (payment == null || !"PENDING".equals(payment.getStatus())) return null;
+                    Invoice invoice = getInvoice(payment.getInvoiceId());
+                    return paymentResponse(invoice, payment, transaction);
+                })
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
+    @Transactional
+    public Map<String, Object> confirmVietQrPayment(String paymentId, String bankTransactionRef) {
+        Payment payment = getVietQrPayment(paymentId);
+        PaymentGatewayTransaction transaction = gatewayTransactions.findByPaymentId(paymentId)
+                .orElseThrow(() -> ApiException.notFound("Giao dịch VietQR"));
+        Invoice invoice = getInvoice(payment.getInvoiceId());
+        if ("SUCCESS".equals(payment.getStatus())) return callbackResult(invoice, payment, transaction);
+        if (!Set.of("PENDING", "AWAITING_CONFIRMATION").contains(transaction.getStatus())) {
+            throw ApiException.badRequest("Giao dịch VietQR không ở trạng thái có thể xác nhận");
         }
+
+        payment.setStatus("SUCCESS");
+        payment.setPaidAt(Instant.now());
+        transaction.setStatus("SUCCESS");
+        transaction.setSignatureValid(true);
+        transaction.setCallbackPayload("ADMIN_CONFIRMED:"
+                + (bankTransactionRef == null || bankTransactionRef.isBlank()
+                ? payment.getTxnRef() : bankTransactionRef.trim()));
+        transaction.setUpdatedAt(Instant.now());
+        invoice.setPaidAmount(Math.min(invoice.getTotalAmount(), invoice.getPaidAmount() + payment.getAmount()));
+        invoice.setStatus(invoice.getPaidAmount() >= invoice.getTotalAmount() ? "PAID" : "PARTIAL");
+
         payments.save(payment);
         gatewayTransactions.save(transaction);
+        invoices.save(invoice);
+        if (invoice.getParentId() != null) {
+            notifications.notifyUserWithTransactionalEmail(invoice.getParentId(), "INVOICE", "Thanh toán thành công",
+                    String.format("Biên nhận %s%nHọc sinh: %s%nSố tiền: %,d₫%nPhương thức: VietQR%nNội dung chuyển khoản: %s%nTrạng thái: Thành công",
+                            invoice.getCode(), invoice.getStudentName(), payment.getAmount(), payment.getTxnRef()),
+                    "PAYMENT", payment.getId());
+        }
         return callbackResult(invoice, payment, transaction);
+    }
+
+    @Transactional
+    public Map<String, Object> rejectVietQrPayment(String paymentId) {
+        Payment payment = getVietQrPayment(paymentId);
+        PaymentGatewayTransaction transaction = gatewayTransactions.findByPaymentId(paymentId)
+                .orElseThrow(() -> ApiException.notFound("Giao dịch VietQR"));
+        if ("SUCCESS".equals(payment.getStatus())) {
+            throw ApiException.badRequest("Không thể từ chối giao dịch đã được đối soát thành công");
+        }
+        payment.setStatus("FAILED");
+        transaction.setStatus("REJECTED");
+        transaction.setUpdatedAt(Instant.now());
+        payments.save(payment);
+        gatewayTransactions.save(transaction);
+        return callbackResult(getInvoice(payment.getInvoiceId()), payment, transaction);
     }
 
     @Scheduled(fixedDelayString = "${sse.payments.reconciliation-interval-ms:3600000}")
@@ -708,96 +728,31 @@ public class FinanceService {
 
     public List<Payment> paymentsOf(String invoiceId) { return payments.findByInvoiceId(invoiceId); }
 
+    public Payment getPayment(String paymentId) {
+        return payments.findById(paymentId).orElseThrow(() -> ApiException.notFound("Thanh toán"));
+    }
+
     private Map<String, Object> paymentResponse(Invoice invoice, Payment payment,
-                                                PaymentGatewayTransaction transaction, String clientIp) {
-        if ("momo-sandbox".equalsIgnoreCase(paymentMode)) {
-            Map<String, Object> result = callbackResult(invoice, payment, transaction);
-            MomoGatewayClient.MomoCreateResult created =
-                    momoGateway.createPayment(payment.getTxnRef(), payment.getAmount(), invoice.getCode());
-            transaction.setRequestPayload("MOMO_SANDBOX_CREATE:" + created.resultCode());
-            transaction.setUpdatedAt(Instant.now());
-            gatewayTransactions.save(transaction);
-            result.put("paymentUrl", created.payUrl());
-            result.put("gateway", "MOMO");
-            return result;
-        }
-        PaymentCallbackRequest callback = new PaymentCallbackRequest(transaction.getTxnRef(), "SUCCESS",
-                payment.getAmount(), sign(canonical(transaction.getTxnRef(), "SUCCESS", payment.getAmount())));
+                                                PaymentGatewayTransaction transaction) {
+        VietQrGateway.VietQrPayment qr = vietQrGateway.create(payment.getTxnRef(), payment.getAmount());
         Map<String, Object> result = callbackResult(invoice, payment, transaction);
-        result.put("callbackUrl", "/payments/callback/" + transaction.getGateway().toLowerCase(Locale.ROOT));
-        result.put("sandboxCallback", callback);
+        result.put("gateway", "VIETQR");
+        result.put("qrImageUrl", qr.qrImageUrl());
+        result.put("bankId", qr.bankId());
+        result.put("accountNo", qr.accountNo());
+        result.put("accountName", qr.accountName());
+        result.put("transferContent", qr.transferContent());
+        result.put("expiresAt", transaction.getCreatedAt().plus(30, ChronoUnit.MINUTES));
         return result;
     }
 
-    @Transactional
-    public Map<String, Object> completeMomo(Map<String, Object> payload) {
-        String txnRef = Objects.toString(payload.get("orderId"), "");
-        if (txnRef.isBlank()) return momoIpnResponse(payload, 1001, "Thiếu mã giao dịch");
-
-        Optional<PaymentGatewayTransaction> found = gatewayTransactions.findByTxnRef(txnRef);
-        if (found.isEmpty()) return momoIpnResponse(payload, 1002, "Không tìm thấy giao dịch");
-        PaymentGatewayTransaction transaction = found.get();
-        Payment payment = payments.findById(transaction.getPaymentId()).orElse(null);
-        if (payment == null) return momoIpnResponse(payload, 1002, "Không tìm thấy thanh toán");
-        Invoice invoice = getInvoice(payment.getInvoiceId());
-
-        transaction.setCallbackPayload(momoGateway.safeCallbackPayload(payload));
-        transaction.setUpdatedAt(Instant.now());
-        boolean signatureValid = momoGateway.verifyIpn(payload);
-        transaction.setSignatureValid(signatureValid);
-        if (!signatureValid) {
-            transaction.setStatus("REJECTED");
-            gatewayTransactions.save(transaction);
-            return momoIpnResponse(payload, 1003, "Chữ ký không hợp lệ");
+    private Payment getVietQrPayment(String paymentId) {
+        Payment payment = payments.findById(paymentId)
+                .orElseThrow(() -> ApiException.notFound("Thanh toán VietQR"));
+        if (!"VIETQR".equals(payment.getMethod())) {
+            throw ApiException.badRequest("Giao dịch không thuộc phương thức VietQR");
         }
-
-        long amount;
-        int resultCode;
-        try {
-            amount = Long.parseLong(Objects.toString(payload.get("amount"), "0"));
-            resultCode = Integer.parseInt(Objects.toString(payload.get("resultCode"), "-1"));
-        } catch (NumberFormatException ignored) {
-            transaction.setStatus("REJECTED");
-            gatewayTransactions.save(transaction);
-            return momoIpnResponse(payload, 1004, "Dữ liệu giao dịch không hợp lệ");
-        }
-        if (amount != payment.getAmount()) {
-            transaction.setStatus("REJECTED");
-            gatewayTransactions.save(transaction);
-            return momoIpnResponse(payload, 1004, "Số tiền không khớp");
-        }
-        if ("SUCCESS".equals(payment.getStatus())) {
-            return momoIpnResponse(payload, 0, "Giao dịch đã được xác nhận");
-        }
-
-        if (resultCode == 0) {
-            payment.setStatus("SUCCESS");
-            payment.setPaidAt(Instant.now());
-            transaction.setStatus("SUCCESS");
-            invoice.setPaidAmount(Math.min(invoice.getTotalAmount(), invoice.getPaidAmount() + payment.getAmount()));
-            invoice.setStatus(invoice.getPaidAmount() >= invoice.getTotalAmount() ? "PAID" : "PARTIAL");
-            invoices.save(invoice);
-            if (invoice.getParentId() != null) {
-                notifications.notifyUserWithTransactionalEmail(invoice.getParentId(), "INVOICE", "Thanh toán thành công",
-                        String.format("Biên nhận %s%nHọc sinh: %s%nSố tiền: %,d₫%nPhương thức: MoMo%nMã giao dịch: %s%nTrạng thái: Thành công",
-                                invoice.getCode(), invoice.getStudentName(), payment.getAmount(), payment.getTxnRef()),
-                        "PAYMENT", payment.getId());
-            }
-        } else {
-            payment.setStatus("FAILED");
-            transaction.setStatus("FAILED");
-        }
-        payments.save(payment);
-        gatewayTransactions.save(transaction);
-        return momoIpnResponse(payload, 0, "Đã tiếp nhận kết quả");
-    }
-
-    private Map<String, Object> momoIpnResponse(Map<String, Object> payload, int resultCode, String message) {
-        return momoGateway.ipnResponse(
-                Objects.toString(payload.get("orderId"), ""),
-                Objects.toString(payload.get("requestId"), ""),
-                resultCode,
-                message);
+        return payment;
     }
 
     private Map<String, Object> callbackResult(Invoice invoice, Payment payment,
@@ -807,32 +762,6 @@ public class FinanceService {
         result.put("invoice", invoice);
         result.put("gatewayStatus", transaction.getStatus());
         return result;
-    }
-
-    private String canonical(String txnRef, String status, long amount) {
-        return txnRef + "|" + status + "|" + amount;
-    }
-
-    private String sign(String value) {
-        try {
-            Mac mac = Mac.getInstance("HmacSHA256");
-            mac.init(new SecretKeySpec(callbackSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
-            return HexFormat.of().formatHex(mac.doFinal(value.getBytes(StandardCharsets.UTF_8)));
-        } catch (Exception ex) {
-            throw new IllegalStateException("Không thể ký callback thanh toán", ex);
-        }
-    }
-
-    private boolean verify(String value, String signature) {
-        byte[] expected = sign(value).getBytes(StandardCharsets.US_ASCII);
-        byte[] actual = signature.toLowerCase(Locale.ROOT).getBytes(StandardCharsets.US_ASCII);
-        return MessageDigest.isEqual(expected, actual);
-    }
-
-    private void requireSandboxSecret() {
-        if (callbackSecret == null || callbackSecret.length() < 32) {
-            throw ApiException.serviceUnavailable("Khóa ký callback thanh toán chưa được cấu hình an toàn");
-        }
     }
 
     /** Seed: 1 đợt thu mẫu + sinh hóa đơn cho mọi HS (để demo có dữ liệu ngay). Idempotent. */

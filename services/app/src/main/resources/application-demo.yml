@@ -22,7 +22,11 @@ sse:
   password-reset:
     expose-token: true
   payments:
-    mode: sandbox
-    callback-secret: demo-sandbox-callback-secret-change-me
+    mode: vietqr
+    vietqr:
+      bank-id: MB
+      account-no: "0123456789"
+      account-name: TRUONG HOC SO DEMO
+      template: compact2
   storage:
     path: ${SSE_DEMO_STORAGE_PATH:./data/demo-uploads}

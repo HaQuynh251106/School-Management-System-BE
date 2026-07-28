@@ -25,6 +25,8 @@ public final class FinanceDtos {
 
     public record CashPaymentRequest(@NotBlank String invoiceId, @Positive Long amount) {}
 
+    public record VietQrConfirmationRequest(String bankTransactionRef) {}
+
     /** Tổng hợp công nợ theo lớp để Admin điều hành và GVCN theo dõi lớp mình. */
     public record FinanceClassSummary(
             String classId, String classCode, String gradeLevel,

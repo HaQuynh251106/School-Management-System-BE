@@ -11,6 +11,7 @@ import java.time.Instant;
 interface NotificationRepository extends JpaRepository<Notification, String>, JpaSpecificationExecutor<Notification> {
     List<Notification> findByRecipientIdOrderByCreatedAtDesc(String recipientId);
     List<Notification> findByRecipientIdAndReadIsFalseOrderByCreatedAtDesc(String recipientId);
+    List<Notification> findByRefTypeAndRefId(String refType, String refId);
     long countByRecipientIdAndReadIsFalse(String recipientId);
     boolean existsByRecipientIdAndRefTypeAndRefId(String recipientId, String refType, String refId);
 }
@@ -31,6 +32,7 @@ interface NotificationPreferenceRepository extends JpaRepository<NotificationPre
 
 interface NotificationDeliveryLogRepository extends JpaRepository<NotificationDeliveryLog, String> {
     List<NotificationDeliveryLog> findTop200ByOrderByCreatedAtDesc();
+    void deleteByNotificationIdIn(List<String> notificationIds);
     List<NotificationDeliveryLog> findTop100ByStatusInAndAttemptsLessThanAndNextAttemptAtLessThanEqualOrderByNextAttemptAtAsc(
             List<String> statuses, int maxAttempts, Instant now);
 }

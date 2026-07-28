@@ -6,6 +6,12 @@ import java.util.*;
 interface ExamPeriodRepository extends JpaRepository<ExamPeriod, String> { Optional<ExamPeriod> findByCode(String code); }
 interface ExamScheduleRepository extends JpaRepository<ExamSchedule, String> { List<ExamSchedule> findByExamPeriodId(String examPeriodId); }
 interface ExamRoomRepository extends JpaRepository<ExamRoom, String> { List<ExamRoom> findByScheduleId(String scheduleId); }
+interface ExamGradingAssignmentRepository extends JpaRepository<ExamGradingAssignment, String> {
+    List<ExamGradingAssignment> findByExamPeriodId(String examPeriodId);
+    List<ExamGradingAssignment> findByScheduleId(String scheduleId);
+    List<ExamGradingAssignment> findByTeacherId(String teacherId);
+    Optional<ExamGradingAssignment> findByScheduleIdAndClassId(String scheduleId, String classId);
+}
 interface ExamCandidateRepository extends JpaRepository<ExamCandidate, String> {
     List<ExamCandidate> findByExamPeriodId(String examPeriodId);
     List<ExamCandidate> findByExamPeriodIdAndClassId(String examPeriodId, String classId);

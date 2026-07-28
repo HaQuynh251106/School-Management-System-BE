@@ -15,6 +15,7 @@ import com.sse.app.realtime.RealtimeEventHub;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -130,6 +131,26 @@ public class NotificationService {
     public boolean hasNotification(String recipientId, String refType, String refId) {
         return recipientId != null && notifications.existsByRecipientIdAndRefTypeAndRefId(
                 recipientId, refType, refId);
+    }
+
+    /**
+     * Xóa thông báo nghiệp vụ đã trở nên không còn đúng sau khi dữ liệu nguồn được hiệu chỉnh.
+     * Ví dụ: một lượt vắng được đối soát thành nghỉ có phép thì cảnh báo vắng cũ không được tiếp
+     * tục hiển thị cho học sinh và phụ huynh.
+     */
+    @Transactional
+    public void removeByReference(String refType, String refId) {
+        List<Notification> matched = notifications.findByRefTypeAndRefId(refType, refId);
+        if (matched.isEmpty()) return;
+        List<String> notificationIds = matched.stream().map(Notification::getId).toList();
+        Set<String> recipients = matched.stream().map(Notification::getRecipientId)
+                .filter(java.util.Objects::nonNull).collect(java.util.stream.Collectors.toSet());
+        deliveryLogs.deleteByNotificationIdIn(notificationIds);
+        notifications.deleteAllInBatch(matched);
+        recipients.forEach(recipientId -> realtime.publish(recipientId, "NOTIFICATION", Map.of(
+                "action", "REMOVED",
+                "refType", refType,
+                "refId", refId)));
     }
 
     /** 2.5/2.6: bắn cho tất cả phụ huynh của một học sinh. */

@@ -15,6 +15,7 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import java.io.ByteArrayOutputStream;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import jakarta.servlet.http.Cookie;
 
 import static org.hamcrest.Matchers.nullValue;
@@ -23,6 +24,7 @@ import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.everyItem;
 import static org.hamcrest.Matchers.is;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
@@ -44,6 +46,7 @@ class SecurityIntegrationTest {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper json;
     @Autowired com.sse.app.academic.attendance.AttendanceService attendanceService;
+    @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     @Test
     void healthIsPublicButBusinessEndpointsRequireAuthentication() throws Exception {
@@ -52,7 +55,34 @@ class SecurityIntegrationTest {
                 .andExpect(jsonPath("$.status").value("UP"));
 
         mvc.perform(get("/users"))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().exists("X-Request-ID"))
+                .andExpect(jsonPath("$.code").value("AUTH_TOKEN_MISSING"))
+                .andExpect(jsonPath("$.requestId").isString())
+                .andExpect(jsonPath("$.path").value("/users"));
+    }
+
+    @Test
+    void preservesSafeClientRequestIdInStructuredErrors() throws Exception {
+        String requestId = "web-test-20260728-001";
+        mvc.perform(get("/users").header("X-Request-ID", requestId))
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().string("X-Request-ID", requestId))
+                .andExpect(jsonPath("$.requestId").value(requestId))
+                .andExpect(jsonPath("$.status").value(401))
+                .andExpect(jsonPath("$.fieldErrors").isMap());
+    }
+
+    @Test
+    void adminDashboardQueriesWorkOnBothPostgresqlAndDemoH2() throws Exception {
+        String admin = login("admin", "admin@123");
+
+        mvc.perform(get("/dashboard")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.metrics.length()").value(4))
+                .andExpect(jsonPath("$.charts.length()").value(2))
+                .andExpect(jsonPath("$.charts[0].data.length()", greaterThanOrEqualTo(1)));
     }
 
     @Test
@@ -823,6 +853,90 @@ class SecurityIntegrationTest {
     }
 
     @Test
+    void approvedLeaveReconcilesAttendanceAndSuppressesDuplicateAlerts() throws Exception {
+        String teacher = login("gv.hoa", "teacher@123");
+        LocalDate date = LocalDate.of(2025, 12, 29); // Thứ Hai, khớp tiết tt-1.
+
+        jdbc.update("""
+                insert into attendance_records
+                    (id, student_id, class_id, slot_id, date, status, note, subject_name, period_no)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, "att-approved-leave-flow", "u-student-1", "c-10a1", "tt-1", date,
+                "ABSENT_UNEXCUSED", "Chưa nhận được đơn", "Toán", 1);
+        for (String recipientId : List.of("u-student-1", "u-parent-1")) {
+            jdbc.update("""
+                    insert into notifications
+                        (id, recipient_id, type, priority, title, body, read, ref_type, ref_id, created_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, "noti-approved-leave-" + recipientId, recipientId, "ATTENDANCE", "URGENT",
+                    "Cảnh báo chuyên cần", "Vắng chưa phép", false,
+                    "ATTENDANCE", "att-approved-leave-flow", Instant.now());
+        }
+        jdbc.update("""
+                insert into leave_requests
+                    (id, student_id, student_name, class_id, class_code, start_date, end_date, reason,
+                     status, parent_id, parent_name, parent_confirmed_at, homeroom_teacher_id,
+                     homeroom_teacher_name, created_at, updated_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, "leave-approved-attendance-flow", "u-student-1", "Phạm Hoài An",
+                "c-10a1", "10A1", date, date, "Nghỉ khám sức khỏe",
+                "PENDING_HOMEROOM", "u-parent-1", "Phạm Văn Phúc", Instant.now(),
+                "u-teacher-1", "Trần Thị Hoa", Instant.now(), Instant.now());
+
+        mvc.perform(post("/leave-requests/leave-approved-attendance-flow/approve")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"Đã kiểm tra và duyệt đơn\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPROVED"));
+
+        assertEquals("ABSENT_EXCUSED", jdbc.queryForObject(
+                "select status from attendance_records where id = ?",
+                String.class, "att-approved-leave-flow"));
+        assertEquals("Đơn xin nghỉ đã được GVCN duyệt", jdbc.queryForObject(
+                "select note from attendance_records where id = ?",
+                String.class, "att-approved-leave-flow"));
+        assertEquals(0, jdbc.queryForObject(
+                "select count(*) from notifications where ref_type = 'ATTENDANCE' and ref_id = ?",
+                Integer.class, "att-approved-leave-flow"));
+
+        mvc.perform(post("/attendance/bulk")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"slotId":"tt-1","date":"2025-12-29","marks":[
+                                  {"studentId":"u-student-1","status":"PRESENT"}]}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].status").value("PRESENT"));
+
+        mvc.perform(post("/attendance/bulk")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"slotId":"tt-1","date":"2025-12-29","marks":[
+                                  {"studentId":"u-student-1","status":"ABSENT_UNEXCUSED"}]}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].status").value("ABSENT_EXCUSED"))
+                .andExpect(jsonPath("$[0].note").value("Đơn xin nghỉ đã được GVCN duyệt"));
+
+        assertEquals(0, jdbc.queryForObject(
+                "select count(*) from notifications where ref_type = 'ATTENDANCE' and ref_id = ?",
+                Integer.class, "att-approved-leave-flow"));
+
+        mvc.perform(post("/attendance/bulk")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"slotId":"tt-1","date":"2025-12-29","marks":[
+                                  {"studentId":"u-student-1","status":"LATE"}]}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("ghi chú")));
+    }
+
+    @Test
     void eachFamilyRoleCanUsePersonalReportsAndProfileSettings() throws Exception {
         for (String token : new String[]{
                 login("gv.hoa", "teacher@123"),
@@ -881,17 +995,29 @@ class SecurityIntegrationTest {
         JsonNode initiated = body(mvc.perform(post("/payments")
                         .header("Authorization", "Bearer " + parent)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"invoiceId\":\"" + invoice.path("id").asText() + "\",\"method\":\"MOMO\"}"))
+                        .content("{\"invoiceId\":\"" + invoice.path("id").asText() + "\",\"method\":\"VIETQR\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.payment.status").value("PENDING"))
+                .andExpect(jsonPath("$.gateway").value("VIETQR"))
+                .andExpect(jsonPath("$.qrImageUrl").isString())
+                .andExpect(jsonPath("$.transferContent").isString())
                 .andReturn().getResponse().getContentAsString());
-        String callbackUrl = initiated.path("callbackUrl").asText();
-        String callbackBody = json.writeValueAsString(initiated.path("sandboxCallback"));
-        mvc.perform(post(callbackUrl).contentType(MediaType.APPLICATION_JSON).content(callbackBody))
+        String paymentId = initiated.path("payment").path("id").asText();
+        mvc.perform(post("/payments/" + paymentId + "/submitted")
+                        .header("Authorization", "Bearer " + parent))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.gatewayStatus").value("AWAITING_CONFIRMATION"));
+        mvc.perform(post("/payments/" + paymentId + "/confirm-vietqr")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"bankTransactionRef\":\"BANK-TEST-001\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.payment.status").value("SUCCESS"))
                 .andExpect(jsonPath("$.invoice.status").value("PAID"));
-        mvc.perform(post(callbackUrl).contentType(MediaType.APPLICATION_JSON).content(callbackBody))
+        mvc.perform(post("/payments/" + paymentId + "/confirm-vietqr")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.payment.status").value("SUCCESS"))
                 .andExpect(jsonPath("$.invoice.paidAmount").value(invoice.path("totalAmount").asLong()));

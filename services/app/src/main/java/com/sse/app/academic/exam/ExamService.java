@@ -16,9 +16,12 @@ import java.util.*;
 
 @Service @RequiredArgsConstructor
 public class ExamService {
+    private static final ZoneId SCHOOL_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
+
     private final ExamPeriodRepository periods;
     private final ExamScheduleRepository schedules;
     private final ExamRoomRepository rooms;
+    private final ExamGradingAssignmentRepository gradingAssignments;
     private final ExamCandidateRepository candidates;
     private final ExamResultRepository results;
     private final ExamReviewRepository reviews;
@@ -128,6 +131,34 @@ public class ExamService {
                     + " chưa xếp thí sinh cho lớp " + String.join(", ", missingClasses));
         }
 
+        for (ExamSchedule schedule : periodSchedules) {
+            List<ExamGradingAssignment> scheduleGraders = gradingAssignments.findByScheduleId(schedule.getId());
+            Set<String> gradedClasses = scheduleGraders.stream()
+                    .map(ExamGradingAssignment::getClassId)
+                    .collect(java.util.stream.Collectors.toSet());
+            List<String> classesWithoutGrader = schedule.getClassIds().stream()
+                    .filter(classId -> !gradedClasses.contains(classId))
+                    .map(classId -> structure.getClass(classId).getCode())
+                    .sorted()
+                    .toList();
+            if (!classesWithoutGrader.isEmpty()) {
+                throw ApiException.conflict("Môn " + schedule.getSubjectName()
+                        + " chưa phân công giáo viên chấm thi cho lớp "
+                        + String.join(", ", classesWithoutGrader));
+            }
+            Set<String> eligibleTeacherIds = eligibleGraders(schedule.getId()).stream()
+                    .map(EligibleGrader::teacherId)
+                    .collect(java.util.stream.Collectors.toSet());
+            Optional<ExamGradingAssignment> invalidGrader = scheduleGraders.stream()
+                    .filter(assignment -> !schedule.getSubjectId().equals(assignment.getSubjectId())
+                            || !eligibleTeacherIds.contains(assignment.getTeacherId()))
+                    .findFirst();
+            if (invalidGrader.isPresent()) {
+                throw ApiException.conflict("Giáo viên " + invalidGrader.get().getTeacherName()
+                        + " không còn đúng chuyên môn " + schedule.getSubjectName());
+            }
+        }
+
         int nextRevision = period.getScheduleRevision() + 1;
         period.setSchedulePublished(true);
         period.setScheduleRevision(nextRevision);
@@ -169,15 +200,16 @@ public class ExamService {
                                     period, schedule, room, null, examStatus(schedule)));
                         }
                     }
-                    Set<String> assignedClasses = candidates.findByScheduleId(schedule.getId()).stream()
-                            .map(ExamCandidate::getClassId)
-                            .filter(classId -> teachingAssignments.isAssigned(actor.id(), classId,
-                                    schedule.getSubjectId(), period.getSemesterId()))
-                            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-                    for (String classId : assignedClasses) {
-                        ExamCandidate sample = candidates.findByScheduleIdAndClassId(schedule.getId(), classId).stream().findFirst().orElse(null);
-                        items.add(agendaItem(schedule.getId() + ":grade:" + classId, "GRADE_ENTRY", "Nhập điểm",
-                                period, schedule, null, sample, gradingStatus(period, schedule, classId)));
+                    for (ExamGradingAssignment assignment : gradingAssignments.findByScheduleId(schedule.getId())) {
+                        if (!actor.id().equals(assignment.getTeacherId())) continue;
+                        ExamCandidate sample = candidates
+                                .findByScheduleIdAndClassId(schedule.getId(), assignment.getClassId())
+                                .stream().findFirst().orElse(null);
+                        items.add(agendaItem(assignment.getId() + ":grading", "GRADING", "Chấm thi",
+                                period, schedule, null, sample, examStatus(schedule)));
+                        items.add(agendaItem(assignment.getId() + ":score-entry", "GRADE_ENTRY", "Nhập điểm",
+                                period, schedule, null, sample,
+                                gradingStatus(period, schedule, assignment.getClassId())));
                     }
                 }
             }
@@ -210,6 +242,13 @@ public class ExamService {
         if (results.findByExamPeriodId(period.getId()).stream().anyMatch(result -> id.equals(result.getScheduleId()))) {
             throw ApiException.conflict("Ca thi đã có điểm; không thể sửa lịch thi");
         }
+        clearDutyNotificationsForSchedule(s);
+        List<ExamGradingAssignment> staleGraders = gradingAssignments.findByScheduleId(id).stream()
+                .filter(assignment -> !r.subjectId().equals(assignment.getSubjectId())
+                        || !r.classIds().contains(assignment.getClassId()))
+                .toList();
+        staleGraders.forEach(this::removeGradingNotifications);
+        gradingAssignments.deleteAll(staleGraders);
         invalidatePublishedSchedule(period);
         s.setSubjectId(r.subjectId()); s.setSubjectName(structure.requireSubjectName(r.subjectId()));
         s.setExamDate(r.examDate()); s.setStartTime(r.startTime()); s.setDurationMinutes(r.durationMinutes()); s.setNotes(clean(r.notes()));
@@ -222,6 +261,8 @@ public class ExamService {
         if (results.findByExamPeriodId(period.getId()).stream().anyMatch(result -> id.equals(result.getScheduleId()))) {
             throw ApiException.conflict("Ca thi đã có điểm; không thể xóa lịch thi");
         }
+        clearDutyNotificationsForSchedule(s);
+        gradingAssignments.deleteAll(gradingAssignments.findByScheduleId(id));
         invalidatePublishedSchedule(period); schedules.delete(s);
     }
 
@@ -237,6 +278,10 @@ public class ExamService {
         assertRoomAndProctorsAvailable(schedule, r, p1, p2);
         invalidatePublishedSchedule(period);
         ExamRoom room = r.id() == null ? new ExamRoom() : rooms.findById(r.id()).orElseThrow(() -> ApiException.notFound("Phòng thi"));
+        if (room.getId() != null && !scheduleId.equals(room.getScheduleId())) {
+            throw ApiException.badRequest("Phòng thi không thuộc ca thi đã chọn");
+        }
+        removeProctorNotifications(room);
         room.setId(room.getId() == null ? Ids.gen("er") : room.getId()); room.setScheduleId(scheduleId);
         room.setRoomCode(r.roomCode().trim().toUpperCase()); room.setCapacity(r.capacity());
         room.setProctorOneId(p1 == null ? null : p1.getId()); room.setProctorOneName(p1 == null ? null : p1.getFullName());
@@ -253,8 +298,89 @@ public class ExamService {
             throw ApiException.conflict("Phòng thi đã có thí sinh; hãy phân lại phòng trước khi xóa");
         }
         ExamPeriod period = requirePeriod(schedule.getExamPeriodId());
+        removeProctorNotifications(room);
         invalidatePublishedSchedule(period);
         rooms.delete(room);
+    }
+
+    public List<ExamGradingAssignment> gradingAssignments(String scheduleId) {
+        requireSchedule(scheduleId);
+        return gradingAssignments.findByScheduleId(scheduleId).stream()
+                .sorted(Comparator.comparing(ExamGradingAssignment::getClassCode))
+                .toList();
+    }
+
+    public List<EligibleGrader> eligibleGraders(String scheduleId) {
+        ExamSchedule schedule = requireSchedule(scheduleId);
+        ExamPeriod period = requirePeriod(schedule.getExamPeriodId());
+        return users.list("TEACHER", null, null).stream()
+                .filter(user -> isQualifiedForSubject(user, schedule, period))
+                .map(user -> new EligibleGrader(user.id(), user.teacherCode(), user.fullName()))
+                .sorted(Comparator.comparing(EligibleGrader::teacherName))
+                .toList();
+    }
+
+    @Transactional
+    public ExamGradingAssignment saveGradingAssignment(String scheduleId,
+                                                        SaveGradingAssignmentRequest request,
+                                                        String actorId) {
+        ExamSchedule schedule = requireSchedule(scheduleId);
+        ExamPeriod period = requirePeriod(schedule.getExamPeriodId());
+        assertEditable(period);
+        if (schedule.getClassIds() == null || !schedule.getClassIds().contains(request.classId())) {
+            throw ApiException.badRequest("Lớp không thuộc phạm vi của ca thi đã chọn");
+        }
+        SchoolClass schoolClass = structure.getClass(request.classId());
+        User teacher = users.getById(request.teacherId());
+        if (!"TEACHER".equals(teacher.getRole()) || !"ACTIVE".equals(teacher.getStatus())) {
+            throw ApiException.badRequest("Chỉ được phân công giáo viên đang hoạt động");
+        }
+        if (!isQualifiedForSubject(teacher, schedule, period)) {
+            throw ApiException.badRequest("Giáo viên không đúng chuyên môn "
+                    + schedule.getSubjectName() + " của bài thi");
+        }
+
+        ExamGradingAssignment assignment = gradingAssignments
+                .findByScheduleIdAndClassId(scheduleId, request.classId())
+                .orElseGet(() -> ExamGradingAssignment.builder()
+                        .id(Ids.gen("ega"))
+                        .examPeriodId(period.getId())
+                        .scheduleId(scheduleId)
+                        .classId(schoolClass.getId())
+                        .classCode(schoolClass.getCode())
+                        .subjectId(schedule.getSubjectId())
+                        .subjectName(schedule.getSubjectName())
+                        .build());
+        if (assignment.getTeacherId() != null && !assignment.getTeacherId().equals(teacher.getId())
+                && hasEnteredScores(schedule, request.classId())) {
+            throw ApiException.conflict("Lớp đã có điểm thi; không thể đổi giáo viên chấm thi");
+        }
+        removeGradingNotifications(assignment);
+        assignment.setExamPeriodId(period.getId());
+        assignment.setClassCode(schoolClass.getCode());
+        assignment.setSubjectId(schedule.getSubjectId());
+        assignment.setSubjectName(schedule.getSubjectName());
+        assignment.setTeacherId(teacher.getId());
+        assignment.setTeacherName(teacher.getFullName());
+        assignment.setAssignedAt(Instant.now());
+        assignment.setAssignedBy(actorId);
+        invalidatePublishedSchedule(period);
+        return gradingAssignments.save(assignment);
+    }
+
+    @Transactional
+    public void deleteGradingAssignment(String id) {
+        ExamGradingAssignment assignment = gradingAssignments.findById(id)
+                .orElseThrow(() -> ApiException.notFound("Phân công chấm thi"));
+        ExamSchedule schedule = requireSchedule(assignment.getScheduleId());
+        ExamPeriod period = requirePeriod(schedule.getExamPeriodId());
+        assertEditable(period);
+        if (hasEnteredScores(schedule, assignment.getClassId())) {
+            throw ApiException.conflict("Lớp đã có điểm thi; không thể xóa phân công chấm thi");
+        }
+        removeGradingNotifications(assignment);
+        invalidatePublishedSchedule(period);
+        gradingAssignments.delete(assignment);
     }
 
     @Transactional
@@ -317,35 +443,42 @@ public class ExamService {
 
     public List<TeacherGradingTask> gradingTasks(String teacherId) {
         User teacher = users.getById(teacherId);
-        if (!"TEACHER".equals(teacher.getRole())) throw ApiException.forbidden("Chỉ giáo viên được xem danh sách nhập điểm thi");
+        if (!"TEACHER".equals(teacher.getRole())) {
+            throw ApiException.forbidden("Chỉ giáo viên được xem danh sách nhập điểm thi");
+        }
         List<TeacherGradingTask> tasks = new ArrayList<>();
-        for (ExamPeriod period : periods.findAll()) {
+        for (ExamGradingAssignment assignment : gradingAssignments.findByTeacherId(teacherId)) {
+            ExamPeriod period = periods.findById(assignment.getExamPeriodId()).orElse(null);
+            if (period == null) continue;
             if (!period.isSchedulePublished()) continue;
-            for (ExamSchedule schedule : schedules.findByExamPeriodId(period.getId())) {
-                for (String classId : schedule.getClassIds()) {
-                    if (!teachingAssignments.isAssigned(teacherId, classId, schedule.getSubjectId(), period.getSemesterId())) continue;
-                    SchoolClass schoolClass = structure.getClass(classId);
-                    Map<String, ExamRoom> roomById = rooms.findByScheduleId(schedule.getId()).stream()
-                            .collect(java.util.stream.Collectors.toMap(ExamRoom::getId, room -> room));
-                    Map<String, ExamResult> resultByStudent = results.findByExamPeriodId(period.getId()).stream()
-                            .filter(result -> schedule.getId().equals(result.getScheduleId()))
-                            .collect(java.util.stream.Collectors.toMap(ExamResult::getStudentId, result -> result));
-                    List<TeacherExamCandidateRow> rows = candidates.findByScheduleIdAndClassId(schedule.getId(), classId).stream()
-                            .sorted(Comparator.comparing(ExamCandidate::getCandidateNo))
-                            .map(candidate -> {
-                                ExamResult result = resultByStudent.get(candidate.getStudentId());
-                                ExamRoom room = roomById.get(candidate.getExamRoomId());
-                                return new TeacherExamCandidateRow(candidate.getId(), candidate.getStudentId(), candidate.getStudentName(),
-                                        candidate.getStudentCode(), candidate.getCandidateNo(), candidate.getSeatNo(),
-                                        room == null ? null : room.getRoomCode(), result == null ? null : result.getId(),
-                                        result == null ? null : result.getScore(), result == null ? null : result.getNote(),
-                                        result == null ? "DRAFT" : result.getStatus(), result == null ? null : result.getVersion());
-                            }).toList();
-                    tasks.add(new TeacherGradingTask(period.getId(), period.getName(), schedule.getId(),
-                            schedule.getSubjectId(), schedule.getSubjectName(), classId, schoolClass.getCode(),
-                            schedule.getExamDate(), schedule.getStartTime(), period.isScoreEntryLocked(), rows));
-                }
-            }
+            ExamSchedule schedule = schedules.findById(assignment.getScheduleId()).orElse(null);
+            if (schedule == null || !schedule.getSubjectId().equals(assignment.getSubjectId())) continue;
+            Map<String, ExamRoom> roomById = rooms.findByScheduleId(schedule.getId()).stream()
+                    .collect(java.util.stream.Collectors.toMap(ExamRoom::getId, room -> room));
+            Map<String, ExamResult> resultByStudent = results.findByExamPeriodId(period.getId()).stream()
+                    .filter(result -> schedule.getId().equals(result.getScheduleId()))
+                    .collect(java.util.stream.Collectors.toMap(ExamResult::getStudentId, result -> result));
+            List<TeacherExamCandidateRow> rows = candidates
+                    .findByScheduleIdAndClassId(schedule.getId(), assignment.getClassId()).stream()
+                    .sorted(Comparator.comparing(ExamCandidate::getCandidateNo))
+                    .map(candidate -> {
+                        ExamResult result = resultByStudent.get(candidate.getStudentId());
+                        ExamRoom room = roomById.get(candidate.getExamRoomId());
+                        return new TeacherExamCandidateRow(candidate.getId(), candidate.getStudentId(),
+                                candidate.getStudentName(), candidate.getStudentCode(), candidate.getCandidateNo(),
+                                candidate.getSeatNo(), room == null ? null : room.getRoomCode(),
+                                result == null ? null : result.getId(),
+                                result == null ? null : result.getScore(),
+                                result == null ? null : result.getNote(),
+                                result == null ? "DRAFT" : result.getStatus(),
+                                result == null ? null : result.getVersion());
+                    }).toList();
+            Instant opensAt = scoreEntryOpensAt(schedule);
+            boolean available = !Instant.now().isBefore(opensAt);
+            tasks.add(new TeacherGradingTask(period.getId(), period.getName(), schedule.getId(),
+                    schedule.getSubjectId(), schedule.getSubjectName(), assignment.getClassId(),
+                    assignment.getClassCode(), schedule.getExamDate(), schedule.getStartTime(), opensAt,
+                    available, period.isScoreEntryLocked() || !available, rows));
         }
         return tasks.stream().sorted(Comparator.comparing(TeacherGradingTask::examDate)
                 .thenComparing(TeacherGradingTask::startTime).thenComparing(TeacherGradingTask::classCode)).toList();
@@ -376,8 +509,16 @@ public class ExamService {
     public List<ExamResult> saveResults(String periodId, SaveResultsRequest request, String actorId) {
         ExamPeriod period = requirePeriod(periodId);
         if (period.isScoreEntryLocked() || "CONFIRMED".equals(period.getStatus())) throw ApiException.conflict("Kỳ thi đã khóa nhập điểm");
+        if (!period.isSchedulePublished()) {
+            throw ApiException.conflict("Lịch thi chưa được công bố");
+        }
         ExamSchedule schedule = requireSchedule(request.scheduleId());
         if (!periodId.equals(schedule.getExamPeriodId())) throw ApiException.badRequest("Lịch thi không thuộc kỳ thi");
+        Instant opensAt = scoreEntryOpensAt(schedule);
+        if (Instant.now().isBefore(opensAt)) {
+            throw ApiException.conflict("Chức năng nhập điểm mở từ "
+                    + opensAt.atZone(SCHOOL_ZONE).toLocalDateTime());
+        }
         Map<String, ExamCandidate> candidateByStudent = candidates.findByScheduleId(schedule.getId()).stream()
                 .collect(java.util.stream.Collectors.toMap(ExamCandidate::getStudentId, candidate -> candidate));
         User actor = users.getById(actorId);
@@ -385,9 +526,14 @@ public class ExamService {
         for (ResultEntry entry : request.entries()) {
             ExamCandidate candidate = candidateByStudent.get(entry.studentId());
             if (candidate == null) throw ApiException.badRequest("Học sinh chưa được phân phòng cho môn thi");
-            if ("TEACHER".equals(actor.getRole()) && !teachingAssignments.isAssigned(
-                    actorId, candidate.getClassId(), schedule.getSubjectId(), period.getSemesterId())) {
-                throw ApiException.forbidden("Giáo viên chỉ được nhập điểm môn và lớp đã được phân công");
+            ExamGradingAssignment gradingAssignment = gradingAssignments
+                    .findByScheduleIdAndClassId(schedule.getId(), candidate.getClassId())
+                    .orElse(null);
+            if (!"TEACHER".equals(actor.getRole()) || gradingAssignment == null
+                    || !actorId.equals(gradingAssignment.getTeacherId())
+                    || !schedule.getSubjectId().equals(gradingAssignment.getSubjectId())) {
+                throw ApiException.forbidden(
+                        "Chỉ giáo viên được phân công chấm đúng môn thi và lớp này mới được nhập điểm");
             }
             ExamResult result = results.findByExamPeriodIdAndStudentIdAndSubjectId(periodId, entry.studentId(), schedule.getSubjectId())
                     .orElseGet(() -> ExamResult.builder().id(Ids.gen("exr")).examPeriodId(periodId).scheduleId(schedule.getId())
@@ -431,10 +577,9 @@ public class ExamService {
                 .requestedAt(Instant.now()).requestedBy(actor.id()).build());
         ExamCandidate candidate = candidates.findByScheduleIdAndStudentId(schedule.getId(), studentId)
                 .orElseThrow(() -> ApiException.notFound("Thí sinh"));
-        teachingAssignments.assignmentsOfClass(candidate.getClassId(), requirePeriod(periodId).getSemesterId()).stream()
-                .filter(assignment -> schedule.getSubjectId().equals(assignment.getSubjectId()))
-                .map(com.sse.app.academic.timetable.TeachingAssignment::getTeacherId).distinct()
-                .forEach(teacherId -> notifications.notifyUser(teacherId, "EXAM_REVIEW", "IMPORTANT",
+        gradingAssignments.findByScheduleIdAndClassId(schedule.getId(), candidate.getClassId())
+                .map(ExamGradingAssignment::getTeacherId)
+                .ifPresent(teacherId -> notifications.notifyUser(teacherId, "EXAM_REVIEW", "IMPORTANT",
                         "Có yêu cầu phúc khảo mới", student.getFullName() + " yêu cầu phúc khảo môn "
                                 + schedule.getSubjectName() + ".", "EXAM_REVIEW", saved.getId()));
         return saved;
@@ -470,12 +615,67 @@ public class ExamService {
         ExamResult result = results.findById(review.getResultId()).orElse(null);
         if (result == null) return false;
         ExamCandidate candidate = candidates.findByScheduleIdAndStudentId(result.getScheduleId(), result.getStudentId()).orElse(null);
-        ExamPeriod period = periods.findById(review.getExamPeriodId()).orElse(null);
-        return candidate != null && period != null && teachingAssignments.isAssigned(
-                teacherId, candidate.getClassId(), result.getSubjectId(), period.getSemesterId());
+        if (candidate == null) return false;
+        return gradingAssignments.findByScheduleIdAndClassId(result.getScheduleId(), candidate.getClassId())
+                .filter(assignment -> teacherId.equals(assignment.getTeacherId()))
+                .filter(assignment -> result.getSubjectId().equals(assignment.getSubjectId()))
+                .isPresent();
     }
 
     public List<ExamScoreAdjustment> adjustments(String periodId) { requirePeriod(periodId); return adjustments.findByExamPeriodIdOrderByAdjustedAtDesc(periodId); }
+
+    @Transactional
+    public synchronized int sendDueDutyNotifications(ZonedDateTime now) {
+        ZonedDateTime schoolNow = now.withZoneSameInstant(SCHOOL_ZONE);
+        int sent = 0;
+        for (ExamPeriod period : periods.findAll()) {
+            if (!period.isSchedulePublished()) continue;
+            for (ExamSchedule schedule : schedules.findByExamPeriodId(period.getId())) {
+                ZonedDateTime examStart = scheduleStartAt(schedule);
+                ZonedDateTime examEnd = scheduleEndAt(schedule);
+                ZonedDateTime dutyReminderAt = examStart.minusDays(7);
+                ZonedDateTime scoreEntryAt = scoreEntryOpensAt(schedule).atZone(SCHOOL_ZONE);
+
+                if (!schoolNow.isBefore(dutyReminderAt) && schoolNow.isBefore(examEnd)) {
+                    for (ExamRoom room : rooms.findByScheduleId(schedule.getId())) {
+                        sent += notifyProctorDuty(period, schedule, room, room.getProctorOneId(), 1);
+                        sent += notifyProctorDuty(period, schedule, room, room.getProctorTwoId(), 2);
+                    }
+                }
+
+                for (ExamGradingAssignment assignment : gradingAssignments.findByScheduleId(schedule.getId())) {
+                    if (!schoolNow.isBefore(dutyReminderAt) && schoolNow.isBefore(scoreEntryAt)) {
+                        String refId = gradingDutyRef(assignment);
+                        if (!notifications.hasNotification(assignment.getTeacherId(), "EXAM_PERIOD", refId)) {
+                            notifications.notifyUser(assignment.getTeacherId(), "EXAM_GRADING_DUTY", "IMPORTANT",
+                                    "Nhiệm vụ chấm thi trong 1 tuần tới",
+                                    period.getName() + " · " + schedule.getSubjectName() + " · Lớp "
+                                            + assignment.getClassCode() + " · " + schedule.getExamDate()
+                                            + " lúc " + schedule.getStartTime()
+                                            + ". Mở Lịch thi & nhiệm vụ để xem chi tiết.",
+                                    "EXAM_PERIOD", refId);
+                            sent++;
+                        }
+                    }
+                    if (!schoolNow.isBefore(scoreEntryAt)
+                            && !period.isScoreEntryLocked()
+                            && !"CONFIRMED".equals(period.getStatus())) {
+                        String refId = scoreEntryRef(assignment);
+                        if (!notifications.hasNotification(assignment.getTeacherId(), "EXAM_PERIOD", refId)) {
+                            notifications.notifyUser(assignment.getTeacherId(), "EXAM_SCORE_ENTRY", "URGENT",
+                                    "Đã mở nhập điểm thi",
+                                    period.getName() + " · " + schedule.getSubjectName() + " · Lớp "
+                                            + assignment.getClassCode()
+                                            + ". Thầy/cô vui lòng hoàn thành nhập điểm theo phân công.",
+                                    "EXAM_PERIOD", refId);
+                            sent++;
+                        }
+                    }
+                }
+            }
+        }
+        return sent;
+    }
 
     private void invalidatePublishedSchedule(ExamPeriod period) {
         if (!period.isSchedulePublished()) return;
@@ -500,33 +700,8 @@ public class ExamService {
                     body, "EXAM_PERIOD", period.getId());
         }
 
-        Map<String, Integer> proctorLoads = new LinkedHashMap<>();
-        for (ExamSchedule schedule : periodSchedules) {
-            for (ExamRoom room : rooms.findByScheduleId(schedule.getId())) {
-                if (room.getProctorOneId() != null) proctorLoads.merge(room.getProctorOneId(), 1, Integer::sum);
-                if (room.getProctorTwoId() != null) proctorLoads.merge(room.getProctorTwoId(), 1, Integer::sum);
-            }
-        }
-        proctorLoads.forEach((teacherId, count) -> notifications.notifyUser(teacherId, "EXAM_DUTY", "IMPORTANT",
-                updated ? "Nhiệm vụ coi thi đã cập nhật" : "Bạn có nhiệm vụ coi thi",
-                period.getName() + ": " + count + " ca coi thi. Mở Lịch thi & nhiệm vụ để xem chi tiết.",
-                "EXAM_PERIOD", period.getId()));
-
-        Set<String> gradingTeachers = new LinkedHashSet<>();
-        for (ExamSchedule schedule : periodSchedules) {
-            Set<String> classIds = candidates.findByScheduleId(schedule.getId()).stream()
-                    .map(ExamCandidate::getClassId).collect(java.util.stream.Collectors.toSet());
-            for (String classId : classIds) {
-                teachingAssignments.assignmentsOfClass(classId, period.getSemesterId()).stream()
-                        .filter(item -> schedule.getSubjectId().equals(item.getSubjectId()))
-                        .map(com.sse.app.academic.timetable.TeachingAssignment::getTeacherId)
-                        .forEach(gradingTeachers::add);
-            }
-        }
-        gradingTeachers.forEach(teacherId -> notifications.notifyUser(teacherId, "EXAM_DUTY", "IMPORTANT",
-                updated ? "Nhiệm vụ nhập điểm đã cập nhật" : "Bạn có nhiệm vụ nhập điểm kỳ thi",
-                period.getName() + ": xem các lớp, môn phụ trách và trạng thái nhập điểm trong Lịch thi & nhiệm vụ.",
-                "EXAM_PERIOD", period.getId()));
+        // Nhiệm vụ của giáo viên được gửi đúng mốc thời gian bởi ExamDutyReminderScheduler:
+        // coi thi/chấm thi trước 7 ngày và nhập điểm sau khi ca thi kết thúc 7 ngày.
     }
 
     private ExamAgendaItem agendaItem(String id, String taskType, String taskLabel, ExamPeriod period,
@@ -555,7 +730,7 @@ public class ExamService {
                 .findByExamPeriodIdAndStudentIdAndSubjectId(period.getId(), candidate.getStudentId(), schedule.getSubjectId())
                 .map(result -> result.getScore() != null).orElse(false)).count();
         if (!classCandidates.isEmpty() && entered == classCandidates.size()) return "COMPLETED";
-        if (schedule.getExamDate().isAfter(LocalDate.now())) return "NOT_STARTED";
+        if (Instant.now().isBefore(scoreEntryOpensAt(schedule))) return "NOT_STARTED";
         return entered > 0 ? "IN_PROGRESS" : "PENDING";
     }
 
@@ -652,6 +827,97 @@ public class ExamService {
         if (!"TEACHER".equals(u.getRole()) || !"ACTIVE".equals(u.getStatus())) throw ApiException.badRequest("Giám thị phải là giáo viên đang hoạt động");
         return u;
     }
+
+    private int notifyProctorDuty(ExamPeriod period, ExamSchedule schedule, ExamRoom room,
+                                  String teacherId, int position) {
+        if (teacherId == null || teacherId.isBlank()) return 0;
+        String refId = proctorDutyRef(room, teacherId, position);
+        if (notifications.hasNotification(teacherId, "EXAM_PERIOD", refId)) return 0;
+        notifications.notifyUser(teacherId, "EXAM_PROCTOR_DUTY", "IMPORTANT",
+                "Nhiệm vụ coi thi trong 1 tuần tới",
+                period.getName() + " · " + schedule.getSubjectName() + " · Phòng "
+                        + room.getRoomCode() + " · " + schedule.getExamDate() + " lúc "
+                        + schedule.getStartTime() + ". Mở Lịch thi & nhiệm vụ để xem chi tiết.",
+                "EXAM_PERIOD", refId);
+        return 1;
+    }
+
+    private Instant scoreEntryOpensAt(ExamSchedule schedule) {
+        return scheduleEndAt(schedule).plusDays(7).toInstant();
+    }
+
+    private ZonedDateTime scheduleStartAt(ExamSchedule schedule) {
+        return ZonedDateTime.of(schedule.getExamDate(), LocalTime.parse(schedule.getStartTime()), SCHOOL_ZONE);
+    }
+
+    private ZonedDateTime scheduleEndAt(ExamSchedule schedule) {
+        return scheduleStartAt(schedule).plusMinutes(schedule.getDurationMinutes());
+    }
+
+    private boolean hasEnteredScores(ExamSchedule schedule, String classId) {
+        Set<String> studentIds = candidates.findByScheduleIdAndClassId(schedule.getId(), classId).stream()
+                .map(ExamCandidate::getStudentId)
+                .collect(java.util.stream.Collectors.toSet());
+        return results.findByExamPeriodId(schedule.getExamPeriodId()).stream()
+                .anyMatch(result -> schedule.getId().equals(result.getScheduleId())
+                        && studentIds.contains(result.getStudentId())
+                        && result.getScore() != null);
+    }
+
+    private boolean isQualifiedForSubject(User teacher, ExamSchedule schedule, ExamPeriod period) {
+        return isQualifiedForSubject(teacher.getId(), teacher.getMainSubject(), schedule, period);
+    }
+
+    private boolean isQualifiedForSubject(UserDto teacher, ExamSchedule schedule, ExamPeriod period) {
+        return isQualifiedForSubject(teacher.id(), teacher.mainSubject(), schedule, period);
+    }
+
+    private boolean isQualifiedForSubject(String teacherId, String teacherMainSubject,
+                                          ExamSchedule schedule, ExamPeriod period) {
+        String mainSubject = clean(teacherMainSubject);
+        boolean profileMatches = mainSubject != null
+                && (schedule.getSubjectId().equalsIgnoreCase(mainSubject)
+                    || schedule.getSubjectName().equalsIgnoreCase(mainSubject));
+        return profileMatches || teachingAssignments.assignmentsOfTeacher(teacherId).stream()
+                .anyMatch(item -> schedule.getSubjectId().equals(item.getSubjectId())
+                        && period.getSemesterId().equals(item.getSemesterId()));
+    }
+
+    private void clearDutyNotificationsForSchedule(ExamSchedule schedule) {
+        rooms.findByScheduleId(schedule.getId()).forEach(this::removeProctorNotifications);
+        gradingAssignments.findByScheduleId(schedule.getId()).forEach(this::removeGradingNotifications);
+    }
+
+    private void removeProctorNotifications(ExamRoom room) {
+        if (room == null || room.getId() == null) return;
+        if (room.getProctorOneId() != null) {
+            notifications.removeByReference("EXAM_PERIOD",
+                    proctorDutyRef(room, room.getProctorOneId(), 1));
+        }
+        if (room.getProctorTwoId() != null) {
+            notifications.removeByReference("EXAM_PERIOD",
+                    proctorDutyRef(room, room.getProctorTwoId(), 2));
+        }
+    }
+
+    private void removeGradingNotifications(ExamGradingAssignment assignment) {
+        if (assignment == null || assignment.getId() == null) return;
+        notifications.removeByReference("EXAM_PERIOD", gradingDutyRef(assignment));
+        notifications.removeByReference("EXAM_PERIOD", scoreEntryRef(assignment));
+    }
+
+    private String proctorDutyRef(ExamRoom room, String teacherId, int position) {
+        return room.getScheduleId() + ":proctor:" + room.getId() + ":" + position + ":" + teacherId;
+    }
+
+    private String gradingDutyRef(ExamGradingAssignment assignment) {
+        return assignment.getScheduleId() + ":grading:" + assignment.getId();
+    }
+
+    private String scoreEntryRef(ExamGradingAssignment assignment) {
+        return assignment.getScheduleId() + ":score-entry:" + assignment.getId();
+    }
+
     private ExamSchedule requireSchedule(String id) { return schedules.findById(id).orElseThrow(() -> ApiException.notFound("Lịch thi")); }
     private void assertEditable(ExamPeriod p) { if (p.isScoreEntryLocked() || "CONFIRMED".equals(p.getStatus())) throw ApiException.conflict("Kỳ thi đã khóa hoặc xác nhận"); }
     private String idOr(String id, String prefix) { return id == null || id.isBlank() ? Ids.gen(prefix) : id; }

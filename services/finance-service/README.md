@@ -1,64 +1,15 @@
 # finance-service
 
-**Owner:** P4
-**Cổng:** 8083
-**DB:** `finance_db` (PostgreSQL — DDL §5.3)
-**Phân hệ phụ trách:** A7, D4 + bổ sung S4, S8, S9 (phần invoice items)
+Thư mục này là bản phác thảo tách dịch vụ cũ và không phải ứng dụng đang chạy.
+Nghiệp vụ tài chính chính thức hiện nằm trong modular monolith tại
+`services/app/src/main/java/com/sse/app/finance`.
 
-## Trách nhiệm
+Luồng thanh toán được hỗ trợ là VietQR:
 
-- Quản lý `fee_categories`, `fee_periods`, `fee_period_items`.
-- Sinh `invoices` tự động theo khối/HS khi đợt thu mở.
-- `payments` + `payment_gateway_transactions` (audit raw payload VNPAY/MoMo).
-- Tích hợp VNPAY + MoMo (sandbox trước, prod sau).
-- `refunds` (sprint S10).
-- Cung cấp báo cáo công nợ cho A8.
+1. Admin tạo và phát hành đợt thu, hệ thống sinh hóa đơn.
+2. Phụ huynh mở hóa đơn và nhận mã VietQR có nội dung chuyển khoản định danh.
+3. Phụ huynh đánh dấu đã chuyển khoản.
+4. Admin đối soát giao dịch ngân hàng rồi xác nhận hoặc từ chối.
+5. Khi xác nhận, hệ thống cập nhật công nợ, lưu lịch sử và gửi biên nhận qua email nếu SMTP đã được cấu hình.
 
-## Cấu trúc package
-
-```
-com.sse.finance
-├── FinanceServiceApplication.java
-├── config/
-├── controller/      # FeePeriodController, InvoiceController, PaymentController, RefundController
-├── service/         # InvoiceService, PaymentService, FeePeriodService
-├── repository/
-├── entity/
-├── dto/{request,response}/
-├── mapper/
-├── gateway/
-│   ├── vnpay/       # VnpayClient, VnpaySignatureUtil, VnpayCallbackHandler
-│   └── momo/        # MomoClient, MomoSignatureUtil
-├── event/
-│   ├── publisher/   # finance.invoice.issued, finance.invoice.paid
-│   └── listener/    # academic.extracurricular.enrolled → tạo invoice tự động
-└── exception/
-```
-
-## Endpoint chính
-
-| Method | Path | Mô tả |
-|---|---|---|
-| POST | /fee-periods | Tạo đợt thu |
-| POST | /fee-periods/{id}/generate-invoices | Bulk sinh invoice |
-| GET | /invoices?studentId&status | List invoice |
-| GET | /invoices/{id} | Chi tiết hóa đơn |
-| POST | /payments | Tạo payment + redirect URL VNPAY/MoMo |
-| GET | /payments/vnpay/callback | IPN callback (verify HMAC) |
-| GET | /payments/momo/callback | IPN callback |
-| POST | /refunds | Yêu cầu hoàn tiền |
-
-## Event publish
-
-- `finance.invoice.issued`
-- `finance.invoice.paid`
-- `finance.payment.failed`
-- `finance.refund.completed`
-
-## Event consume
-
-- `academic.extracurricular.enrolled` → tạo invoice ngoại khóa
-
-## Migration Flyway
-
-Versioning: `V1__init.sql` ... — P4 sở hữu toàn bộ.
+Không sử dụng VNPay, MoMo, SMS hay Zalo OA trong phạm vi sản phẩm hiện tại.

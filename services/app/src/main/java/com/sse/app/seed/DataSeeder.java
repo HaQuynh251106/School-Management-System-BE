@@ -225,7 +225,7 @@ public class DataSeeder {
                         .detail("Sửa điểm GK Toán 7.5 → 8.0").createdAt(now.minusSeconds(7200)).build(),
                 AuditLog.builder().id("evt-3").actorId("system").actorName("Hệ thống").role("SYSTEM")
                         .action("PAYMENT").module("finance").entityType("invoice").entityId("INV-HK1-2025")
-                        .detail("MoMo thành công 1.800.000₫").createdAt(now.minusSeconds(3600)).build(),
+                        .detail("VietQR đã đối soát 1.800.000₫").createdAt(now.minusSeconds(3600)).build(),
                 AuditLog.builder().id("evt-4").actorId("u-admin-1").actorName("Nguyễn Văn Quản").role("ADMIN")
                         .action("EXPORT").module("reports").entityType("report").entityId("grade-dist")
                         .detail("Xuất phổ điểm HK1").createdAt(now.minusSeconds(1800)).build()));

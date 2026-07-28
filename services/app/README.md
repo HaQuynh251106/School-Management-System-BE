@@ -13,7 +13,7 @@ com.sse.app
  │   ├─ attendance/  B3/C3/D2: điểm danh + cảnh báo vắng cho PH
  │   ├─ grade/       B4/C2/A4: điểm + log sửa + loại điểm/hệ số
  │   └─ assignment/  B5/C4: bài tập + nộp + chấm
- ├─ finance/         A7/D4: đợt thu, hóa đơn, thanh toán sandbox/VNPAY
+ ├─ finance/         A7/D4: đợt thu, hóa đơn, VietQR và đối soát
  ├─ notification/    E2/C5: thông báo in-app, announcement, template
  └─ seed/            Seed dữ liệu mẫu khớp mock-server
 ```
@@ -89,7 +89,8 @@ curl -X POST localhost:4000/auth/login -H 'Content-Type: application/json' \
 
 **Tài chính (A7/D4)**
 `GET/POST /fee-periods` · `GET/POST /fee-periods/{id}/items` · `POST /fee-periods/{id}/open`
-`POST /fee-periods/{id}/generate-invoices` · `GET /invoices` · `GET /invoices/{id}` · `POST /payments` · `GET /payments?invoiceId` · `GET /payments/vnpay/ipn`
+`POST /fee-periods/{id}/generate-invoices` · `GET /invoices` · `GET /invoices/{id}` · `POST /payments`
+`POST /payments/{id}/submitted` · `GET /payments/vietqr/pending` · `POST /payments/{id}/confirm-vietqr|reject-vietqr`
 
 **Thông báo (E2/C5)**
 `GET /notifications?unread` · `GET /notifications/unread-count` · `POST /notifications/{id}/read` · `/notifications/read-all`
@@ -105,16 +106,16 @@ curl -X POST localhost:4000/auth/login -H 'Content-Type: application/json' \
 ## Đơn giản hóa so với kiến trúc đầy đủ (để chạy nhanh GĐ1)
 - **1 PostgreSQL** + `ddl-auto=update` (Hibernate sinh schema) thay cho 4 DB + Flyway. DDL/Flyway có thể bổ sung sau (đã có thiết kế trong plan).
 - **Thông báo đồng bộ** (gọi trực tiếp) thay cho RabbitMQ async; chưa tích hợp FCM/SendGrid thật (mới có in-app + log).
-- **Thanh toán** có sandbox cho local và tích hợp VNPAY 2.1.0 cho production; IPN được kiểm tra HMAC-SHA512, số tiền và trạng thái trước khi ghi nhận.
+- **Thanh toán** dùng VietQR: hệ thống sinh mã chuyển khoản có nội dung định danh, phụ huynh báo đã chuyển và quản trị viên đối soát trước khi ghi nhận.
 - **File đính kèm** mới lưu *metadata tên file* (chưa nối MinIO presigned upload).
 - Mongo (audit/chat) chưa dùng.
 
 ## Chạy demo không cần PostgreSQL
 
-Profile `local` dùng H2 trong bộ nhớ, tự tạo schema và seed dữ liệu mẫu. Dữ liệu được đặt lại khi dừng ứng dụng.
+Profile `demo` dùng H2, chạy Flyway và seed dữ liệu mẫu. Profile `local` dùng PostgreSQL thật từ `.env.local`.
 
 ```bash
-mvn -pl services/app spring-boot:run -Dspring-boot.run.profiles=local
+mvn -pl services/app spring-boot:run -Dspring-boot.run.profiles=demo
 ```
 
 ## Chạy production
@@ -133,6 +134,6 @@ Các điểm vận hành:
 - OpenAPI JSON: `/v3/api-docs`; Swagger UI: `/swagger-ui.html`.
 - File: `POST /files` multipart field `file`, tối đa 10 MB; `GET /files/{id}/content`.
 - Refresh token được lưu dạng hash, xoay vòng và bị thu hồi khi logout.
-- `SSE_PAYMENT_MODE=disabled` là mặc định production. Dùng `vnpay` hoặc `production` cùng `SSE_VNPAY_TMN_CODE`, `SSE_VNPAY_HASH_SECRET`, `SSE_VNPAY_PAYMENT_URL`, `SSE_VNPAY_RETURN_URL` để bật VNPAY; IPN cấu hình tại cổng thanh toán trỏ tới `GET /payments/vnpay/ipn`.
+- `SSE_PAYMENT_MODE=disabled` là mặc định production. Dùng `vietqr` cùng `SSE_VIETQR_BANK_ID`, `SSE_VIETQR_ACCOUNT_NO`, `SSE_VIETQR_ACCOUNT_NAME` để bật mã chuyển khoản.
 - Bật email reset bằng `SSE_MAIL_ENABLED=true` và cấu hình SMTP trong `.env.example`.
 - Dữ liệu upload và PostgreSQL được gắn persistent Docker volume.

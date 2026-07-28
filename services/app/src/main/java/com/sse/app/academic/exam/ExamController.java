@@ -66,6 +66,28 @@ public class ExamController {
     @DeleteMapping("/exam-rooms/{id}") public void deleteRoom(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN"); exams.deleteRoom(id); }
     @PostMapping("/exam-rooms/{id}/allocate") public List<ExamCandidate> allocate(@PathVariable String id, @Valid @RequestBody AllocateCandidatesRequest r) { CurrentUserHolder.requireRole("ADMIN"); return exams.allocate(id, r.classId()); }
 
+    @GetMapping("/exam-schedules/{id}/graders")
+    public List<ExamGradingAssignment> graders(@PathVariable String id) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return exams.gradingAssignments(id);
+    }
+    @GetMapping("/exam-schedules/{id}/eligible-graders")
+    public List<EligibleGrader> eligibleGraders(@PathVariable String id) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return exams.eligibleGraders(id);
+    }
+    @PutMapping("/exam-schedules/{id}/graders")
+    public ExamGradingAssignment assignGrader(@PathVariable String id,
+                                              @Valid @RequestBody SaveGradingAssignmentRequest request) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return exams.saveGradingAssignment(id, request, CurrentUserHolder.require().id());
+    }
+    @DeleteMapping("/exam-grading-assignments/{id}")
+    public void deleteGrader(@PathVariable String id) {
+        CurrentUserHolder.requireRole("ADMIN");
+        exams.deleteGradingAssignment(id);
+    }
+
     @GetMapping("/exam-periods/{id}/candidates") public List<ExamCandidate> candidates(@PathVariable String id, @RequestParam(required = false) String scheduleId, @RequestParam(required = false) String classId) { CurrentUserHolder.requireRole("ADMIN"); return exams.candidates(id, scheduleId, classId); }
     @GetMapping("/exam-periods/{id}/results") public List<ExamResult> results(@PathVariable String id, @RequestParam(required = false) String scheduleId, @RequestParam(required = false) String studentId) {
         CurrentUserHolder.requireRole("ADMIN");

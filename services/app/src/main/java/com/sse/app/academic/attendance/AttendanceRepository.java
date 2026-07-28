@@ -10,6 +10,7 @@ interface AttendanceRepository extends JpaRepository<AttendanceRecord, String> {
     List<AttendanceRecord> findByStudentId(String studentId);
     List<AttendanceRecord> findByClassId(String classId);
     List<AttendanceRecord> findByClassIdAndDate(String classId, LocalDate date);
+    List<AttendanceRecord> findByStudentIdAndDateBetween(String studentId, LocalDate startDate, LocalDate endDate);
     List<AttendanceRecord> findBySlotIdAndDate(String slotId, LocalDate date);
     Optional<AttendanceRecord> findBySlotIdAndDateAndStudentId(String slotId, LocalDate date, String studentId);
     boolean existsBySlotIdAndDate(String slotId, LocalDate date);

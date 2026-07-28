@@ -1,6 +1,7 @@
 package com.sse.app.academic.leave;
 
 import com.sse.app.academic.leave.LeaveRequestDtos.CreateLeaveRequest;
+import com.sse.app.academic.attendance.ApprovedLeaveAttendanceService;
 import com.sse.app.academic.structure.SchoolClass;
 import com.sse.app.academic.structure.StructureService;
 import com.sse.app.common.ApiException;
@@ -26,13 +27,16 @@ public class LeaveRequestService {
     private final UserService users;
     private final StructureService structure;
     private final NotificationService notifications;
+    private final ApprovedLeaveAttendanceService approvedLeaveAttendance;
 
     public LeaveRequestService(LeaveRequestRepository requests, UserService users,
-                               StructureService structure, NotificationService notifications) {
+                               StructureService structure, NotificationService notifications,
+                               ApprovedLeaveAttendanceService approvedLeaveAttendance) {
         this.requests = requests;
         this.users = users;
         this.structure = structure;
         this.notifications = notifications;
+        this.approvedLeaveAttendance = approvedLeaveAttendance;
     }
 
     public List<LeaveRequest> list(CurrentUser actor) {
@@ -104,6 +108,9 @@ public class LeaveRequestService {
         request.setDecisionNote(clean(note));
         request.setUpdatedAt(Instant.now());
         requests.save(request);
+        if (approve) {
+            approvedLeaveAttendance.reconcile(request.getStudentId(), request.getStartDate(), request.getEndDate());
+        }
         notifyStudentAndParents(request, approve ? "Đơn xin nghỉ đã được duyệt" : "Đơn xin nghỉ bị từ chối",
                 request.getStartDate() + " đến " + request.getEndDate() + (clean(note) == null ? "" : " · " + clean(note)));
         return request;

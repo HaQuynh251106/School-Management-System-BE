@@ -87,7 +87,7 @@ class InvoiceItem {
     private long amount;
 }
 
-/** Giao dịch thanh toán (S8 — bản sandbox tự succeed, không gọi cổng thật). */
+/** Giao dịch thanh toán học phí. */
 @Entity
 @Table(name = "payments", indexes = @Index(name = "idx_pay_invoice", columnList = "invoiceId"))
 @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
@@ -96,7 +96,7 @@ class Payment {
     private String id;
     private String invoiceId;
     private long amount;
-    /** MOMO | CASH */
+    /** VIETQR | CASH */
     private String method;
     /** PENDING | SUCCESS | FAILED */
     private String status;

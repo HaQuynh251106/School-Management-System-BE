@@ -24,7 +24,6 @@ sse:
   password-reset:
     expose-token: true
   payments:
-    mode: ${SSE_PAYMENT_MODE:sandbox}
-    callback-secret: ${SSE_PAYMENT_CALLBACK_SECRET:local-sandbox-callback-secret-change-me}
+    mode: ${SSE_PAYMENT_MODE:disabled}
   storage:
     path: ${SSE_STORAGE_PATH:./data/uploads}

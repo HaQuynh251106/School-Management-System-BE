@@ -191,7 +191,9 @@ public class AttendanceService {
                 throw ApiException.badRequest("Danh sách điểm danh chứa học sinh bị trùng");
             }
             boolean approvedLeave = leaveRequests.hasApprovedLeave(mark.studentId(), req.date());
-            if (!"PRESENT".equals(mark.status()) && !approvedLeave && (mark.note() == null || mark.note().isBlank())) {
+            boolean approvedAbsence = approvedLeave && isAbsentStatus(mark.status());
+            if (!"PRESENT".equals(mark.status()) && !approvedAbsence
+                    && (mark.note() == null || mark.note().isBlank())) {
                 throw ApiException.badRequest("Cần nhập ghi chú cho học sinh vắng hoặc đi muộn");
             }
             User student = users.getById(mark.studentId());
@@ -211,8 +213,9 @@ public class AttendanceService {
             rec.setSlotId(req.slotId());
             rec.setDate(req.date());
             boolean approvedLeave = leaveRequests.hasApprovedLeave(m.studentId(), req.date());
-            String resolvedStatus = approvedLeave && !"PRESENT".equals(m.status()) ? "ABSENT_EXCUSED" : m.status();
-            String resolvedNote = approvedLeave && !"PRESENT".equals(m.status())
+            boolean approvedAbsence = approvedLeave && isAbsentStatus(m.status());
+            String resolvedStatus = approvedAbsence ? "ABSENT_EXCUSED" : m.status();
+            String resolvedNote = approvedAbsence
                     ? "Đơn xin nghỉ đã được GVCN duyệt" : normalizeNote(m.note());
             rec.setStatus(resolvedStatus);
             rec.setNote(resolvedNote);
@@ -220,7 +223,10 @@ public class AttendanceService {
             rec.setPeriodNo(slot.getPeriodNo());
             saved.add(records.save(rec));
 
-            if (!Objects.equals(previousStatus, resolvedStatus)) {
+            if (approvedAbsence) {
+                // Đơn duyệt đã thông báo cho gia đình; không phát thêm cảnh báo chuyên cần trùng/lệch nghĩa.
+                notifications.removeByReference("ATTENDANCE", rec.getId());
+            } else if (!Objects.equals(previousStatus, resolvedStatus)) {
                 notifyAttendanceStatus(rec);
             }
         }
@@ -353,6 +359,10 @@ public class AttendanceService {
 
     private boolean isAbsentOrLate(String status) {
         return status != null && (status.startsWith("ABSENT") || "LATE".equals(status));
+    }
+
+    private boolean isAbsentStatus(String status) {
+        return status != null && status.startsWith("ABSENT");
     }
 
     private String attendancePriority(String status) {

@@ -66,13 +66,13 @@ public class DashboardService {
                 chart("Cơ cấu người dùng", "Số tài khoản theo từng vai trò", "BAR", "", rows("""
                         select case role when 'ADMIN' then 'Quản trị' when 'TEACHER' then 'Giáo viên'
                                when 'STUDENT' then 'Học sinh' when 'PARENT' then 'Phụ huynh' else role end label,
-                               count(*) value
-                        from users group by role order by value desc
+                               count(*) metric_value
+                        from users group by role order by metric_value desc
                         """)),
                 chart("Quy mô lớp học", "Sĩ số các lớp đông nhất", "COLUMN", " HS", rows("""
-                        select c.code label, count(u.id) value
+                        select c.code label, count(u.id) metric_value
                         from classes c left join users u on u.class_id = c.id and u.role = 'STUDENT'
-                        group by c.id, c.code order by value desc, c.code limit 8
+                        group by c.id, c.code order by metric_value desc, c.code limit 8
                         """))
         );
         return new DashboardDtos.Response(metrics, charts);
@@ -98,7 +98,7 @@ public class DashboardService {
                                when 'THU' then 'T5' when 'THURSDAY' then 'T5'
                                when 'FRI' then 'T6' when 'FRIDAY' then 'T6'
                                when 'SAT' then 'T7' when 'SATURDAY' then 'T7' else day_of_week end label,
-                               count(*) value
+                               count(*) metric_value
                         from timetable_slots where teacher_id = ? group by day_of_week
                         order by min(case day_of_week when 'MON' then 1 when 'MONDAY' then 1
                                      when 'TUE' then 2 when 'TUESDAY' then 2 when 'WED' then 3 when 'WEDNESDAY' then 3
@@ -106,9 +106,9 @@ public class DashboardService {
                                      when 'SAT' then 6 when 'SATURDAY' then 6 else 7 end)
                         """, teacherId)),
                 chart("Bài tập theo lớp", "Số bài tập đã giao", "BAR", " bài", rows("""
-                        select coalesce(c.code, a.class_id) label, count(*) value
+                        select coalesce(c.code, a.class_id) label, count(*) metric_value
                         from assignments a left join classes c on c.id = a.class_id
-                        where a.teacher_id = ? group by coalesce(c.code, a.class_id) order by value desc limit 8
+                        where a.teacher_id = ? group by coalesce(c.code, a.class_id) order by metric_value desc limit 8
                         """, teacherId))
         );
         return new DashboardDtos.Response(metrics, charts);
@@ -139,8 +139,8 @@ public class DashboardService {
                 chart("Tình hình chuyên cần", "Số lượt theo trạng thái", "BAR", " lượt", rows("""
                         select case status when 'PRESENT' then 'Có mặt' when 'ABSENT_UNEXCUSED' then 'Vắng không phép'
                                when 'ABSENT_EXCUSED' then 'Vắng có phép' when 'LATE' then 'Đi trễ' else status end label,
-                               count(*) value
-                        from attendance_records where student_id = ? group by status order by value desc
+                               count(*) metric_value
+                        from attendance_records where student_id = ? group by status order by metric_value desc
                         """, studentId))
         );
         return new DashboardDtos.Response(metrics, charts);
@@ -176,14 +176,14 @@ public class DashboardService {
                 chart("Tình trạng khoản thu", "Số hóa đơn theo trạng thái", "BAR", " hóa đơn",
                         childId == null || childId.isBlank() ? rows("""
                         select case i.status when 'PAID' then 'Đã thanh toán' when 'PARTIAL' then 'Thanh toán một phần'
-                               when 'OVERDUE' then 'Quá hạn' else 'Chưa thanh toán' end label, count(*) value
+                               when 'OVERDUE' then 'Quá hạn' else 'Chưa thanh toán' end label, count(*) metric_value
                         from invoices i where i.parent_id = ? or i.student_id in
                           (select student_id from parent_student where parent_id = ?)
-                        group by i.status order by value desc
+                        group by i.status order by metric_value desc
                         """, parentId, parentId) : rows("""
                         select case i.status when 'PAID' then 'Đã thanh toán' when 'PARTIAL' then 'Thanh toán một phần'
-                               when 'OVERDUE' then 'Quá hạn' else 'Chưa thanh toán' end label, count(*) value
-                        from invoices i where i.student_id = ? group by i.status order by value desc
+                               when 'OVERDUE' then 'Quá hạn' else 'Chưa thanh toán' end label, count(*) metric_value
+                        from invoices i where i.student_id = ? group by i.status order by metric_value desc
                         """, childId))
         );
         return new DashboardDtos.Response(metrics, charts);
@@ -224,7 +224,7 @@ public class DashboardService {
     }
 
     private DashboardDtos.Datum datum(ResultSet rs, int rowNumber) throws SQLException {
-        Number value = (Number) rs.getObject("value");
+        Number value = (Number) rs.getObject("metric_value");
         return new DashboardDtos.Datum(rs.getString("label"), value == null ? 0 : value.doubleValue());
     }
 }

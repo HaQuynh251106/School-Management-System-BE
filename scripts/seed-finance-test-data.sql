@@ -115,8 +115,8 @@ ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, amount = EXCLUDED.amount;
 INSERT INTO payments (id, invoice_id, amount, method, status, txn_ref, created_at, paid_at)
 VALUES
     ('pay-test-open-2', 'inv-test-open-2', 800000, 'CASH', 'SUCCESS', 'TEST-CASH-002', TIMESTAMPTZ '2026-07-12 09:15:00+07', TIMESTAMPTZ '2026-07-12 09:15:00+07'),
-    ('pay-test-open-3', 'inv-test-open-3', 1850000, 'VNPAY', 'SUCCESS', 'TEST-VNPAY-003', TIMESTAMPTZ '2026-07-08 14:20:00+07', TIMESTAMPTZ '2026-07-08 14:20:00+07'),
-    ('pay-test-open-5', 'inv-test-open-5', 500000, 'MOMO', 'SUCCESS', 'TEST-MOMO-005', TIMESTAMPTZ '2026-07-09 19:30:00+07', TIMESTAMPTZ '2026-07-09 19:30:00+07')
+    ('pay-test-open-3', 'inv-test-open-3', 1850000, 'VIETQR', 'SUCCESS', 'TEST-VIETQR-003', TIMESTAMPTZ '2026-07-08 14:20:00+07', TIMESTAMPTZ '2026-07-08 14:20:00+07'),
+    ('pay-test-open-5', 'inv-test-open-5', 500000, 'VIETQR', 'SUCCESS', 'TEST-VIETQR-005', TIMESTAMPTZ '2026-07-09 19:30:00+07', TIMESTAMPTZ '2026-07-09 19:30:00+07')
 ON CONFLICT (id) DO UPDATE SET
     invoice_id = EXCLUDED.invoice_id,
     amount = EXCLUDED.amount,
@@ -129,7 +129,7 @@ ON CONFLICT (id) DO UPDATE SET
 INSERT INTO payments (id, invoice_id, amount, method, status, txn_ref, created_at, paid_at)
 SELECT 'pay-' || invoice.id, invoice.id, invoice.total_amount,
        CASE MOD(ROW_NUMBER() OVER (ORDER BY invoice.code), 3)
-           WHEN 0 THEN 'CASH' WHEN 1 THEN 'VNPAY' ELSE 'MOMO' END,
+           WHEN 0 THEN 'CASH' ELSE 'VIETQR' END,
        'SUCCESS', 'TEST-PAID-' || invoice.code,
        TIMESTAMPTZ '2026-06-18 10:00:00+07' + (ROW_NUMBER() OVER (ORDER BY invoice.code) * INTERVAL '1 hour'),
        TIMESTAMPTZ '2026-06-18 10:00:00+07' + (ROW_NUMBER() OVER (ORDER BY invoice.code) * INTERVAL '1 hour')

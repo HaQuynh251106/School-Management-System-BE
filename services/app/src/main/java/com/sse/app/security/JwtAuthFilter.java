@@ -1,5 +1,8 @@
 package com.sse.app.security;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sse.app.common.ApiErrorResponse;
+import com.sse.app.common.RequestCorrelationFilter;
 import com.sse.app.identity.UserService;
 import io.jsonwebtoken.Claims;
 import jakarta.servlet.FilterChain;
@@ -8,11 +11,13 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.util.Map;
 
 /**
  * Xác thực JWT cho mọi request trừ /auth/** và preflight OPTIONS — khớp hành vi mock-server.
@@ -23,10 +28,12 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
     private final JwtService jwt;
     private final UserService users;
+    private final ObjectMapper objectMapper;
 
-    public JwtAuthFilter(JwtService jwt, UserService users) {
+    public JwtAuthFilter(JwtService jwt, UserService users, ObjectMapper objectMapper) {
         this.jwt = jwt;
         this.users = users;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -34,8 +41,6 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         String p = request.getRequestURI();
         return HttpMethod.OPTIONS.matches(request.getMethod())
                 || p.startsWith("/auth/")
-                || p.startsWith("/payments/callback/")
-                || p.equals("/payments/momo/ipn")
                 || p.equals("/")
                 || p.equals("/health")
                 || p.equals("/actuator/health")
@@ -49,7 +54,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             throws ServletException, IOException {
         String header = req.getHeader(HttpHeaders.AUTHORIZATION);
         if (header == null || !header.regionMatches(true, 0, "Bearer ", 0, 7)) {
-            unauthorized(res, "Missing token");
+            error(req, res, HttpStatus.UNAUTHORIZED, "AUTH_TOKEN_MISSING", "Phiên đăng nhập không tồn tại");
             return;
         }
         String token = header.substring(7).trim();
@@ -62,34 +67,37 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             var account = users.getById(c.getSubject());
             Integer tokenVersion = c.get("ver", Integer.class);
             if (tokenVersion == null || tokenVersion != account.getTokenVersion()) {
-                unauthorized(res, "Phiên đăng nhập đã hết hiệu lực");
+                error(req, res, HttpStatus.UNAUTHORIZED, "AUTH_SESSION_EXPIRED", "Phiên đăng nhập đã hết hiệu lực");
                 return;
             }
             if (account.isPasswordChangeRequired()
                     && !req.getRequestURI().equals("/me")
                     && !req.getRequestURI().equals("/me/password")) {
-                forbidden(res, "Bạn cần đổi mật khẩu trước khi tiếp tục");
+                error(req, res, HttpStatus.FORBIDDEN, "PASSWORD_CHANGE_REQUIRED",
+                        "Bạn cần đổi mật khẩu trước khi tiếp tục");
                 return;
             }
             chain.doFilter(req, res);
         } catch (Exception e) {
-            unauthorized(res, "Invalid token");
+            error(req, res, HttpStatus.UNAUTHORIZED, "AUTH_TOKEN_INVALID",
+                    "Phiên đăng nhập không hợp lệ hoặc đã hết hạn");
         } finally {
             CurrentUserHolder.clear();
         }
     }
 
-    private void unauthorized(HttpServletResponse res, String msg) throws IOException {
-        res.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+    private void error(
+            HttpServletRequest req,
+            HttpServletResponse res,
+            HttpStatus status,
+            String code,
+            String message
+    ) throws IOException {
+        res.setStatus(status.value());
         res.setContentType(MediaType.APPLICATION_JSON_VALUE);
         res.setCharacterEncoding("UTF-8");
-        res.getWriter().write("{\"error\":\"" + msg + "\"}");
-    }
-
-    private void forbidden(HttpServletResponse res, String msg) throws IOException {
-        res.setStatus(HttpServletResponse.SC_FORBIDDEN);
-        res.setContentType(MediaType.APPLICATION_JSON_VALUE);
-        res.setCharacterEncoding("UTF-8");
-        res.getWriter().write("{\"error\":\"" + msg + "\"}");
+        res.setHeader(RequestCorrelationFilter.HEADER, RequestCorrelationFilter.currentId(req));
+        objectMapper.writeValue(res.getWriter(),
+                ApiErrorResponse.of(status, code, message, req, Map.of()));
     }
 }

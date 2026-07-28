@@ -66,14 +66,11 @@ Compose khởi động một PostgreSQL 16 và một Backend. Dữ liệu Postgr
 | `SSE_FIREBASE_ENABLED`, `SSE_FIREBASE_PROJECT_ID` | Bật Firebase Cloud Messaging cho push notification |
 | `SSE_FIREBASE_CREDENTIALS_PATH` | Đường dẫn service-account JSON khi chạy trực tiếp |
 | `SSE_FIREBASE_CREDENTIALS_BASE64` | Service-account JSON dạng Base64, phù hợp Docker/secret manager |
-| `SSE_PAYMENT_MODE` | `disabled`, `sandbox` (mô phỏng nội bộ) hoặc `momo-sandbox` |
-| `SSE_PAYMENT_CALLBACK_SECRET` | Khóa HMAC callback sandbox, tối thiểu 32 ký tự |
-| `SSE_MOMO_PARTNER_CODE` | Partner Code do MoMo for Business cấp |
-| `SSE_MOMO_ACCESS_KEY` | Access Key của môi trường MoMo Testing |
-| `SSE_MOMO_SECRET_KEY` | Secret Key ký HMAC-SHA256, không đưa lên Git |
-| `SSE_MOMO_ENDPOINT` | Mặc định `https://test-payment.momo.vn/v2/gateway/api/create` |
-| `SSE_MOMO_REDIRECT_URL` | URL đưa phụ huynh trở lại trang khoản thu |
-| `SSE_MOMO_IPN_URL` | URL HTTPS công khai để MoMo gửi kết quả server-to-server |
+| `SSE_PAYMENT_MODE` | `disabled` hoặc `vietqr` |
+| `SSE_VIETQR_BANK_ID` | Mã ngân hàng Napas/VietQR |
+| `SSE_VIETQR_ACCOUNT_NO` | Số tài khoản nhận khoản thu |
+| `SSE_VIETQR_ACCOUNT_NAME` | Tên chủ tài khoản không dấu |
+| `SSE_VIETQR_TEMPLATE` | Mẫu ảnh QR, mặc định `compact2` |
 
 ## Quy tắc an toàn đã áp dụng
 
@@ -81,7 +78,7 @@ Compose khởi động một PostgreSQL 16 và một Backend. Dữ liệu Postgr
 - Tài khoản tạo/import/reset phải đổi mật khẩu tạm; phiên cũ bị vô hiệu qua `tokenVersion`.
 - File chỉ tải được bởi người tải lên, quản trị viên hoặc người thực sự tham gia bài tập/bài nộp.
 - Hóa đơn có khóa duy nhất theo đợt thu + học sinh; chạy sinh hóa đơn nhiều lần không tạo bản trùng.
-- Thanh toán bắt đầu ở `PENDING`; chỉ callback HMAC hợp lệ mới cập nhật hóa đơn. Thu tiền mặt có endpoint riêng cho quản trị viên.
+- Thanh toán VietQR bắt đầu ở `PENDING`; phụ huynh xác nhận đã chuyển khoản và quản trị viên đối soát trước khi hóa đơn được cập nhật. Thu tiền mặt có endpoint riêng cho quản trị viên.
 - Mọi API ghi dữ liệu thành công được đưa vào audit log.
 
 ## Cấu trúc chính

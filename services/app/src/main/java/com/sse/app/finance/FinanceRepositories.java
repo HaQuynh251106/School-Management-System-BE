@@ -37,4 +37,6 @@ interface PaymentGatewayTransactionRepository extends JpaRepository<PaymentGatew
     Optional<PaymentGatewayTransaction> findByTxnRef(String txnRef);
     Optional<PaymentGatewayTransaction> findByPaymentId(String paymentId);
     List<PaymentGatewayTransaction> findByStatusAndCreatedAtBefore(String status, Instant cutoff);
+    List<PaymentGatewayTransaction> findByGatewayAndStatusInOrderByCreatedAtDesc(
+            String gateway, List<String> statuses);
 }

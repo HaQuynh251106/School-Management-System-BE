@@ -60,16 +60,13 @@ sse:
   password-reset:
     expose-token: false
   payments:
-    # sandbox = mô phỏng nội bộ; momo-sandbox = cổng MoMo Test với credentials M4B.
+    # vietqr = tạo QR chuyển khoản thật; hóa đơn chỉ hoàn tất sau khi Admin đối soát.
     mode: ${SSE_PAYMENT_MODE:disabled}
-    callback-secret: ${SSE_PAYMENT_CALLBACK_SECRET:}
-    momo:
-      endpoint: ${SSE_MOMO_ENDPOINT:https://test-payment.momo.vn/v2/gateway/api/create}
-      partner-code: ${SSE_MOMO_PARTNER_CODE:}
-      access-key: ${SSE_MOMO_ACCESS_KEY:}
-      secret-key: ${SSE_MOMO_SECRET_KEY:}
-      redirect-url: ${SSE_MOMO_REDIRECT_URL:}
-      ipn-url: ${SSE_MOMO_IPN_URL:}
+    vietqr:
+      bank-id: ${SSE_VIETQR_BANK_ID:}
+      account-no: ${SSE_VIETQR_ACCOUNT_NO:}
+      account-name: ${SSE_VIETQR_ACCOUNT_NAME:}
+      template: ${SSE_VIETQR_TEMPLATE:compact2}
   storage:
     path: ${SSE_STORAGE_PATH:/data/sse/uploads}
     max-file-bytes: ${SSE_STORAGE_MAX_FILE_BYTES:10485760}
@@ -88,6 +85,10 @@ sse:
     enabled: ${SSE_ATTENDANCE_REMINDERS_ENABLED:true}
     interval-ms: ${SSE_ATTENDANCE_REMINDER_INTERVAL_MS:60000}
     initial-delay-ms: ${SSE_ATTENDANCE_REMINDER_INITIAL_DELAY_MS:15000}
+  exam-reminders:
+    enabled: ${SSE_EXAM_REMINDERS_ENABLED:true}
+    interval-ms: ${SSE_EXAM_REMINDER_INTERVAL_MS:3600000}
+    initial-delay-ms: ${SSE_EXAM_REMINDER_INITIAL_DELAY_MS:20000}
 
 logging:
   level:
