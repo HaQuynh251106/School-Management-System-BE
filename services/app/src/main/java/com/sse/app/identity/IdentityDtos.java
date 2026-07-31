@@ -39,7 +39,7 @@ public final class IdentityDtos {
             @NotBlank String username,
             @NotBlank @Size(min = 10, max = 128) String password,
             @NotBlank String fullName,
-            @NotBlank @Pattern(regexp = "ADMIN|TEACHER|STUDENT|PARENT") String role,
+            @NotBlank @Pattern(regexp = "ADMIN|ACADEMIC_STAFF|ACCOUNTANT|TEACHER|STUDENT|PARENT") String role,
             String email,
             String phone,
             String avatarUrl,

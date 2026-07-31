@@ -53,6 +53,12 @@ public class User {
     private String studentCode;
     private String classId;
     private String className;
+    private String cohortId;
+    /** ENROLLED | GRADUATED | TRANSFERRED | WITHDRAWN; separate from account status. */
+    private String studentStatus;
+    private Instant graduatedAt;
+    private String graduationAcademicYearId;
+    private String graduationClassId;
     private LocalDate dateOfBirth;
     private String gender;
     private String placeOfBirth;

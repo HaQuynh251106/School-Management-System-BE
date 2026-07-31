@@ -23,6 +23,8 @@ interface SchoolClassRepository extends JpaRepository<SchoolClass, String> {
     List<SchoolClass> findByAcademicYearId(String academicYearId);
     List<SchoolClass> findByGradeLevel(String gradeLevel);
     List<SchoolClass> findByHomeroomTeacherId(String homeroomTeacherId);
+    Optional<SchoolClass> findFirstByAcademicYearIdAndHomeroomTeacherIdAndIdNot(
+            String academicYearId, String homeroomTeacherId, String id);
     List<SchoolClass> findByRoomId(String roomId);
     Optional<SchoolClass> findByAcademicYearIdAndCode(String academicYearId, String code);
     Optional<SchoolClass> findByAcademicYearIdAndStudyShiftAndRoomId(
@@ -41,4 +43,9 @@ interface ClassEnrollmentRepository extends JpaRepository<ClassEnrollment, Strin
     List<ClassEnrollment> findByStudentIdAndStatus(String studentId, String status);
     Optional<ClassEnrollment> findByAcademicYearIdAndClassIdAndStudentId(
             String academicYearId, String classId, String studentId);
+}
+
+interface CohortRepository extends JpaRepository<Cohort, String> {
+    Optional<Cohort> findByCode(String code);
+    List<Cohort> findByStatus(String status);
 }

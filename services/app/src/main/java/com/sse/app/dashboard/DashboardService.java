@@ -30,11 +30,67 @@ public class DashboardService {
         CurrentUser user = CurrentUserHolder.require();
         return switch (user.role()) {
             case "ADMIN" -> admin();
+            case "ACADEMIC_STAFF" -> academicStaff();
+            case "ACCOUNTANT" -> accountant();
             case "TEACHER" -> teacher(user.id());
             case "STUDENT" -> student(user.id());
             case "PARENT" -> parent(user.id(), childId);
             default -> new DashboardDtos.Response(List.of(), List.of());
         };
+    }
+
+    private DashboardDtos.Response academicStaff() {
+        double classes = number("select count(*) from classes");
+        double students = number("select count(*) from users where role='STUDENT' and status='ACTIVE'");
+        double slots = number("select count(*) from timetable_slots");
+        double upcomingExams = number("select count(*) from exam_periods where status in ('DRAFT','CONFIRMED') and end_date >= current_date");
+        List<DashboardDtos.Metric> metrics = List.of(
+                metric("classes", "Lớp học", classes, "NUMBER", "Cơ cấu lớp đang được quản lý", "blue"),
+                metric("users", "Học sinh", students, "NUMBER", "Hồ sơ học sinh đang hoạt động", "violet"),
+                metric("calendar", "Tiết đã xếp", slots, "NUMBER", "Thời khóa biểu hiện có", "green"),
+                metric("alerts", "Kỳ thi cần theo dõi", upcomingExams, "NUMBER", "Kỳ thi nháp hoặc đã xác nhận", upcomingExams > 0 ? "orange" : "green")
+        );
+        List<DashboardDtos.Chart> charts = List.of(
+                chart("Quy mô theo khối", "Số học sinh trong từng khối", "COLUMN", " học sinh", rows("""
+                        select coalesce(c.grade_level, 'Chưa xếp lớp') label, count(u.id) metric_value
+                        from users u left join classes c on c.id=u.class_id
+                        where u.role='STUDENT' and u.status='ACTIVE'
+                        group by coalesce(c.grade_level, 'Chưa xếp lớp') order by label
+                        """)),
+                chart("Tiến độ thời khóa biểu", "Số tiết đã xếp theo lớp", "BAR", " tiết", rows("""
+                        select c.code label, count(t.id) metric_value from classes c
+                        left join timetable_slots t on t.class_id=c.id
+                        group by c.id,c.code order by c.code limit 12
+                        """))
+        );
+        return new DashboardDtos.Response(metrics, charts);
+    }
+
+    private DashboardDtos.Response accountant() {
+        double total = number("select coalesce(sum(total_amount),0) from invoices");
+        double collected = number("select coalesce(sum(paid_amount),0) from invoices");
+        double debt = Math.max(0, total - collected);
+        double overdue = number("select count(*) from invoices where status='OVERDUE'");
+        List<DashboardDtos.Metric> metrics = List.of(
+                metric("invoices", "Tổng phải thu", total, "CURRENCY", "Giá trị hóa đơn đã phát hành", "blue"),
+                metric("payments", "Đã thu", collected, "CURRENCY", "Tổng tiền đã ghi nhận", "green"),
+                metric("alerts", "Còn phải thu", debt, "CURRENCY", "Công nợ toàn trường", debt > 0 ? "orange" : "green"),
+                metric("overdue", "Hóa đơn quá hạn", overdue, "NUMBER", "Cần phối hợp nhắc phụ huynh", overdue > 0 ? "red" : "green")
+        );
+        List<DashboardDtos.Chart> charts = List.of(
+                chart("Trạng thái hóa đơn", "Số lượng theo trạng thái", "BAR", " hóa đơn", rows("""
+                        select case status when 'PAID' then 'Đã thanh toán' when 'PARTIAL' then 'Một phần'
+                               when 'OVERDUE' then 'Quá hạn' else 'Chưa thanh toán' end label,
+                               count(*) metric_value from invoices group by status order by metric_value desc
+                        """)),
+                chart("Công nợ theo lớp", "Số tiền còn phải thu", "COLUMN", " đ", rows("""
+                        select coalesce(class_code,'Chưa có lớp') label,
+                               coalesce(sum(total_amount-paid_amount),0) metric_value
+                        from invoices group by coalesce(class_code,'Chưa có lớp')
+                        order by metric_value desc limit 10
+                        """))
+        );
+        return new DashboardDtos.Response(metrics, charts);
     }
 
     private DashboardDtos.Response admin() {

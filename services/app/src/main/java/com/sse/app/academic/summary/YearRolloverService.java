@@ -82,7 +82,8 @@ public class YearRolloverService {
         }
 
         AcademicYear nextYear = structure.createYear(new CreateAcademicYearRequest(
-                null, request.nextYearCode(), request.nextYearName(), request.startDate(), request.endDate(), "PLANNED"));
+                null, request.nextYearCode(), request.nextYearName(), request.startDate(), request.endDate(), "PLANNED"),
+                false);
         List<Semester> clonedSemesters = cloneSemesters(currentYear, nextYear);
         boolean createIntake = request.createIntakeClasses() == null || request.createIntakeClasses();
         if (!createIntake && readiness.expectedRetained() > 0) {

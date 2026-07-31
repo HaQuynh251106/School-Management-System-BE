@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.time.Clock;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeParseException;
@@ -41,11 +42,12 @@ public class AttendanceService {
     private final StructureService structure;
     private final AttendanceSessionAccessRepository sessionAccesses;
     private final LeaveRequestService leaveRequests;
+    private final Clock clock;
 
     public AttendanceService(AttendanceRepository records, TimetableService timetable,
                              UserService users, NotificationService notifications,
                              StructureService structure, AttendanceSessionAccessRepository sessionAccesses,
-                             LeaveRequestService leaveRequests) {
+                             LeaveRequestService leaveRequests, Clock clock) {
         this.records = records;
         this.timetable = timetable;
         this.users = users;
@@ -53,6 +55,7 @@ public class AttendanceService {
         this.structure = structure;
         this.sessionAccesses = sessionAccesses;
         this.leaveRequests = leaveRequests;
+        this.clock = clock;
     }
 
     public List<AttendanceRecord> list(String studentId, String classId, String slotId, LocalDate date) {
@@ -94,7 +97,7 @@ public class AttendanceService {
     }
 
     public AttendanceSessionStatus sessionStatus(String slotId, LocalDate date) {
-        return sessionStatus(requireSlot(slotId), date, ZonedDateTime.now(SCHOOL_ZONE));
+        return sessionStatus(requireSlot(slotId), date, schoolNow());
     }
 
     public List<LeaveRequest> approvedLeaves(String slotId, LocalDate date, CurrentUser actor) {
@@ -107,7 +110,7 @@ public class AttendanceService {
     public AttendanceSessionStatus unlockLateAttendance(UnlockAttendanceRequest request, CurrentUser actor) {
         TimetableSlot slot = requireSlot(request.slotId());
         assertCanManageSlot(actor, slot.getId());
-        AttendanceSessionStatus current = sessionStatus(slot, request.date(), ZonedDateTime.now(SCHOOL_ZONE));
+        AttendanceSessionStatus current = sessionStatus(slot, request.date(), schoolNow());
         if ("LATE_UNLOCKED".equals(current.state()) || "COMPLETED_LATE".equals(current.state())) {
             return current;
         }
@@ -117,7 +120,7 @@ public class AttendanceService {
 
         AttendanceSessionAccess access = accessFor(slot, request.date());
         access.setUnlockReason(request.reason().trim());
-        access.setUnlockedAt(java.time.Instant.now());
+        access.setUnlockedAt(clock.instant());
         access.setUnlockedBy(actor.id());
         sessionAccesses.save(access);
 
@@ -129,7 +132,7 @@ public class AttendanceService {
                 + " ngày " + request.date() + ". Lý do: " + access.getUnlockReason();
         notifications.notifyUsers(users.userIdsByRole("ADMIN"), "ATTENDANCE_UNLOCK", "IMPORTANT",
                 "Mở khóa điểm danh muộn", body, "ATTENDANCE_SESSION", access.getId());
-        return sessionStatus(slot, request.date(), ZonedDateTime.now(SCHOOL_ZONE));
+        return sessionStatus(slot, request.date(), schoolNow());
     }
 
     @Transactional
@@ -163,7 +166,7 @@ public class AttendanceService {
 
             AttendanceSessionAccess access = accessFor(slot, date);
             if (access.getReminderSentAt() != null) continue;
-            access.setReminderSentAt(java.time.Instant.now());
+            access.setReminderSentAt(clock.instant());
             sessionAccesses.save(access);
 
             String classCode = structure.getClass(slot.getClassId()).getCode();
@@ -246,7 +249,7 @@ public class AttendanceService {
     }
 
     private void validateOccurrence(TimetableSlot slot, LocalDate date) {
-        AttendanceSessionStatus status = sessionStatus(slot, date, ZonedDateTime.now(SCHOOL_ZONE));
+        AttendanceSessionStatus status = sessionStatus(slot, date, schoolNow());
         if (!status.canMark()) throw ApiException.badRequest(status.message());
     }
 
@@ -308,6 +311,10 @@ public class AttendanceService {
         if (value == null || value.isBlank()) return null;
         try { return LocalTime.parse(value.trim()); }
         catch (DateTimeParseException ignored) { return null; }
+    }
+
+    private ZonedDateTime schoolNow() {
+        return ZonedDateTime.now(clock).withZoneSameInstant(SCHOOL_ZONE);
     }
 
     private AttendanceSessionAccess accessFor(TimetableSlot slot, LocalDate date) {

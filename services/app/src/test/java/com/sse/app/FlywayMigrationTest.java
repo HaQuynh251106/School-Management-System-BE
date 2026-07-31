@@ -1,6 +1,7 @@
 package com.sse.app;
 
 import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.output.MigrateResult;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -14,7 +15,9 @@ class FlywayMigrationTest {
                 .locations("classpath:db/migration")
                 .load();
 
-        assertEquals(35, flyway.migrate().migrationsExecuted);
-        assertEquals(35, flyway.info().applied().length);
+        MigrateResult result = flyway.migrate();
+
+        assertEquals(result.migrationsExecuted, flyway.info().applied().length);
+        assertEquals(0, flyway.info().pending().length);
     }
 }

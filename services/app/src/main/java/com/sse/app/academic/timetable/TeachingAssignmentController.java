@@ -38,7 +38,7 @@ public class TeachingAssignmentController {
             @RequestParam(required = false) String startTime,
             @RequestParam(required = false) String endTime) {
         CurrentUser current = CurrentUserHolder.require();
-        CurrentUserHolder.requireRole("ADMIN", "TEACHER");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF", "TEACHER");
         if (current.isTeacher()) {
             if (teacherId != null && !teacherId.equals(current.id())) {
                 throw ApiException.forbidden("Giáo viên chỉ được xem phân công của mình");
@@ -60,33 +60,33 @@ public class TeachingAssignmentController {
 
     @GetMapping("/teaching-assignments/workloads")
     public List<TeacherWorkloadResponse> workloads(@RequestParam(required = false) String semesterId) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return assignments.teacherWorkloads(semesterId);
     }
 
     @PostMapping("/teaching-assignments")
     public TeachingAssignmentResponse create(@Valid @RequestBody SaveTeachingAssignmentRequest request) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return assignments.create(request, CurrentUserHolder.require().id());
     }
 
     @PostMapping("/teaching-assignments/batch")
     public List<TeachingAssignmentResponse> createBatch(
             @Valid @RequestBody BatchSaveTeachingAssignmentRequest request) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return assignments.createBatch(request, CurrentUserHolder.require().id());
     }
 
     @PutMapping("/teaching-assignments/{id}")
     public TeachingAssignmentResponse update(@PathVariable String id,
                                               @Valid @RequestBody SaveTeachingAssignmentRequest request) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return assignments.update(id, request);
     }
 
     @DeleteMapping("/teaching-assignments/{id}")
     public void delete(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         assignments.delete(id);
     }
 }

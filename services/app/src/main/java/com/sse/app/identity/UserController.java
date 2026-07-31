@@ -33,9 +33,9 @@ public class UserController {
     public List<UserDto> list(@RequestParam(required = false) String role,
                               @RequestParam(required = false) String q,
                               @RequestParam(required = false) String classId) {
-        CurrentUserHolder.requireRole("ADMIN", "TEACHER");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF", "TEACHER");
         var current = CurrentUserHolder.require();
-        return current.isAdmin()
+        return current.canManageAcademics()
                 ? users.list(role, q, classId)
                 : users.listSummaries(role, q, classId);
     }
@@ -49,9 +49,9 @@ public class UserController {
                                       @RequestParam(defaultValue = "0") int page,
                                       @RequestParam(defaultValue = "10") int size,
                                       @RequestParam(defaultValue = "fullName") String sort) {
-        CurrentUserHolder.requireRole("ADMIN", "TEACHER");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF", "TEACHER");
         var current = CurrentUserHolder.require();
-        return current.isAdmin()
+        return current.canManageAcademics()
                 ? users.page(role, q, classId, gradeLevel, status, page, size, sort)
                 : users.summaryPage(role, q, classId, gradeLevel, status, page, size, sort);
     }

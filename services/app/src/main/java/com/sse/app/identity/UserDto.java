@@ -1,6 +1,7 @@
 package com.sse.app.identity;
 
 import java.time.LocalDate;
+import java.time.Instant;
 import java.util.List;
 
 /** Hồ sơ user trả cho client (không kèm mật khẩu) — khớp UserModel của FE. */
@@ -28,5 +29,10 @@ public record UserDto(
         String guardianPhone,
         String teacherCode,
         String mainSubject,
-        List<String> childrenIds
+        List<String> childrenIds,
+        String cohortId,
+        String studentStatus,
+        Instant graduatedAt,
+        String graduationAcademicYearId,
+        String graduationClassId
 ) {}

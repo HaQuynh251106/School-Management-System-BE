@@ -28,65 +28,65 @@ public class FinanceController {
         this.structure = structure;
     }
 
-    // ----- Đợt thu (ADMIN) -----
+    // ----- Đợt thu (Kế toán; ADMIN giữ quyền giám sát) -----
     @GetMapping("/fee-periods")
     public List<FeePeriod> periods() {
-        CurrentUserHolder.requireRole("ADMIN", "TEACHER");
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT", "TEACHER");
         return finance.listPeriods();
     }
 
     @PostMapping("/fee-periods")
     public FeePeriod createPeriod(@Valid @RequestBody CreateFeePeriodRequest r) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
         return finance.createPeriod(r);
     }
 
     @PutMapping("/fee-periods/{id}")
     public FeePeriod updatePeriod(@PathVariable String id,
                                   @Valid @RequestBody UpdateFeePeriodRequest request) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
         return finance.updatePeriod(id, request);
     }
 
     @DeleteMapping("/fee-periods/{id}")
     public void deletePeriod(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
         finance.deletePeriod(id);
     }
 
     @GetMapping("/fee-periods/{id}/items")
     public List<FeePeriodItem> items(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
         return finance.itemsOf(id);
     }
 
     @PostMapping("/fee-periods/{id}/items")
     public FeePeriodItem addItem(@PathVariable String id, @Valid @RequestBody AddFeeItemRequest r) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
         return finance.addItem(id, r);
     }
 
     @DeleteMapping("/fee-periods/{periodId}/items/{itemId}")
     public void deleteItem(@PathVariable String periodId, @PathVariable String itemId) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
         finance.deleteItem(periodId, itemId);
     }
 
     @PostMapping("/fee-periods/{id}/open")
     public FeePeriod open(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
         return finance.open(id);
     }
 
     @PostMapping("/fee-periods/{id}/close")
     public FeePeriod close(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
         return finance.close(id);
     }
 
     @PostMapping("/fee-periods/{id}/generate-invoices")
     public List<Invoice> generate(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
         return finance.generateInvoices(id);
     }
 
@@ -100,7 +100,7 @@ public class FinanceController {
                                   @RequestParam(required = false) String classId,
                                   @RequestParam(required = false) String gradeLevel) {
         CurrentUser me = CurrentUserHolder.require();
-        CurrentUserHolder.requireRole("ADMIN", "TEACHER", "PARENT", "STUDENT");
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT", "TEACHER", "PARENT", "STUDENT");
         if (me.isParent()) {
             if (studentId != null) { users.assertParentOf(me.id(), studentId); }
             else parentId = me.id();
@@ -123,7 +123,7 @@ public class FinanceController {
                                               @RequestParam(defaultValue = "0") int page,
                                               @RequestParam(defaultValue = "20") int size) {
         CurrentUser me = CurrentUserHolder.require();
-        CurrentUserHolder.requireRole("ADMIN", "TEACHER", "PARENT", "STUDENT");
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT", "TEACHER", "PARENT", "STUDENT");
         if (me.isParent()) {
             if (studentId != null) users.assertParentOf(me.id(), studentId);
             else parentId = me.id();
@@ -141,8 +141,8 @@ public class FinanceController {
                                                      @RequestParam(required = false) String classId,
                                                      @RequestParam(required = false) String status) {
         CurrentUser me = CurrentUserHolder.require();
-        CurrentUserHolder.requireRole("ADMIN", "TEACHER");
-        if (me.isAdmin()) return finance.classSummaries(periodId, null, gradeLevel, classId, status);
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT", "TEACHER");
+        if (me.canManageFinance()) return finance.classSummaries(periodId, null, gradeLevel, classId, status);
         var classIds = structure.classesOfHomeroom(me.id()).stream()
                 .map(com.sse.app.academic.structure.SchoolClass::getId)
                 .collect(java.util.stream.Collectors.toSet());
@@ -152,21 +152,21 @@ public class FinanceController {
     @PostMapping("/finance/classes/{classId}/remind-homeroom")
     public HomeroomDebtReminderResult remindHomeroomTeacher(@PathVariable String classId,
                                                              @RequestParam(required = false) String periodId) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
         return finance.remindHomeroomTeachers(periodId, List.of(classId));
     }
 
     @PostMapping("/finance/classes/remind-homerooms")
     public HomeroomDebtReminderResult remindHomeroomTeachers(
             @RequestBody HomeroomDebtReminderRequest request) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
         return finance.remindHomeroomTeachers(request.periodId(), request.classIds());
     }
 
     @PostMapping("/finance/classes/{classId}/notify-completion")
     public void notifyCompletion(@PathVariable String classId,
                                  @RequestParam(required = false) String periodId) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
         finance.notifyHomeroomCompletion(classId, periodId);
     }
 
@@ -187,14 +187,14 @@ public class FinanceController {
 
     @GetMapping("/finance/overview")
     public Map<String, Object> overview() {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
         return finance.financeOverview();
     }
 
     @GetMapping("/invoices/{id}")
     public Map<String, Object> invoiceDetail(@PathVariable String id) {
         CurrentUser me = CurrentUserHolder.require();
-        CurrentUserHolder.requireRole("ADMIN", "PARENT", "STUDENT");
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT", "PARENT", "STUDENT");
         Invoice inv = finance.getInvoice(id);
         if (me.isParent() && !me.id().equals(inv.getParentId())) {
             users.assertParentOf(me.id(), inv.getStudentId());
@@ -208,7 +208,7 @@ public class FinanceController {
     @PostMapping("/payments")
     public Map<String, Object> pay(@Valid @RequestBody PayRequest r, HttpServletRequest request) {
         CurrentUser me = CurrentUserHolder.require();
-        CurrentUserHolder.requireRole("PARENT", "ADMIN");
+        CurrentUserHolder.requireRole("PARENT", "ADMIN", "ACCOUNTANT");
         Invoice inv = finance.getInvoice(r.invoiceId());
         if (me.isParent() && !me.id().equals(inv.getParentId())) {
             users.assertParentOf(me.id(), inv.getStudentId());
@@ -220,20 +220,20 @@ public class FinanceController {
 
     @PostMapping("/payments/cash")
     public Map<String, Object> recordCash(@Valid @RequestBody CashPaymentRequest request) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
         return finance.recordCashPayment(request.invoiceId(), request.amount());
     }
 
     @PostMapping("/invoices/{id}/remind")
     public void remindInvoice(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
         finance.remindInvoice(id);
     }
 
     @PostMapping("/payments/{paymentId}/submitted")
     public Map<String, Object> markVietQrSubmitted(@PathVariable String paymentId) {
         CurrentUser me = CurrentUserHolder.require();
-        CurrentUserHolder.requireRole("PARENT", "ADMIN");
+        CurrentUserHolder.requireRole("PARENT", "ADMIN", "ACCOUNTANT");
         Payment payment = finance.getPayment(paymentId);
         Invoice invoice = finance.getInvoice(payment.getInvoiceId());
         if (me.isParent() && !me.id().equals(invoice.getParentId())) {
@@ -244,27 +244,27 @@ public class FinanceController {
 
     @GetMapping("/payments/vietqr/pending")
     public List<Map<String, Object>> pendingVietQrPayments() {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
         return finance.pendingVietQrPayments();
     }
 
     @PostMapping("/payments/{paymentId}/confirm-vietqr")
     public Map<String, Object> confirmVietQr(@PathVariable String paymentId,
                                              @RequestBody(required = false) VietQrConfirmationRequest request) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
         return finance.confirmVietQrPayment(paymentId, request == null ? null : request.bankTransactionRef());
     }
 
     @PostMapping("/payments/{paymentId}/reject-vietqr")
     public Map<String, Object> rejectVietQr(@PathVariable String paymentId) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
         return finance.rejectVietQrPayment(paymentId);
     }
 
     @GetMapping("/payments")
     public List<Payment> payments(@RequestParam String invoiceId) {
         CurrentUser me = CurrentUserHolder.require();
-        CurrentUserHolder.requireRole("ADMIN", "PARENT", "STUDENT");
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT", "PARENT", "STUDENT");
         Invoice inv = finance.getInvoice(invoiceId);
         if (me.isParent() && !me.id().equals(inv.getParentId())) {
             users.assertParentOf(me.id(), inv.getStudentId());

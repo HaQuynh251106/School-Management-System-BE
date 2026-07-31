@@ -20,7 +20,7 @@ public class YearEndController {
 
     @GetMapping("/{id}/promotion-preview")
     public List<StudentYearlySummary> preview(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return yearEnd.preview(id);
     }
 
@@ -53,21 +53,21 @@ public class YearEndController {
 
     @PostMapping("/{id}/finalize")
     public List<StudentYearlySummary> finalizeYear(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         var current = CurrentUserHolder.require();
         return yearEnd.finalizeYear(id, current.id());
     }
 
     @GetMapping("/{id}/rollover-preview")
     public YearEndDtos.RolloverPreview rolloverPreview(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return rollover.preview(id);
     }
 
     @PostMapping("/{id}/rollover")
     public YearEndDtos.RolloverResult rollover(@PathVariable String id,
                                                 @Valid @RequestBody YearEndDtos.RolloverRequest request) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return rollover.rollover(id, request, CurrentUserHolder.require().id());
     }
 }

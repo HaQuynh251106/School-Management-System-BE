@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.time.LocalTime;
 import java.time.format.DateTimeParseException;
+import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
@@ -279,6 +280,28 @@ public class TeachingAssignmentService {
             throw ApiException.badRequest("Chỉ có thể phân công giáo viên đang hoạt động");
         }
         return new AssignmentScope(schoolClass, semester, subjectName, teacher);
+    }
+
+    public boolean teacherSupportsSubject(User teacher, String subjectId) {
+        if (teacher == null || teacher.getMainSubject() == null || teacher.getMainSubject().isBlank()) return false;
+        var subject = structure.listSubjects().stream()
+                .filter(item -> item.getId().equals(subjectId)).findFirst().orElse(null);
+        if (subject == null) return false;
+        String targetCode = comparable(subject.getCode());
+        String targetName = comparable(subject.getName());
+        return java.util.Arrays.stream(teacher.getMainSubject().split("[,;/|]"))
+                .map(TeachingAssignmentService::comparable)
+                .anyMatch(value -> value.equals(targetCode) || value.equals(targetName)
+                        || value.equals(comparable(subject.getId())));
+    }
+
+    private static String comparable(String value) {
+        if (value == null) return "";
+        return Normalizer.normalize(value, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .replace("đ", "d").replace("Đ", "D")
+                .replaceAll("[^A-Za-z0-9]", "")
+                .toUpperCase(java.util.Locale.ROOT);
     }
 
     private TeachingAssignment newAssignment(SaveTeachingAssignmentRequest request, AssignmentScope scope,

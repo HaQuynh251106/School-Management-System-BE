@@ -71,7 +71,9 @@ public class UserService {
                 u.getDateOfBirth(), u.getGender(), u.getPlaceOfBirth(),
                 u.getEthnicity(), u.getNationality(), u.getAddress(),
                 u.getEnrollmentDate(), u.getGuardianName(), u.getGuardianPhone(),
-                u.getTeacherCode(), u.getMainSubject(), childrenIds);
+                u.getTeacherCode(), u.getMainSubject(), childrenIds,
+                u.getCohortId(), u.getStudentStatus(), u.getGraduatedAt(),
+                u.getGraduationAcademicYearId(), u.getGraduationClassId());
     }
 
     /** Thông tin an toàn để dùng trong danh sách/lựa chọn, không lộ dữ liệu hồ sơ cá nhân. */
@@ -83,7 +85,9 @@ public class UserService {
                 null, null, null,
                 null, null, null,
                 null, null, null,
-                u.getTeacherCode(), u.getMainSubject(), null);
+                u.getTeacherCode(), u.getMainSubject(), null,
+                u.getCohortId(), u.getStudentStatus(), u.getGraduatedAt(),
+                u.getGraduationAcademicYearId(), u.getGraduationClassId());
     }
 
     public UserDto dtoById(String id) {
@@ -215,8 +219,33 @@ public class UserService {
         if (!"STUDENT".equals(student.getRole())) throw ApiException.badRequest("Người dùng không phải học sinh");
         student.setClassId(classId);
         student.setClassName(className);
+        student.setCohortId(structure.cohortIdForClass(classId));
+        student.setStudentStatus("ENROLLED");
+        student.setGraduatedAt(null);
+        student.setGraduationAcademicYearId(null);
+        student.setGraduationClassId(null);
         User saved = users.save(student);
         structure.recordEnrollment(studentId, classId);
+        return toDto(saved);
+    }
+
+    @Transactional
+    public UserDto graduateStudent(String studentId, String academicYearId, String graduationClassId,
+                                   Instant graduatedAt) {
+        User student = getById(studentId);
+        if (!"STUDENT".equals(student.getRole())) throw ApiException.badRequest("Người dùng không phải học sinh");
+        if ("GRADUATED".equals(student.getStudentStatus())) return toDto(student);
+        if (!Objects.equals(student.getClassId(), graduationClassId)) {
+            throw ApiException.conflict("Lớp tốt nghiệp không khớp với lớp hiện tại của học sinh");
+        }
+        student.setStudentStatus("GRADUATED");
+        student.setGraduatedAt(graduatedAt);
+        student.setGraduationAcademicYearId(academicYearId);
+        student.setGraduationClassId(graduationClassId);
+        student.setClassId(null);
+        student.setClassName(null);
+        User saved = users.save(student);
+        structure.closeEnrollmentForGraduation(studentId, graduatedAt);
         return toDto(saved);
     }
 
@@ -246,6 +275,8 @@ public class UserService {
 
         String needle = q == null ? null : q.trim().toLowerCase();
         return base.stream()
+                .filter(u -> !"STUDENT".equalsIgnoreCase(role)
+                        || !"GRADUATED".equals(u.getStudentStatus()))
                 .filter(u -> filterParentsByClass || classId == null || classId.isBlank()
                         || classId.equals(u.getClassId()))
                 .filter(u -> needle == null || needle.isEmpty() || matches(u, needle))
@@ -260,6 +291,10 @@ public class UserService {
         return (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
             if (role != null && !role.isBlank()) predicates.add(cb.equal(root.get("role"), role.toUpperCase(Locale.ROOT)));
+            if ("STUDENT".equalsIgnoreCase(role)) {
+                predicates.add(cb.or(cb.isNull(root.get("studentStatus")),
+                        cb.notEqual(root.get("studentStatus"), "GRADUATED")));
+            }
             if (status != null && !status.isBlank()) predicates.add(cb.equal(root.get("status"), status.toUpperCase(Locale.ROOT)));
             if (q != null && !q.isBlank()) {
                 String pattern = "%" + q.trim().toLowerCase(Locale.ROOT) + "%";
@@ -334,6 +369,7 @@ public class UserService {
         if ("STUDENT".equals(r.role()) && (studentCode == null || studentCode.isBlank())) {
             studentCode = "HS2025" + String.format("%03d", users.findByRole("STUDENT").size() + 1);
         }
+        String cohortId = "STUDENT".equals(r.role()) ? structure.cohortIdForClass(r.classId()) : null;
         User u = User.builder()
                 .id(id)
                 .username(r.username())
@@ -350,6 +386,8 @@ public class UserService {
                 .studentCode(studentCode)
                 .classId(r.classId())
                 .className(r.className())
+                .cohortId(cohortId)
+                .studentStatus("STUDENT".equals(r.role()) ? "ENROLLED" : null)
                 .dateOfBirth(r.dateOfBirth())
                 .gender(r.gender())
                 .placeOfBirth(r.placeOfBirth())
@@ -390,6 +428,13 @@ public class UserService {
         if (r.enrollmentDate() != null) u.setEnrollmentDate(r.enrollmentDate());
         if (r.guardianName() != null) u.setGuardianName(r.guardianName());
         if (r.guardianPhone() != null) u.setGuardianPhone(r.guardianPhone());
+        if ("STUDENT".equals(u.getRole()) && r.classId() != null) {
+            u.setCohortId(structure.cohortIdForClass(r.classId()));
+            u.setStudentStatus("ENROLLED");
+            u.setGraduatedAt(null);
+            u.setGraduationAcademicYearId(null);
+            u.setGraduationClassId(null);
+        }
         User saved = users.save(u);
         if ("STUDENT".equals(saved.getRole()) && saved.getClassId() != null
                 && !Objects.equals(previousClassId, saved.getClassId())) {

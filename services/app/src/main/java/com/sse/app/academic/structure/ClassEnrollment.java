@@ -18,6 +18,7 @@ public class ClassEnrollment {
     private String studentId;
     private String classId;
     private String academicYearId;
+    private String cohortId;
     private String status;
     private Instant enrolledAt;
     private Instant endedAt;

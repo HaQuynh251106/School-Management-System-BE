@@ -6,6 +6,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
+import java.time.Clock;
 import java.util.concurrent.Executor;
 
 @Configuration
@@ -15,6 +16,11 @@ public class AppBeans {
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
+    }
+
+    @Bean
+    public Clock systemClock() {
+        return Clock.systemUTC();
     }
 
     @Bean(name = "notificationExecutor")

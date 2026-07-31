@@ -36,6 +36,9 @@ data/
 .mvn/wrapper/maven-wrapper.jar
 dependency-reduced-pom.xml
 tmp/
+backups/*.dump
+backups/*.dump.json
+backups/*.dump.sha256
 
 # Test coverage
 coverage/

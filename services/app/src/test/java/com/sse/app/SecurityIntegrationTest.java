@@ -8,11 +8,16 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.mock.web.MockMultipartFile;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
 import java.io.ByteArrayOutputStream;
+import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
@@ -41,7 +46,18 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 })
 @AutoConfigureMockMvc
 @ActiveProfiles("demo")
+@Import(SecurityIntegrationTest.FixedClockConfiguration.class)
 class SecurityIntegrationTest {
+    @TestConfiguration
+    static class FixedClockConfiguration {
+        @Bean
+        @Primary
+        Clock fixedSchoolClock() {
+            return Clock.fixed(Instant.parse("2026-09-01T05:00:00Z"),
+                    java.time.ZoneId.of("Asia/Ho_Chi_Minh"));
+        }
+    }
+
 
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper json;
@@ -130,7 +146,7 @@ class SecurityIntegrationTest {
     void webSessionCanRotateRefreshTokenUsingHttpOnlyCookie() throws Exception {
         var loginResult = mvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json.writeValueAsString(new Login("admin", "admin@123"))))
+                        .content(json.writeValueAsString(currentSeedCredentials("admin", "admin@123"))))
                 .andExpect(status().isOk())
                 .andExpect(header().string("Set-Cookie", org.hamcrest.Matchers.containsString("HttpOnly")))
                 .andReturn();
@@ -227,7 +243,7 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + teacher)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"slotId":"tt-1","date":"2026-01-12",
+                                {"slotId":"tt-1","date":"2026-08-24",
                                  "reason":"Bổ sung sổ điểm danh cũ sau khi đối soát dữ liệu lớp học"}
                                 """))
                 .andExpect(status().isOk())
@@ -237,7 +253,7 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + teacher)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"slotId":"tt-1","date":"2026-01-12","classId":"c-8a1","subjectName":"Sai",
+                                {"slotId":"tt-1","date":"2026-08-24","classId":"c-8a1","subjectName":"Sai",
                                  "periodNo":9,"marks":[{"studentId":"u-student-1","status":"LATE","note":"  Muộn 5 phút  "}]}
                                 """))
                 .andExpect(status().isOk())
@@ -258,7 +274,7 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + parent))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].type").value("ATTENDANCE"))
-                .andExpect(jsonPath("$[0].body").value(org.hamcrest.Matchers.containsString("Phạm Hoài An")));
+                .andExpect(jsonPath("$[0].body").value(org.hamcrest.Matchers.containsString("Nguyễn Minh An")));
 
         int unreadBeforeUnchangedSave = body(mvc.perform(get("/notifications/unread-count")
                         .header("Authorization", "Bearer " + student))
@@ -267,7 +283,7 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + teacher)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"slotId":"tt-1","date":"2026-01-12","marks":[
+                                {"slotId":"tt-1","date":"2026-08-24","marks":[
                                   {"studentId":"u-student-1","status":"LATE","note":"Muộn 5 phút"}]}
                                 """))
                 .andExpect(status().isOk());
@@ -280,7 +296,7 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + teacher)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"slotId":"tt-1","date":"2026-01-12","marks":[
+                                {"slotId":"tt-1","date":"2026-08-24","marks":[
                                   {"studentId":"u-student-1","status":"PRESENT"}]}
                                 """))
                 .andExpect(status().isOk());
@@ -295,7 +311,7 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + teacher)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"slotId":"tt-1","date":"2026-01-12","marks":[
+                                {"slotId":"tt-1","date":"2026-08-24","marks":[
                                   {"studentId":"u-student-1","status":"PRESENT"},
                                   {"studentId":"u-student-1","status":"PRESENT"}]}
                                 """))
@@ -305,7 +321,7 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + teacher)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"slotId":"tt-1","date":"2026-01-12","marks":[
+                                {"slotId":"tt-1","date":"2026-08-24","marks":[
                                   {"studentId":"u-student-1","status":"ABSENT_EXCUSED"}]}
                                 """))
                 .andExpect(status().isBadRequest());
@@ -314,7 +330,7 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + teacher)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"slotId":"tt-1","date":"2026-01-12","marks":[
+                                {"slotId":"tt-1","date":"2026-08-24","marks":[
                                   {"studentId":"u-student-2","status":"PRESENT"}]}
                                 """))
                 .andExpect(status().isBadRequest());
@@ -365,7 +381,7 @@ class SecurityIntegrationTest {
     void teacherIsRemindedAndMustExplainBeforeLateAttendanceUnlock() throws Exception {
         String teacher = login("gv.hoa", "teacher@123");
         String admin = login("admin", "admin@123");
-        var lessonTime = java.time.ZonedDateTime.of(2026, 1, 5, 7, 5, 0, 0,
+        var lessonTime = java.time.ZonedDateTime.of(2026, 8, 31, 7, 5, 0, 0,
                 java.time.ZoneId.of("Asia/Ho_Chi_Minh"));
 
         org.junit.jupiter.api.Assertions.assertEquals(1, attendanceService.sendDueReminders(lessonTime));
@@ -390,7 +406,7 @@ class SecurityIntegrationTest {
 
         mvc.perform(get("/attendance/session-status")
                         .queryParam("slotId", "tt-1")
-                        .queryParam("date", "2026-01-05")
+                        .queryParam("date", "2026-08-31")
                         .header("Authorization", "Bearer " + teacher))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.state").value("LOCKED_REASON_REQUIRED"))
@@ -401,7 +417,7 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + teacher)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"slotId":"tt-1","date":"2026-01-05","reason":"Mạng lỗi"}
+                                {"slotId":"tt-1","date":"2026-08-31","reason":"Mạng lỗi"}
                                 """))
                 .andExpect(status().isBadRequest());
 
@@ -409,7 +425,7 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + teacher)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"slotId":"tt-1","date":"2026-01-05",
+                                {"slotId":"tt-1","date":"2026-08-31",
                                  "reason":"Thiết bị lớp học mất kết nối mạng trong suốt tiết học"}
                                 """))
                 .andExpect(status().isOk())
@@ -421,14 +437,14 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + teacher)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"slotId":"tt-1","date":"2026-01-05","marks":[
+                                {"slotId":"tt-1","date":"2026-08-31","marks":[
                                   {"studentId":"u-student-1","status":"PRESENT"}]}
                                 """))
                 .andExpect(status().isOk());
 
         mvc.perform(get("/attendance/session-status")
                         .queryParam("slotId", "tt-1")
-                        .queryParam("date", "2026-01-05")
+                        .queryParam("date", "2026-08-31")
                         .header("Authorization", "Bearer " + teacher))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.state").value("COMPLETED_LATE"));
@@ -446,17 +462,17 @@ class SecurityIntegrationTest {
         mvc.perform(get("/classes/c-10a1/students/u-student-1/profile")
                         .header("Authorization", "Bearer " + homeroomTeacher))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.fullName").value("Phạm Hoài An"))
+                .andExpect(jsonPath("$.fullName").value("Nguyễn Minh An"))
                 .andExpect(jsonPath("$.dateOfBirth").value("2010-03-18"))
                 .andExpect(jsonPath("$.guardianName").value("Phạm Văn Quân"));
 
         mvc.perform(get("/users")
                         .queryParam("role", "STUDENT")
                         .queryParam("classId", "c-10a1")
-                        .queryParam("q", "hs.an")
+                        .queryParam("q", "hs.nguyenminhan")
                         .header("Authorization", "Bearer " + homeroomTeacher))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].fullName").value("Phạm Hoài An"))
+                .andExpect(jsonPath("$[0].fullName").value("Nguyễn Minh An"))
                 .andExpect(jsonPath("$[0].email").value(nullValue()))
                 .andExpect(jsonPath("$[0].guardianName").value(nullValue()));
 
@@ -623,7 +639,7 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + teacher)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"studentId":"u-student-2","subjectId":"sj-math","semesterId":"sm-2025-1",
+                                {"studentId":"u-student-2","subjectId":"sj-math","semesterId":"sm-2026-1",
                                  "category":"FINAL","assessmentIndex":1,"score":7.5,"note":"Lần đầu"}
                                 """))
                 .andExpect(status().isCreated())
@@ -651,7 +667,7 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + teacher)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"studentId":"u-student-2","subjectId":"sj-math","semesterId":"sm-2025-1",
+                                {"studentId":"u-student-2","subjectId":"sj-math","semesterId":"sm-2026-1",
                                  "category":"FINAL","assessmentIndex":1,"score":8.0}
                                 """))
                 .andExpect(status().isConflict());
@@ -855,7 +871,7 @@ class SecurityIntegrationTest {
     @Test
     void approvedLeaveReconcilesAttendanceAndSuppressesDuplicateAlerts() throws Exception {
         String teacher = login("gv.hoa", "teacher@123");
-        LocalDate date = LocalDate.of(2025, 12, 29); // Thứ Hai, khớp tiết tt-1.
+        LocalDate date = LocalDate.of(2026, 8, 17); // Thứ Hai, khớp tiết tt-1.
 
         jdbc.update("""
                 insert into attendance_records
@@ -904,7 +920,7 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + teacher)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"slotId":"tt-1","date":"2025-12-29","marks":[
+                                {"slotId":"tt-1","date":"2026-08-17","marks":[
                                   {"studentId":"u-student-1","status":"PRESENT"}]}
                                 """))
                 .andExpect(status().isOk())
@@ -914,7 +930,7 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + teacher)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"slotId":"tt-1","date":"2025-12-29","marks":[
+                                {"slotId":"tt-1","date":"2026-08-17","marks":[
                                   {"studentId":"u-student-1","status":"ABSENT_UNEXCUSED"}]}
                                 """))
                 .andExpect(status().isOk())
@@ -929,7 +945,7 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + teacher)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"slotId":"tt-1","date":"2025-12-29","marks":[
+                                {"slotId":"tt-1","date":"2026-08-17","marks":[
                                   {"studentId":"u-student-1","status":"LATE"}]}
                                 """))
                 .andExpect(status().isBadRequest())
@@ -1233,7 +1249,7 @@ class SecurityIntegrationTest {
 
         mvc.perform(get("/me/gradebook-context")
                         .queryParam("classId", "c-10a1")
-                        .queryParam("semesterId", "sm-2025-1")
+                        .queryParam("semesterId", "sm-2026-1")
                         .header("Authorization", "Bearer " + teacher))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.subjectId").value("sj-math"))
@@ -1244,7 +1260,7 @@ class SecurityIntegrationTest {
 
         mvc.perform(get("/grades")
                         .queryParam("classId", "c-10a1")
-                        .queryParam("semesterId", "sm-2025-1")
+                        .queryParam("semesterId", "sm-2026-1")
                         .queryParam("subjectId", "sj-phys")
                         .header("Authorization", "Bearer " + teacher))
                 .andExpect(status().isOk())
@@ -1254,7 +1270,7 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + teacher)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"studentId":"u-student-2","subjectId":"sj-eng","semesterId":"sm-2025-1",
+                                {"studentId":"u-student-2","subjectId":"sj-eng","semesterId":"sm-2026-1",
                                  "category":"MID","assessmentIndex":1,"score":8.0}
                                 """))
                 .andExpect(status().isForbidden());
@@ -1263,7 +1279,7 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + teacher)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"classId":"c-10a1","semesterId":"sm-2025-1","category":"MID","assessmentIndex":1,
+                                {"classId":"c-10a1","semesterId":"sm-2026-1","category":"MID","assessmentIndex":1,
                                  "entries":[{"studentId":"u-student-1","score":8.0},{"studentId":"u-student-1","score":8.5}]}
                                 """))
                 .andExpect(status().isBadRequest());
@@ -1273,7 +1289,7 @@ class SecurityIntegrationTest {
     void adminCanAssignAnActiveTeacherAsHomeroomTeacher() throws Exception {
         String admin = login("admin", "admin@123");
 
-        mvc.perform(put("/classes/c-10a2/homeroom-teacher")
+        mvc.perform(put("/classes/c-10a1/homeroom-teacher")
                         .header("Authorization", "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -1281,9 +1297,20 @@ class SecurityIntegrationTest {
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.homeroomTeacherId").value("u-teacher-1"))
-                .andExpect(jsonPath("$.homeroomTeacherName").value("Trần Thị Hoa"))
+                .andExpect(jsonPath("$.homeroomTeacherName").value("Nguyễn Đức Minh"))
                 .andExpect(jsonPath("$.homeroomAssignedAt").isNotEmpty())
                 .andExpect(jsonPath("$.homeroomAssignedBy").value("u-admin-1"));
+
+        mvc.perform(put("/classes/c-10a2/homeroom-teacher")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"teacherId":"u-teacher-1"}
+                """))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value(
+                        "Giáo viên đã chủ nhiệm lớp 10A1 trong năm học 2026-2027. "
+                                + "Mỗi giáo viên chỉ được chủ nhiệm một lớp trong cùng năm học."));
     }
 
     @Test
@@ -1373,7 +1400,7 @@ class SecurityIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.coefficient").value(2.0));
 
-        mvc.perform(get("/academic-years/ay-2025/promotion-preview")
+        mvc.perform(get("/academic-years/ay-2026/promotion-preview")
                         .header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].promotionStatus").value("INCOMPLETE"));
@@ -1387,45 +1414,45 @@ class SecurityIntegrationTest {
         String student = login("hs.an", "student@123");
         String parent = login("ph.pham", "parent@123");
 
-        mvc.perform(get("/academic-years/ay-2025/homeroom-summaries")
+        mvc.perform(get("/academic-years/ay-2026/homeroom-summaries")
                         .header("Authorization", "Bearer " + homeroomTeacher))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[*].studentId", hasItem("u-student-1")));
-        mvc.perform(get("/academic-years/ay-2025/homeroom-summaries")
+        mvc.perform(get("/academic-years/ay-2026/homeroom-summaries")
                         .header("Authorization", "Bearer " + student))
                 .andExpect(status().isForbidden());
 
-        mvc.perform(put("/academic-years/ay-2025/students/u-student-1/conduct")
+        mvc.perform(put("/academic-years/ay-2026/students/u-student-1/conduct")
                         .header("Authorization", "Bearer " + homeroomTeacher)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"conductGrade\":\"GOOD\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.conductGrade").value("GOOD"));
-        mvc.perform(put("/academic-years/ay-2025/students/u-student-1/conduct")
+        mvc.perform(put("/academic-years/ay-2026/students/u-student-1/conduct")
                         .header("Authorization", "Bearer " + otherTeacher)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"conductGrade\":\"FAIR\"}"))
                 .andExpect(status().isForbidden());
-        mvc.perform(put("/academic-years/ay-2025/students/u-student-1/conduct")
+        mvc.perform(put("/academic-years/ay-2026/students/u-student-1/conduct")
                         .header("Authorization", "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"conductGrade\":\"FAIR\"}"))
                 .andExpect(status().isForbidden());
 
-        mvc.perform(get("/academic-years/ay-2025/my-summary")
+        mvc.perform(get("/academic-years/ay-2026/my-summary")
                         .header("Authorization", "Bearer " + student))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.studentId").value("u-student-1"))
                 .andExpect(jsonPath("$.conductGrade").value("GOOD"));
-        mvc.perform(get("/academic-years/ay-2025/my-summary")
+        mvc.perform(get("/academic-years/ay-2026/my-summary")
                         .header("Authorization", "Bearer " + parent))
                 .andExpect(status().isForbidden());
 
-        mvc.perform(get("/academic-years/ay-2025/children/u-student-1/summary")
+        mvc.perform(get("/academic-years/ay-2026/children/u-student-1/summary")
                         .header("Authorization", "Bearer " + parent))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.studentId").value("u-student-1"));
-        mvc.perform(get("/academic-years/ay-2025/children/u-admin-1/summary")
+        mvc.perform(get("/academic-years/ay-2026/children/u-admin-1/summary")
                         .header("Authorization", "Bearer " + parent))
                 .andExpect(status().isForbidden());
     }
@@ -1435,7 +1462,7 @@ class SecurityIntegrationTest {
         String admin = login("admin", "admin@123");
         String teacher = login("gv.hoa", "teacher@123");
 
-        mvc.perform(get("/academic-years/ay-2025/rollover-preview")
+        mvc.perform(get("/academic-years/ay-2026/rollover-preview")
                         .header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("ACTIVE"))
@@ -1445,11 +1472,11 @@ class SecurityIntegrationTest {
                 .andExpect(jsonPath("$.blockers").isNotEmpty())
                 .andExpect(jsonPath("$.classPlan").isArray());
 
-        mvc.perform(get("/academic-years/ay-2025/rollover-preview")
+        mvc.perform(get("/academic-years/ay-2026/rollover-preview")
                         .header("Authorization", "Bearer " + teacher))
                 .andExpect(status().isForbidden());
 
-        mvc.perform(put("/academicYears/ay-2025/status")
+        mvc.perform(put("/academicYears/ay-2026/status")
                         .header("Authorization", "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"status\":\"CLOSED\"}"))
@@ -1459,18 +1486,17 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"id":"ay-rollover-next","code":"2026-2027","name":"Năm học 2026-2027",
-                                 "startDate":"2026-09-05","endDate":"2027-05-31"}
+                                {"id":"ay-rollover-next","code":"2027-2028","name":"Năm học 2027-2028",
+                                 "startDate":"2027-08-16","endDate":"2028-05-31"}
                                 """))
                 .andExpect(status().isOk());
-        mvc.perform(post("/semesters")
-                        .header("Authorization", "Bearer " + admin)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"id":"sm-rollover-next-1","academicYearId":"ay-rollover-next","code":"HK1",
-                                 "name":"Học kỳ 1","sequence":1,"startDate":"2026-09-05","endDate":"2027-01-15"}
-                                """))
-                .andExpect(status().isOk());
+        mvc.perform(get("/semesters")
+                        .queryParam("academicYearId", "ay-rollover-next")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].code").value("HK1"))
+                .andExpect(jsonPath("$[1].code").value("HK2"));
         mvc.perform(post("/classes")
                         .header("Authorization", "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -1484,8 +1510,9 @@ class SecurityIntegrationTest {
         mvc.perform(get("/academic-years/ay-rollover-next/rollover-preview")
                         .header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.semesterCount").value(1))
-                .andExpect(jsonPath("$.blockers", hasItem("Năm học chưa cấu hình học kỳ II")));
+                .andExpect(jsonPath("$.semesterCount").value(2))
+                .andExpect(jsonPath("$.blockers", everyItem(
+                        org.hamcrest.Matchers.not("Năm học chưa cấu hình học kỳ II"))));
 
         mvc.perform(put("/academicYears/ay-rollover-next/status")
                         .header("Authorization", "Bearer " + admin)
@@ -1493,7 +1520,7 @@ class SecurityIntegrationTest {
                         .content("{\"status\":\"ACTIVE\"}"))
                 .andExpect(status().isConflict());
 
-        mvc.perform(post("/academic-years/ay-2025/rollover")
+        mvc.perform(post("/academic-years/ay-2026/rollover")
                         .header("Authorization", "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -1543,7 +1570,7 @@ class SecurityIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"id":"c-shift-morning-1","code":"10S1","name":"Lớp ca sáng 1","gradeLevel":"K10",
-                                 "academicYearId":"ay-2025","studyShift":"MORNING","capacity":45,"roomId":"rm-shift-test"}
+                                 "academicYearId":"ay-2026","studyShift":"MORNING","capacity":45,"roomId":"rm-shift-test"}
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.roomCode").value("SHIFT-TEST"));
@@ -1553,7 +1580,7 @@ class SecurityIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"id":"c-shift-morning-2","code":"10S2","name":"Lớp ca sáng 2","gradeLevel":"K10",
-                                 "academicYearId":"ay-2025","studyShift":"MORNING","capacity":45,"roomId":"rm-shift-test"}
+                                 "academicYearId":"ay-2026","studyShift":"MORNING","capacity":45,"roomId":"rm-shift-test"}
                                 """))
                 .andExpect(status().isConflict());
 
@@ -1562,7 +1589,7 @@ class SecurityIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"id":"c-shift-afternoon","code":"10C1","name":"Lớp ca chiều","gradeLevel":"K10",
-                                 "academicYearId":"ay-2025","studyShift":"AFTERNOON","capacity":45,"roomId":"rm-shift-test"}
+                                 "academicYearId":"ay-2026","studyShift":"AFTERNOON","capacity":45,"roomId":"rm-shift-test"}
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.roomCode").value("SHIFT-TEST"));
@@ -1847,7 +1874,7 @@ class SecurityIntegrationTest {
         String batchPayload = """
                 {"assignments":[{"classId":"c-10a2","weeklyPeriods":2},
                                   {"classId":"c-8a1","weeklyPeriods":3}],
-                 "subjectId":"sj-bio","teacherId":"u-teacher-2","semesterId":"sm-2025-2"}
+                 "subjectId":"sj-bio","teacherId":"u-teacher-2","semesterId":"sm-2026-2"}
                 """;
         mvc.perform(post("/teaching-assignments/batch")
                         .header("Authorization", "Bearer " + admin)
@@ -1875,7 +1902,7 @@ class SecurityIntegrationTest {
 
         mvc.perform(get("/teaching-assignments")
                         .queryParam("subjectId", "sj-bio")
-                        .queryParam("semesterId", "sm-2025-2")
+                        .queryParam("semesterId", "sm-2026-2")
                         .header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].teacherId").value("u-teacher-2"))
@@ -1883,7 +1910,7 @@ class SecurityIntegrationTest {
 
         String assignmentPayload = """
                 {"classId":"c-10a2","subjectId":"sj-math","teacherId":"u-teacher-1",
-                 "semesterId":"sm-2025-2","weeklyPeriods":1}
+                 "semesterId":"sm-2026-2","weeklyPeriods":1}
                 """;
         JsonNode assignment = body(mvc.perform(post("/teaching-assignments")
                         .header("Authorization", "Bearer " + admin)
@@ -1901,7 +1928,7 @@ class SecurityIntegrationTest {
         String firstSlot = """
                 {"classId":"c-10a2","subjectId":"sj-math","teacherId":"u-teacher-1",
                  "roomCode":"P201","dayOfWeek":"MON","periodNo":1,
-                 "startTime":"07:00","endTime":"07:45","semesterId":"sm-2025-2"}
+                 "startTime":"07:00","endTime":"07:45","semesterId":"sm-2026-2"}
                 """;
         mvc.perform(post("/timetableSlots")
                         .header("Authorization", "Bearer " + admin)
@@ -1911,7 +1938,7 @@ class SecurityIntegrationTest {
 
         String crossSpecialtyAssignment = """
                 {"classId":"c-8a1","subjectId":"sj-eng","teacherId":"u-teacher-2",
-                 "semesterId":"sm-2025-2","weeklyPeriods":2}
+                 "semesterId":"sm-2026-2","weeklyPeriods":2}
                 """;
         mvc.perform(post("/teaching-assignments")
                         .header("Authorization", "Bearer " + admin)
@@ -1921,7 +1948,7 @@ class SecurityIntegrationTest {
 
         String conflictingAssignment = """
                 {"classId":"c-8a1","subjectId":"sj-math","teacherId":"u-teacher-1",
-                 "semesterId":"sm-2025-2","weeklyPeriods":1}
+                 "semesterId":"sm-2026-2","weeklyPeriods":1}
                 """;
         mvc.perform(post("/teaching-assignments")
                         .header("Authorization", "Bearer " + admin)
@@ -1930,7 +1957,7 @@ class SecurityIntegrationTest {
                 .andExpect(status().isOk());
 
         JsonNode workloads = body(mvc.perform(get("/teaching-assignments/workloads")
-                        .queryParam("semesterId", "sm-2025-2")
+                        .queryParam("semesterId", "sm-2026-2")
                         .header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString());
@@ -1945,7 +1972,7 @@ class SecurityIntegrationTest {
         mvc.perform(get("/teaching-assignments")
                         .queryParam("classId", "c-8a1")
                         .queryParam("subjectId", "sj-math")
-                        .queryParam("semesterId", "sm-2025-2")
+                        .queryParam("semesterId", "sm-2026-2")
                         .queryParam("dayOfWeek", "MON")
                         .queryParam("periodNo", "1")
                         .header("Authorization", "Bearer " + admin))
@@ -1961,7 +1988,7 @@ class SecurityIntegrationTest {
         mvc.perform(get("/teaching-assignments")
                         .queryParam("classId", "c-8a1")
                         .queryParam("subjectId", "sj-math")
-                        .queryParam("semesterId", "sm-2025-2")
+                        .queryParam("semesterId", "sm-2026-2")
                         .queryParam("dayOfWeek", "MON")
                         .queryParam("periodNo", "1")
                         .queryParam("startTime", "13:00")
@@ -1974,7 +2001,7 @@ class SecurityIntegrationTest {
         String teacherConflictSlot = """
                 {"classId":"c-8a1","subjectId":"sj-math","teacherId":"u-teacher-1",
                  "roomCode":"P105","dayOfWeek":"MON","periodNo":1,
-                 "startTime":"07:00","endTime":"07:45","semesterId":"sm-2025-2"}
+                 "startTime":"07:00","endTime":"07:45","semesterId":"sm-2026-2"}
                 """;
         mvc.perform(post("/timetableSlots")
                         .header("Authorization", "Bearer " + admin)
@@ -1986,7 +2013,7 @@ class SecurityIntegrationTest {
         String afternoonSlotWithSamePeriodNumber = """
                 {"classId":"c-8a1","subjectId":"sj-math","teacherId":"u-teacher-1",
                  "roomCode":"P105","dayOfWeek":"MON","periodNo":1,
-                 "startTime":"13:00","endTime":"13:45","semesterId":"sm-2025-2"}
+                 "startTime":"13:00","endTime":"13:45","semesterId":"sm-2026-2"}
                 """;
         mvc.perform(post("/timetableSlots")
                         .header("Authorization", "Bearer " + admin)
@@ -1999,7 +2026,7 @@ class SecurityIntegrationTest {
         String extraSlot = """
                 {"classId":"c-10a2","subjectId":"sj-math","teacherId":"u-teacher-1",
                  "roomCode":"P201","dayOfWeek":"TUE","periodNo":2,
-                 "startTime":"07:50","endTime":"08:35","semesterId":"sm-2025-2"}
+                 "startTime":"07:50","endTime":"08:35","semesterId":"sm-2026-2"}
                 """;
         mvc.perform(post("/timetableSlots")
                         .header("Authorization", "Bearer " + admin)
@@ -2011,7 +2038,7 @@ class SecurityIntegrationTest {
         mvc.perform(get("/teaching-assignments")
                         .queryParam("classId", "c-10a2")
                         .queryParam("subjectId", "sj-math")
-                        .queryParam("semesterId", "sm-2025-2")
+                        .queryParam("semesterId", "sm-2026-2")
                         .header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].id").value(assignment.path("id").asText()))
@@ -2026,7 +2053,7 @@ class SecurityIntegrationTest {
         String missingAssignmentSlot = """
                 {"classId":"c-10a2","subjectId":"sj-phys","teacherId":"u-teacher-2",
                  "roomCode":"LAB1","dayOfWeek":"WED","periodNo":3,
-                 "startTime":"08:45","endTime":"09:30","semesterId":"sm-2025-2"}
+                 "startTime":"08:45","endTime":"09:30","semesterId":"sm-2026-2"}
                 """;
         mvc.perform(post("/timetableSlots")
                         .header("Authorization", "Bearer " + admin)
@@ -2052,23 +2079,23 @@ class SecurityIntegrationTest {
                 .andExpect(status().isOk());
 
         mvc.perform(get("/exam-reports/report-card")
-                        .queryParam("academicYearId", "ay-2025")
+                        .queryParam("academicYearId", "ay-2026")
                         .queryParam("studentId", "u-student-1")
                         .header("Authorization", "Bearer " + student))
                 .andExpect(status().isOk())
                 .andExpect(header().string("Content-Type", org.hamcrest.Matchers.containsString("application/pdf")));
         mvc.perform(get("/exam-reports/report-card")
-                        .queryParam("academicYearId", "ay-2025")
+                        .queryParam("academicYearId", "ay-2026")
                         .queryParam("studentId", "u-student-1")
                         .header("Authorization", "Bearer " + parent))
                 .andExpect(status().isOk());
         mvc.perform(get("/exam-reports/report-card")
-                        .queryParam("academicYearId", "ay-2025")
+                        .queryParam("academicYearId", "ay-2026")
                         .queryParam("studentId", "u-student-1")
                         .header("Authorization", "Bearer " + homeroomTeacher))
                 .andExpect(status().isOk());
         mvc.perform(get("/exam-reports/report-card")
-                        .queryParam("academicYearId", "ay-2025")
+                        .queryParam("academicYearId", "ay-2026")
                         .queryParam("studentId", "u-student-1")
                         .header("Authorization", "Bearer " + subjectTeacher))
                 .andExpect(status().isForbidden());
@@ -2078,7 +2105,7 @@ class SecurityIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"code":"SEC-EXAM-2026","name":"Kỳ thi kiểm thử phân quyền",
-                                 "academicYearId":"ay-2025","semesterId":"sm-2025-1","gradeLevel":"K10",
+                                 "academicYearId":"ay-2026","semesterId":"sm-2026-1","gradeLevel":"K10",
                                  "startDate":"2025-11-10","endDate":"2025-11-12"}
                                 """))
                 .andExpect(status().isOk())
@@ -2216,12 +2243,27 @@ class SecurityIntegrationTest {
     }
 
     private JsonNode loginBody(String username, String password) throws Exception {
+        Login credentials = currentSeedCredentials(username, password);
         String response = mvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json.writeValueAsString(new Login(username, password))))
+                        .content(json.writeValueAsString(credentials)))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         return body(response);
+    }
+
+    /**
+     * Keeps older workflow scenarios readable while authenticating against the
+     * canonical demo accounts exposed by the current seed dataset.
+     */
+    private Login currentSeedCredentials(String username, String password) {
+        return switch (username) {
+            case "admin" -> new Login("admin", "Admin123@@");
+            case "gv.hoa" -> new Login("gv.nguyenminh", "nguyenminh123@");
+            case "hs.an" -> new Login("hs.nguyenminhan", "nguyenminhanh123@@");
+            case "ph.pham" -> new Login("ph.nguyenvanhung", "nguyenvanhung123@");
+            default -> new Login(username, password);
+        };
     }
 
     private JsonNode body(String value) throws Exception {

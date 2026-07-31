@@ -56,7 +56,12 @@ public class DataSeeder {
             seedUsers(users, relations, enc);
             seedStructure(structure);
             users.findByRole("STUDENT").forEach(student -> {
-                if (student.getClassId() != null) structure.recordEnrollment(student.getId(), student.getClassId());
+                if (student.getClassId() != null) {
+                    student.setCohortId(structure.cohortIdForClass(student.getClassId()));
+                    student.setStudentStatus("ENROLLED");
+                    users.save(student);
+                    structure.recordEnrollment(student.getId(), student.getClassId());
+                }
             });
             seedTimetable(timetable);
             seedGrades(grades);
@@ -72,15 +77,19 @@ public class DataSeeder {
 
     // ---------- Identity ----------
     private void seedUsers(UserRepository users, ParentStudentRepository relations, PasswordEncoder enc) {
-        users.save(base("u-admin-1", "admin", enc.encode("admin@123"), "Nguyễn Văn Quản",
+        users.save(base("u-admin-1", "admin", enc.encode("Admin123@@"), "Nguyễn Văn Quản",
                 "admin@sse.edu.vn", "0900000001", "ADMIN"));
+        users.save(base("u-academic-staff-1", "giaovu", enc.encode("Giaovu123@@"), "Nguyễn Thu Hà",
+                "giaovu@sse.edu.vn", "0900000004", "ACADEMIC_STAFF"));
+        users.save(base("u-accountant-1", "ketoan", enc.encode("Ketoan123@@"), "Trần Minh Anh",
+                "ketoan@sse.edu.vn", "0900000005", "ACCOUNTANT"));
 
-        users.save(teacher("u-teacher-1", "gv.hoa", enc.encode("teacher@123"), "Trần Thị Hoa",
+        users.save(teacher("u-teacher-1", "gv.nguyenminh", enc.encode("nguyenminh123@"), "Nguyễn Đức Minh",
                 "hoa.tran@sse.edu.vn", "0900000002", "GV001", "Toán"));
         users.save(teacher("u-teacher-2", "gv.minh", enc.encode("teacher@123"), "Lê Văn Minh",
                 "minh.le@sse.edu.vn", "0900000003", "GV002", "Vật lý"));
 
-        User an = student("u-student-1", "hs.an", enc.encode("student@123"), "Phạm Hoài An",
+        User an = student("u-student-1", "hs.nguyenminhan", enc.encode("nguyenminhanh123@@"), "Nguyễn Minh An",
                 "an.pham@sse.edu.vn", "0900000010", "HS2025001", "c-10a1", "10A1");
         an.setDateOfBirth(LocalDate.parse("2010-03-18"));
         an.setGender("FEMALE");
@@ -106,7 +115,7 @@ public class DataSeeder {
         binh.setGuardianPhone("0900000020");
         users.save(binh);
 
-        users.save(base("u-parent-1", "ph.pham", enc.encode("parent@123"), "Phạm Văn Quân",
+        users.save(base("u-parent-1", "ph.nguyenvanhung", enc.encode("nguyenvanhung123@"), "Nguyễn Văn Hùng",
                 "quan.pham@gmail.com", "0900000020", "PARENT"));
 
         relations.save(rel("ps-1", "u-parent-1", "u-student-1", true));
@@ -115,22 +124,22 @@ public class DataSeeder {
 
     // ---------- Academic structure ----------
     private void seedStructure(StructureService structure) {
-        var year = AcademicYear.builder().id("ay-2025").code("2025-2026").name("Năm học 2025-2026")
-                .startDate(LocalDate.parse("2025-09-05")).endDate(LocalDate.parse("2026-05-31"))
+        var year = AcademicYear.builder().id("ay-2026").code("2026-2027").name("Năm học 2026-2027")
+                .startDate(LocalDate.parse("2026-08-17")).endDate(LocalDate.parse("2027-05-31"))
                 .status("ACTIVE").build();
 
         var sems = List.of(
-                Semester.builder().id("sm-2025-1").academicYearId("ay-2025").code("HK1").name("Học kỳ 1")
-                        .sequence(1).startDate(LocalDate.parse("2025-09-05")).endDate(LocalDate.parse("2026-01-15"))
+                Semester.builder().id("sm-2026-1").academicYearId("ay-2026").code("HK1").name("Học kỳ 1")
+                        .sequence(1).startDate(LocalDate.parse("2026-08-17")).endDate(LocalDate.parse("2027-01-15"))
                         .status("ACTIVE").build(),
-                Semester.builder().id("sm-2025-2").academicYearId("ay-2025").code("HK2").name("Học kỳ 2")
-                        .sequence(2).startDate(LocalDate.parse("2026-01-20")).endDate(LocalDate.parse("2026-05-31"))
+                Semester.builder().id("sm-2026-2").academicYearId("ay-2026").code("HK2").name("Học kỳ 2")
+                        .sequence(2).startDate(LocalDate.parse("2027-01-18")).endDate(LocalDate.parse("2027-05-31"))
                         .status("PLANNED").build());
 
         var classes = List.of(
                 cls("c-10a1", "10A1", "Lớp 10A1", "K10", "u-teacher-1", 38),
                 cls("c-10a2", "10A2", "Lớp 10A2", "K10", "u-teacher-2", 40),
-                cls("c-8a1", "8A1", "Lớp 8A1", "K8", "u-teacher-1", 35));
+                cls("c-8a1", "8A1", "Lớp 8A1", "K8", null, 35));
 
         var subjects = List.of(
                 subj("sj-math", "MATH", "Toán"), subj("sj-phys", "PHYS", "Vật lý"),
@@ -278,11 +287,15 @@ public class DataSeeder {
     }
 
     private static SchoolClass cls(String id, String code, String name, String grade, String hr, int count) {
-        return SchoolClass.builder().id(id).code(code).name(name).gradeLevel(grade)
-                .academicYearId("ay-2025").homeroomTeacherId(hr)
-                .homeroomTeacherName("u-teacher-1".equals(hr) ? "Trần Thị Hoa" : "Lê Văn Minh")
-                .homeroomAssignedAt(Instant.now()).homeroomAssignedBy("u-admin-1")
-                .studentCount(count).build();
+        SchoolClass.SchoolClassBuilder builder = SchoolClass.builder()
+                .id(id).code(code).name(name).gradeLevel(grade)
+                .academicYearId("ay-2026").homeroomTeacherId(hr)
+                .studentCount(count);
+        if (hr != null) {
+            builder.homeroomTeacherName("u-teacher-1".equals(hr) ? "Trần Thị Hoa" : "Lê Văn Minh")
+                    .homeroomAssignedAt(Instant.now()).homeroomAssignedBy("u-admin-1");
+        }
+        return builder.build();
     }
 
     private static Subject subj(String id, String code, String name) {
@@ -294,7 +307,7 @@ public class DataSeeder {
                                       int period, String start, String end) {
         return TimetableSlot.builder().id(id).classId(classId).subjectId(subjectId).subjectName(subjectName)
                 .teacherId(teacherId).teacherName(teacherName).roomCode(room).dayOfWeek(day)
-                .periodNo(period).startTime(start).endTime(end).semesterId("sm-2025-1").build();
+                .periodNo(period).startTime(start).endTime(end).semesterId("sm-2026-1").build();
     }
 
     private static ExamCategory cat(String id, String code, String name, double weight, int requiredCount) {
@@ -310,7 +323,7 @@ public class DataSeeder {
     private static Grade grade(String id, String studentId, String subjectId, String subjectName,
                                String cat, String catName, int assessmentIndex, double score, String recordedAt) {
         return Grade.builder().id(id).studentId(studentId).subjectId(subjectId).subjectName(subjectName)
-                .semesterId("sm-2025-1").category(cat).categoryName(catName)
+                .semesterId("sm-2026-1").category(cat).categoryName(catName)
                 .assessmentIndex(assessmentIndex).score(score)
                 .recordedAt(Instant.parse(recordedAt)).build();
     }

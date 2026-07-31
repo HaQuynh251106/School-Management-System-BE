@@ -23,20 +23,20 @@ public class ExamController {
     @GetMapping("/exam-periods")
     public List<PeriodSummary> periods(@RequestParam(required = false) String academicYearId,
                                        @RequestParam(required = false) String semesterId) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return exams.listPeriods(academicYearId, semesterId);
     }
     @PostMapping("/exam-periods") public ExamPeriod create(@Valid @RequestBody SavePeriodRequest r) {
-        CurrentUserHolder.requireRole("ADMIN"); return exams.createPeriod(r, CurrentUserHolder.require().id());
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF"); return exams.createPeriod(r, CurrentUserHolder.require().id());
     }
     @PutMapping("/exam-periods/{id}") public ExamPeriod update(@PathVariable String id, @Valid @RequestBody SavePeriodRequest r) {
-        CurrentUserHolder.requireRole("ADMIN"); return exams.updatePeriod(id, r);
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF"); return exams.updatePeriod(id, r);
     }
-    @DeleteMapping("/exam-periods/{id}") public void delete(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN"); exams.deletePeriod(id); }
-    @PostMapping("/exam-periods/{id}/lock-scores") public ExamPeriod lock(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN"); return exams.setScoreLock(id, true, CurrentUserHolder.require().id()); }
-    @PostMapping("/exam-periods/{id}/unlock-scores") public ExamPeriod unlock(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN"); return exams.setScoreLock(id, false, CurrentUserHolder.require().id()); }
-    @PostMapping("/exam-periods/{id}/confirm") public ExamPeriod confirm(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN"); return exams.confirm(id, CurrentUserHolder.require().id()); }
-    @PostMapping("/exam-periods/{id}/publish-schedule") public ExamPeriod publishSchedule(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN"); return exams.publishSchedule(id, CurrentUserHolder.require().id()); }
+    @DeleteMapping("/exam-periods/{id}") public void delete(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF"); exams.deletePeriod(id); }
+    @PostMapping("/exam-periods/{id}/lock-scores") public ExamPeriod lock(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF"); return exams.setScoreLock(id, true, CurrentUserHolder.require().id()); }
+    @PostMapping("/exam-periods/{id}/unlock-scores") public ExamPeriod unlock(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF"); return exams.setScoreLock(id, false, CurrentUserHolder.require().id()); }
+    @PostMapping("/exam-periods/{id}/confirm") public ExamPeriod confirm(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF"); return exams.confirm(id, CurrentUserHolder.require().id()); }
+    @PostMapping("/exam-periods/{id}/publish-schedule") public ExamPeriod publishSchedule(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF"); return exams.publishSchedule(id, CurrentUserHolder.require().id()); }
 
     @GetMapping("/me/exam-agenda") public List<ExamAgendaItem> agenda(@RequestParam(required = false) String childId) {
         CurrentUserHolder.requireRole("TEACHER", "STUDENT", "PARENT");
@@ -56,41 +56,41 @@ public class ExamController {
         return exams.teacherReviews(CurrentUserHolder.require().id(), status);
     }
 
-    @GetMapping("/exam-periods/{id}/schedules") public List<ExamSchedule> schedules(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN"); return exams.schedules(id); }
-    @PostMapping("/exam-periods/{id}/schedules") public ExamSchedule createSchedule(@PathVariable String id, @Valid @RequestBody SaveScheduleRequest r) { CurrentUserHolder.requireRole("ADMIN"); return exams.createSchedule(id, r); }
-    @PutMapping("/exam-schedules/{id}") public ExamSchedule updateSchedule(@PathVariable String id, @Valid @RequestBody SaveScheduleRequest r) { CurrentUserHolder.requireRole("ADMIN"); return exams.updateSchedule(id, r); }
-    @DeleteMapping("/exam-schedules/{id}") public void deleteSchedule(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN"); exams.deleteSchedule(id); }
+    @GetMapping("/exam-periods/{id}/schedules") public List<ExamSchedule> schedules(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF"); return exams.schedules(id); }
+    @PostMapping("/exam-periods/{id}/schedules") public ExamSchedule createSchedule(@PathVariable String id, @Valid @RequestBody SaveScheduleRequest r) { CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF"); return exams.createSchedule(id, r); }
+    @PutMapping("/exam-schedules/{id}") public ExamSchedule updateSchedule(@PathVariable String id, @Valid @RequestBody SaveScheduleRequest r) { CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF"); return exams.updateSchedule(id, r); }
+    @DeleteMapping("/exam-schedules/{id}") public void deleteSchedule(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF"); exams.deleteSchedule(id); }
 
-    @GetMapping("/exam-schedules/{id}/rooms") public List<ExamRoom> rooms(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN"); return exams.rooms(id); }
-    @PostMapping("/exam-schedules/{id}/rooms") public ExamRoom room(@PathVariable String id, @Valid @RequestBody SaveRoomRequest r) { CurrentUserHolder.requireRole("ADMIN"); return exams.saveRoom(id, r); }
-    @DeleteMapping("/exam-rooms/{id}") public void deleteRoom(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN"); exams.deleteRoom(id); }
-    @PostMapping("/exam-rooms/{id}/allocate") public List<ExamCandidate> allocate(@PathVariable String id, @Valid @RequestBody AllocateCandidatesRequest r) { CurrentUserHolder.requireRole("ADMIN"); return exams.allocate(id, r.classId()); }
+    @GetMapping("/exam-schedules/{id}/rooms") public List<ExamRoom> rooms(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF"); return exams.rooms(id); }
+    @PostMapping("/exam-schedules/{id}/rooms") public ExamRoom room(@PathVariable String id, @Valid @RequestBody SaveRoomRequest r) { CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF"); return exams.saveRoom(id, r); }
+    @DeleteMapping("/exam-rooms/{id}") public void deleteRoom(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF"); exams.deleteRoom(id); }
+    @PostMapping("/exam-rooms/{id}/allocate") public List<ExamCandidate> allocate(@PathVariable String id, @Valid @RequestBody AllocateCandidatesRequest r) { CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF"); return exams.allocate(id, r.classId()); }
 
     @GetMapping("/exam-schedules/{id}/graders")
     public List<ExamGradingAssignment> graders(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return exams.gradingAssignments(id);
     }
     @GetMapping("/exam-schedules/{id}/eligible-graders")
     public List<EligibleGrader> eligibleGraders(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return exams.eligibleGraders(id);
     }
     @PutMapping("/exam-schedules/{id}/graders")
     public ExamGradingAssignment assignGrader(@PathVariable String id,
                                               @Valid @RequestBody SaveGradingAssignmentRequest request) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return exams.saveGradingAssignment(id, request, CurrentUserHolder.require().id());
     }
     @DeleteMapping("/exam-grading-assignments/{id}")
     public void deleteGrader(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         exams.deleteGradingAssignment(id);
     }
 
-    @GetMapping("/exam-periods/{id}/candidates") public List<ExamCandidate> candidates(@PathVariable String id, @RequestParam(required = false) String scheduleId, @RequestParam(required = false) String classId) { CurrentUserHolder.requireRole("ADMIN"); return exams.candidates(id, scheduleId, classId); }
+    @GetMapping("/exam-periods/{id}/candidates") public List<ExamCandidate> candidates(@PathVariable String id, @RequestParam(required = false) String scheduleId, @RequestParam(required = false) String classId) { CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF"); return exams.candidates(id, scheduleId, classId); }
     @GetMapping("/exam-periods/{id}/results") public List<ExamResult> results(@PathVariable String id, @RequestParam(required = false) String scheduleId, @RequestParam(required = false) String studentId) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return exams.results(id, scheduleId, studentId);
     }
     @PutMapping("/exam-periods/{id}/results") public List<ExamResult> saveResults(@PathVariable String id, @Valid @RequestBody SaveResultsRequest r) { CurrentUserHolder.requireRole("TEACHER"); return exams.saveResults(id, r, CurrentUserHolder.require().id()); }
@@ -98,7 +98,7 @@ public class ExamController {
     @GetMapping("/exam-periods/{id}/reviews") public List<ExamReviewRequest> reviews(@PathVariable String id, @RequestParam(required = false) String status) { CurrentUserHolder.requireRole("TEACHER"); return exams.reviews(id, status, CurrentUserHolder.require().id()); }
     @PostMapping("/exam-periods/{id}/reviews") public ExamReviewRequest requestReview(@PathVariable String id, @Valid @RequestBody CreateReviewRequest r) { CurrentUserHolder.requireRole("STUDENT"); return exams.requestReview(id, r, CurrentUserHolder.require()); }
     @PutMapping("/exam-reviews/{id}/resolve") public ExamReviewRequest resolve(@PathVariable String id, @Valid @RequestBody ResolveReviewRequest r) { CurrentUserHolder.requireRole("TEACHER"); return exams.resolveReview(id, r, CurrentUserHolder.require().id()); }
-    @GetMapping("/exam-periods/{id}/adjustments") public List<ExamScoreAdjustment> adjustments(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN"); return exams.adjustments(id); }
+    @GetMapping("/exam-periods/{id}/adjustments") public List<ExamScoreAdjustment> adjustments(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF"); return exams.adjustments(id); }
 
     @GetMapping(value = "/exam-reports/score-slip", produces = MediaType.APPLICATION_PDF_VALUE)
     public ResponseEntity<byte[]> scoreSlip(@RequestParam String examPeriodId, @RequestParam String studentId) {
@@ -112,7 +112,7 @@ public class ExamController {
     public ResponseEntity<byte[]> export(@RequestParam String examPeriodId, @RequestParam(defaultValue = "YEAR") String scope,
             @RequestParam(required = false) String classId, @RequestParam(required = false) String gradeLevel,
             @RequestParam(defaultValue = "pdf") String format) {
-        CurrentUserHolder.requireRole("ADMIN", "TEACHER");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF", "TEACHER");
         CurrentUser actor = CurrentUserHolder.require();
         if (actor.isTeacher()) assertHomeroomExport(actor.id(), scope, classId);
         if ("csv".equalsIgnoreCase(format)) return file(reports.exportCsv(examPeriodId, scope, classId, gradeLevel), "bang-diem.csv", MediaType.parseMediaType("text/csv; charset=UTF-8"));
@@ -121,7 +121,7 @@ public class ExamController {
 
     private void assertStudentAccess(String studentId) {
         CurrentUser me = CurrentUserHolder.require();
-        if (me.isAdmin()) return;
+        if (me.canManageAcademics()) return;
         if (me.isStudent()) {
             if (!me.id().equals(studentId)) throw ApiException.forbidden("Không được xem hồ sơ của học sinh khác");
             return;

@@ -377,6 +377,8 @@ public class UserImportService {
     private String normalizeRole(String value) {
         return switch (normalizeHeader(value)) {
             case "admin", "quantrivien" -> "ADMIN";
+            case "academicstaff", "giaovu" -> "ACADEMIC_STAFF";
+            case "accountant", "ketoan" -> "ACCOUNTANT";
             case "teacher", "giaovien" -> "TEACHER";
             case "student", "hocsinh" -> "STUDENT";
             case "parent", "phuhuynh" -> "PARENT";

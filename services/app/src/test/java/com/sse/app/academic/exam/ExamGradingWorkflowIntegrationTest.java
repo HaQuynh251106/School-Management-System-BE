@@ -121,8 +121,8 @@ class ExamGradingWorkflowIntegrationTest {
                 periodId,
                 "EXAM-GRADING-" + suffix.toUpperCase(),
                 "Kỳ thi kiểm thử " + suffix,
-                "ay-2025",
-                "sm-2025-1",
+                "ay-2026",
+                "sm-2026-1",
                 "K10",
                 examDate,
                 examDate), "u-admin-1");

@@ -3,8 +3,10 @@ package com.sse.app.common;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -46,6 +48,45 @@ public class GlobalExceptionHandler {
             HttpServletRequest request
     ) {
         return response(HttpStatus.BAD_REQUEST, "INVALID_ARGUMENT", ex.getMessage(), request, Map.of());
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiErrorResponse> handleUnreadableRequest(
+            HttpMessageNotReadableException ex,
+            HttpServletRequest request
+    ) {
+        return response(
+                HttpStatus.BAD_REQUEST,
+                "MALFORMED_REQUEST",
+                "Nội dung yêu cầu không đúng định dạng JSON.",
+                request,
+                Map.of()
+        );
+    }
+
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ApiErrorResponse> handleDataIntegrity(
+            DataIntegrityViolationException ex,
+            HttpServletRequest request
+    ) {
+        String detail = ex.getMostSpecificCause() == null
+                ? "" : String.valueOf(ex.getMostSpecificCause().getMessage());
+        if (detail.contains("uq_classes_year_homeroom_teacher")) {
+            return response(
+                    HttpStatus.CONFLICT,
+                    "HOMEROOM_TEACHER_ALREADY_ASSIGNED",
+                    "Giáo viên đã chủ nhiệm một lớp khác trong cùng năm học.",
+                    request,
+                    Map.of()
+            );
+        }
+        return response(
+                HttpStatus.CONFLICT,
+                "DATA_CONFLICT",
+                "Dữ liệu bị trùng hoặc đang được sử dụng. Vui lòng kiểm tra lại.",
+                request,
+                Map.of()
+        );
     }
 
     @ExceptionHandler(NoResourceFoundException.class)

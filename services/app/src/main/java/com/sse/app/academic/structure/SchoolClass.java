@@ -21,6 +21,7 @@ public class SchoolClass {
     private String studyShift = "MORNING";
     @Column(nullable = false)
     private String academicYearId;
+    private String cohortId;
     private String homeroomTeacherId;
     private String homeroomTeacherName;
     private Instant homeroomAssignedAt;

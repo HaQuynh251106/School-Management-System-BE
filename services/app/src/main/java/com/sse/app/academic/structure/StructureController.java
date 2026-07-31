@@ -35,7 +35,7 @@ public class StructureController {
 
     @PostMapping("/academicYears")
     public AcademicYear createYear(@Valid @RequestBody CreateAcademicYearRequest r) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return structure.createYear(r);
     }
 
@@ -48,24 +48,36 @@ public class StructureController {
     @PutMapping("/academicYears/{id}")
     public AcademicYear updateYear(@PathVariable String id,
                                    @Valid @RequestBody UpdateAcademicYearRequest r) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return structure.updateYear(id, r);
     }
 
     @PutMapping("/academicYears/{id}/status")
     public AcademicYear changeYearStatus(@PathVariable String id,
                                          @Valid @RequestBody ChangeStatusRequest r) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return structure.changeYearStatus(id, r.status());
     }
 
     @DeleteMapping("/academicYears/{id}")
     public void deleteYear(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         structure.deleteYear(id);
     }
 
     // ----- Học kỳ -----
+    @GetMapping("/cohorts")
+    public List<Cohort> cohorts(@RequestParam(required = false) String status) {
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        return structure.listCohorts(status);
+    }
+
+    @GetMapping("/cohorts/{id}")
+    public Cohort cohort(@PathVariable String id) {
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        return structure.getCohort(id);
+    }
+
     @GetMapping("/semesters")
     public List<Semester> semesters(@RequestParam(required = false) String academicYearId) {
         CurrentUserHolder.require();
@@ -74,7 +86,7 @@ public class StructureController {
 
     @PostMapping("/semesters")
     public Semester createSemester(@Valid @RequestBody CreateSemesterRequest r) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return structure.createSemester(r);
     }
 
@@ -87,20 +99,20 @@ public class StructureController {
     @PutMapping("/semesters/{id}")
     public Semester updateSemester(@PathVariable String id,
                                    @Valid @RequestBody UpdateSemesterRequest r) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return structure.updateSemester(id, r);
     }
 
     @PutMapping("/semesters/{id}/status")
     public Semester changeSemesterStatus(@PathVariable String id,
                                          @Valid @RequestBody ChangeStatusRequest r) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return structure.changeSemesterStatus(id, r.status());
     }
 
     @DeleteMapping("/semesters/{id}")
     public void deleteSemester(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         structure.deleteSemester(id);
     }
 
@@ -122,14 +134,14 @@ public class StructureController {
 
     @GetMapping("/classes/{id}/students")
     public List<UserDto> classStudents(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN", "TEACHER");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF", "TEACHER");
         var current = CurrentUserHolder.require();
         SchoolClass schoolClass = structure.getClass(id);
         if (current.isTeacher() && !current.id().equals(schoolClass.getHomeroomTeacherId())
                 && !timetable.teacherTeachesClass(current.id(), id)) {
             throw ApiException.forbidden("Giáo viên không được phân công giảng dạy hoặc chủ nhiệm lớp này");
         }
-        return current.isAdmin()
+        return current.canManageAcademics()
                 ? users.list("STUDENT", null, id)
                 : users.listSummaries("STUDENT", null, id);
     }
@@ -137,7 +149,7 @@ public class StructureController {
     @GetMapping("/classes/{classId}/students/{studentId}/profile")
     public UserDto homeroomStudentProfile(@PathVariable String classId,
                                            @PathVariable String studentId) {
-        CurrentUserHolder.requireRole("ADMIN", "TEACHER");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF", "TEACHER");
         var current = CurrentUserHolder.require();
         SchoolClass schoolClass = structure.getClass(classId);
         if (current.isTeacher() && !current.id().equals(schoolClass.getHomeroomTeacherId())) {
@@ -154,7 +166,7 @@ public class StructureController {
     @GetMapping("/students/{studentId}/enrollments")
     public List<ClassEnrollment> enrollmentHistory(@PathVariable String studentId) {
         var current = CurrentUserHolder.require();
-        if (!current.isAdmin() && !current.id().equals(studentId)) {
+        if (!current.canManageAcademics() && !current.id().equals(studentId)) {
             if (current.isParent()) users.assertParentOf(current.id(), studentId);
             else throw ApiException.forbidden("Không có quyền xem lịch sử xếp lớp");
         }
@@ -163,34 +175,35 @@ public class StructureController {
 
     @PostMapping("/classes")
     public SchoolClass createClass(@Valid @RequestBody CreateClassRequest r) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         User teacher = null;
         if (r.homeroomTeacherId() != null && !r.homeroomTeacherId().isBlank()) {
             teacher = requireActiveTeacher(r.homeroomTeacherId());
         }
-        SchoolClass created = structure.createClass(r);
-        if (teacher == null) return created;
-        return structure.assignHomeroomTeacher(created.getId(), teacher.getId(), teacher.getFullName(),
+        return structure.createClass(
+                r,
+                teacher == null ? null : teacher.getId(),
+                teacher == null ? null : teacher.getFullName(),
                 CurrentUserHolder.require().id());
     }
 
     @PutMapping("/classes/{id}")
     public SchoolClass updateClass(@PathVariable String id,
                                    @Valid @RequestBody UpdateClassRequest r) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return structure.updateClass(id, r);
     }
 
     @DeleteMapping("/classes/{id}")
     public void deleteClass(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         structure.deleteClass(id);
     }
 
     @PutMapping("/classes/{id}/homeroom-teacher")
     public SchoolClass assignHomeroomTeacher(@PathVariable String id,
                                               @Valid @RequestBody AssignHomeroomTeacherRequest r) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         User teacher = requireActiveTeacher(r.teacherId());
         return structure.assignHomeroomTeacher(id, teacher.getId(), teacher.getFullName(),
                 CurrentUserHolder.require().id());
@@ -198,7 +211,7 @@ public class StructureController {
 
     @DeleteMapping("/classes/{id}/homeroom-teacher")
     public SchoolClass clearHomeroomTeacher(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return structure.clearHomeroomTeacher(id);
     }
 
@@ -211,7 +224,7 @@ public class StructureController {
 
     @PostMapping("/subjects")
     public Subject createSubject(@Valid @RequestBody CreateSubjectRequest r) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return structure.createSubject(r);
     }
 
@@ -231,31 +244,31 @@ public class StructureController {
 
     @PostMapping("/rooms")
     public Room createRoom(@Valid @RequestBody CreateRoomRequest r) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return structure.createRoom(r);
     }
 
     @PutMapping("/rooms/{id}")
     public Room updateRoom(@PathVariable String id, @Valid @RequestBody UpdateRoomRequest r) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return structure.updateRoom(id, r);
     }
 
     @DeleteMapping("/rooms/{id}")
     public void deleteRoom(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         structure.deleteRoom(id);
     }
 
     @PutMapping("/subjects/{id}")
     public Subject updateSubject(@PathVariable String id, @Valid @RequestBody UpdateSubjectRequest r) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return structure.updateSubject(id, r);
     }
 
     @DeleteMapping("/subjects/{id}")
     public void deleteSubject(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         structure.deleteSubject(id);
     }
 

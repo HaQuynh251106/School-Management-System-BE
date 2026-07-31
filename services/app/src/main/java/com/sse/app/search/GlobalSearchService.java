@@ -30,6 +30,8 @@ public class GlobalSearchService {
 
         switch (current.role()) {
             case "ADMIN" -> admin(items, pattern, limit);
+            case "ACADEMIC_STAFF" -> academicStaff(items, pattern, limit);
+            case "ACCOUNTANT" -> accountant(items, pattern, limit);
             case "TEACHER" -> teacher(items, pattern, current.id(), limit);
             case "STUDENT" -> student(items, pattern, current.id(), limit);
             case "PARENT" -> parent(items, pattern, current.id(), limit);
@@ -40,6 +42,41 @@ public class GlobalSearchService {
         items.forEach(item -> unique.putIfAbsent(item.type() + ":" + item.id(), item));
         List<SearchItem> result = unique.values().stream().limit(limit).toList();
         return new SearchResponse(query, result.size(), result);
+    }
+
+    private void academicStaff(List<SearchItem> out, String pattern, int limit) {
+        add(out, limit, """
+                select id, code as title,
+                       concat(coalesce(name, 'Lớp học'), ' · ', coalesce(grade_level, '')) as subtitle,
+                       'E1' as page_id
+                from classes where lower(coalesce(code, '') || ' ' || coalesce(name, '') || ' ' || coalesce(grade_level, '')) like ?
+                order by code limit ?
+                """, "CLASS", "Lớp học", pattern);
+        add(out, limit, """
+                select id, name as title, concat('Mã môn: ', code) as subtitle, 'E1' as page_id
+                from subjects where lower(coalesce(code, '') || ' ' || coalesce(name, '')) like ?
+                order by name limit ?
+                """, "SUBJECT", "Môn học", pattern);
+        add(out, limit, """
+                select id, name as title, concat(code, ' · ', status) as subtitle, 'E3' as page_id
+                from exam_periods where lower(coalesce(code, '') || ' ' || coalesce(name, '') || ' ' || coalesce(status, '')) like ?
+                order by start_date desc limit ?
+                """, "EXAM", "Kỳ thi", pattern);
+    }
+
+    private void accountant(List<SearchItem> out, String pattern, int limit) {
+        add(out, limit, """
+                select id, code as title,
+                       concat(student_name, ' · ', status, ' · ', total_amount, '₫') as subtitle,
+                       'F1' as page_id
+                from invoices where lower(coalesce(code, '') || ' ' || coalesce(student_name, '') || ' ' || coalesce(status, '')) like ?
+                order by issued_at desc nulls last limit ?
+                """, "INVOICE", "Hóa đơn", pattern);
+        add(out, limit, """
+                select id, name as title, concat(code, ' · ', status) as subtitle, 'F1' as page_id
+                from fee_periods where lower(coalesce(code, '') || ' ' || coalesce(name, '') || ' ' || coalesce(status, '')) like ?
+                order by created_at desc limit ?
+                """, "FEE_PERIOD", "Đợt thu", pattern);
     }
 
     private void admin(List<SearchItem> out, String pattern, int limit) {

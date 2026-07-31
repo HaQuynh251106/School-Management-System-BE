@@ -21,13 +21,16 @@ public class TimetableController {
     private final UserService users;
     private final StructureService structure;
     private final TeachingAssignmentService teachingAssignments;
+    private final AutomaticTimetableService automaticTimetable;
 
     public TimetableController(TimetableService timetable, UserService users, StructureService structure,
-                               TeachingAssignmentService teachingAssignments) {
+                               TeachingAssignmentService teachingAssignments,
+                               AutomaticTimetableService automaticTimetable) {
         this.timetable = timetable;
         this.users = users;
         this.structure = structure;
         this.teachingAssignments = teachingAssignments;
+        this.automaticTimetable = automaticTimetable;
     }
 
     @GetMapping("/timetableSlots")
@@ -42,13 +45,20 @@ public class TimetableController {
 
     @PostMapping("/timetableSlots")
     public TimetableSlot create(@Valid @RequestBody CreateSlotRequest r) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return timetable.create(r);
+    }
+
+    @PostMapping("/timetableSlots/auto-plan")
+    public TimetableDtos.AutoTimetablePlan autoPlan(
+            @Valid @RequestBody TimetableDtos.AutoTimetableRequest request) {
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        return automaticTimetable.plan(request);
     }
 
     @DeleteMapping("/timetableSlots/{id}")
     public void delete(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         timetable.delete(id);
     }
 
@@ -64,7 +74,7 @@ public class TimetableController {
 
     @PutMapping("/timetableSlots/{id}")
     public TimetableSlot update(@PathVariable String id, @Valid @RequestBody CreateSlotRequest r) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return timetable.update(id, r);
     }
 
@@ -79,7 +89,7 @@ public class TimetableController {
     }
 
     private void assertCanView(CurrentUser current, String classId, String teacherId) {
-        if (current.isAdmin()) return;
+        if (current.canManageAcademics()) return;
         if (current.isTeacher()) {
             if (teacherId != null && teacherId.equals(current.id())) return;
             if (classId != null) {

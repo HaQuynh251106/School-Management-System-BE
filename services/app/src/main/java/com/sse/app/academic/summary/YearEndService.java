@@ -163,12 +163,16 @@ public class YearEndService {
             throw ApiException.badRequest("Còn " + incomplete + " học sinh thiếu điểm hoặc hạnh kiểm; chưa thể chốt năm học");
         }
         Instant now = Instant.now();
+        Set<String> graduatedCohorts = new LinkedHashSet<>();
         for (StudentYearlySummary summary : list) {
             SchoolClass currentClass = structure.getClass(summary.getClassId());
             int gradeLevel = parseGrade(currentClass.getGradeLevel());
             boolean pass = summary.getAverageScore() >= 5.0 && !"WEAK".equals(summary.getConductGrade());
             if (pass && gradeLevel >= 12) {
                 summary.setPromotionStatus("GRADUATED");
+                UserDto graduate = users.graduateStudent(
+                        summary.getStudentId(), academicYearId, currentClass.getId(), now);
+                if (graduate.cohortId() != null) graduatedCohorts.add(graduate.cohortId());
             } else if (pass) {
                 Optional<SchoolClass> nextClass = structure.findNextClass(academicYearId, currentClass)
                         .filter(target -> users.studentCountOfClass(target.getId()) < target.getCapacity());
@@ -209,6 +213,7 @@ public class YearEndService {
             throw ApiException.badRequest("Còn " + pendingPlacement
                     + " học sinh chưa có lớp đích trong năm học mới; hệ thống chưa chốt để bảo toàn dữ liệu");
         }
+        graduatedCohorts.forEach(cohortId -> structure.completeCohortIfEligible(cohortId, now));
         structure.closeYear(academicYearId);
         return summaries.findByAcademicYearIdOrderByStudentName(academicYearId);
     }

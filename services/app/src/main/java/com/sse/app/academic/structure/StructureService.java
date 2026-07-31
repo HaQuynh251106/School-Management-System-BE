@@ -9,6 +9,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
@@ -24,18 +25,20 @@ public class StructureService {
     private final SubjectRepository subjects;
     private final RoomRepository rooms;
     private final ClassEnrollmentRepository enrollments;
+    private final CohortRepository cohorts;
     private final JdbcTemplate jdbc;
 
     public StructureService(AcademicYearRepository years, SemesterRepository semesters,
                             SchoolClassRepository classes, SubjectRepository subjects,
                             RoomRepository rooms,
-                            ClassEnrollmentRepository enrollments, JdbcTemplate jdbc) {
+                            ClassEnrollmentRepository enrollments, CohortRepository cohorts, JdbcTemplate jdbc) {
         this.years = years;
         this.semesters = semesters;
         this.classes = classes;
         this.subjects = subjects;
         this.rooms = rooms;
         this.enrollments = enrollments;
+        this.cohorts = cohorts;
         this.jdbc = jdbc;
     }
 
@@ -53,16 +56,26 @@ public class StructureService {
 
     @Transactional
     public AcademicYear createYear(CreateAcademicYearRequest r) {
+        return createYear(r, true);
+    }
+
+    @Transactional
+    public AcademicYear createYear(CreateAcademicYearRequest r, boolean createDefaultSemesters) {
         String code = normalizeCode(r.code());
         if (years.findByCode(code).isPresent()) throw ApiException.conflict("Mã năm học đã tồn tại");
         validatePeriod(r.startDate(), r.endDate(), "năm học");
+        if (createDefaultSemesters && ChronoUnit.DAYS.between(r.startDate(), r.endDate()) < 1) {
+            throw ApiException.badRequest("Năm học phải có ít nhất hai ngày để tự động tạo hai học kỳ");
+        }
         assertYearPeriodAvailable(null, r.startDate(), r.endDate());
         if (r.status() != null && !"PLANNED".equals(r.status())) {
-            throw ApiException.badRequest("Năm học mới phải ở trạng thái dự kiến; hãy tạo học kỳ trước khi kích hoạt");
+            throw ApiException.badRequest("Năm học mới phải ở trạng thái dự kiến trước khi kích hoạt");
         }
-        return years.save(AcademicYear.builder()
+        AcademicYear year = years.save(AcademicYear.builder()
                 .id(orGen(r.id(), "ay")).code(code).name(defaultName(r.name(), code))
                 .startDate(r.startDate()).endDate(r.endDate()).status("PLANNED").build());
+        if (createDefaultSemesters) createDefaultSemesters(year);
+        return year;
     }
 
     @Transactional
@@ -122,13 +135,38 @@ public class StructureService {
     public void deleteYear(String id) {
         AcademicYear year = getYear(id);
         requirePlanned(year.getStatus(), "Chỉ được xóa năm học đang ở trạng thái dự kiến");
-        if (!semesters.findByAcademicYearId(id).isEmpty() || !classes.findByAcademicYearId(id).isEmpty()
+        List<Semester> yearSemesters = semesters.findByAcademicYearId(id);
+        boolean semesterInUse = yearSemesters.stream().anyMatch(semester ->
+                !"PLANNED".equals(semester.getStatus())
+                        || hasReference(semester.getId(), "grades", "semester_id")
+                        || hasReference(semester.getId(), "timetable_slots", "semester_id")
+                        || hasReference(semester.getId(), "teaching_assignments", "semester_id"));
+        if (semesterInUse || !classes.findByAcademicYearId(id).isEmpty()
                 || hasReference(id, "fee_periods", "academic_year_id")
                 || hasReference(id, "class_enrollments", "academic_year_id")
                 || hasReference(id, "student_yearly_summaries", "academic_year_id")) {
             throw ApiException.badRequest("Không thể xóa năm học đang có học kỳ, lớp hoặc dữ liệu nghiệp vụ");
         }
+        semesters.deleteAll(yearSemesters);
         years.delete(year);
+    }
+
+    private void createDefaultSemesters(AcademicYear year) {
+        long inclusiveDays = ChronoUnit.DAYS.between(year.getStartDate(), year.getEndDate()) + 1;
+        LocalDate firstSemesterEnd = year.getStartDate().plusDays(inclusiveDays / 2 - 1);
+        LocalDate secondSemesterStart = firstSemesterEnd.plusDays(1);
+        semesters.saveAll(List.of(
+                Semester.builder()
+                        .id(Ids.gen("sm")).academicYearId(year.getId())
+                        .code("HK1").name("Học kỳ 1").sequence(1)
+                        .startDate(year.getStartDate()).endDate(firstSemesterEnd)
+                        .status("PLANNED").build(),
+                Semester.builder()
+                        .id(Ids.gen("sm")).academicYearId(year.getId())
+                        .code("HK2").name("Học kỳ 2").sequence(2)
+                        .startDate(secondSemesterStart).endDate(year.getEndDate())
+                        .status("PLANNED").build()
+        ));
     }
 
     // ---------- Học kỳ ----------
@@ -226,6 +264,20 @@ public class StructureService {
         return classes.findById(id).orElseThrow(() -> ApiException.notFound("Lớp"));
     }
 
+    public List<Cohort> listCohorts(String status) {
+        List<Cohort> result = status == null || status.isBlank()
+                ? cohorts.findAll() : cohorts.findByStatus(status.trim().toUpperCase(Locale.ROOT));
+        return result.stream().sorted(Comparator.comparingInt(Cohort::getEntryYear).reversed()).toList();
+    }
+
+    public Cohort getCohort(String id) {
+        return cohorts.findById(id).orElseThrow(() -> ApiException.notFound("Niên khóa"));
+    }
+
+    public String cohortIdForClass(String classId) {
+        return classId == null ? null : classes.findById(classId).map(SchoolClass::getCohortId).orElse(null);
+    }
+
     @Transactional
     public SchoolClass createClass(CreateClassRequest r) {
         String code = normalizeCode(r.code());
@@ -237,15 +289,30 @@ public class StructureService {
             throw ApiException.conflict("Mã lớp đã tồn tại trong năm học " + year.getCode());
         }
         Room room = validateRoomAssignment(null, year.getId(), studyShift, r.roomId(), capacity);
+        Cohort cohort = ensureCohort(year, r.gradeLevel(), "system");
         return classes.save(SchoolClass.builder()
                 .id(orGen(r.id(), "c")).code(code)
                 .name(defaultName(r.name(), "Lớp " + code))
                 .gradeLevel(normalizeCode(r.gradeLevel())).academicYearId(year.getId())
+                .cohortId(cohort == null ? null : cohort.getId())
                 .studyShift(studyShift)
                 .roomId(room == null ? null : room.getId())
                 .roomCode(room == null ? null : room.getCode())
                 .capacity(capacity)
                 .studentCount(0).build());
+    }
+
+    @Transactional
+    public SchoolClass createClass(CreateClassRequest r, String teacherId,
+                                   String teacherName, String assignedBy) {
+        SchoolClass created = createClass(r);
+        if (teacherId == null || teacherId.isBlank()) return created;
+        requireHomeroomTeacherAvailable(created.getAcademicYearId(), teacherId, created.getId());
+        created.setHomeroomTeacherId(teacherId);
+        created.setHomeroomTeacherName(teacherName);
+        created.setHomeroomAssignedAt(Instant.now());
+        created.setHomeroomAssignedBy(assignedBy);
+        return classes.save(created);
     }
 
     @Transactional
@@ -264,10 +331,16 @@ public class StructureService {
         String studyShift = r.studyShift() == null || r.studyShift().isBlank()
                 ? schoolClass.getStudyShift() : normalizeStudyShift(r.studyShift());
         Room room = validateRoomAssignment(id, year.getId(), studyShift, r.roomId(), capacity);
+        if (schoolClass.getHomeroomTeacherId() != null && !schoolClass.getHomeroomTeacherId().isBlank()) {
+            requireHomeroomTeacherAvailable(
+                    year.getId(), schoolClass.getHomeroomTeacherId(), schoolClass.getId());
+        }
         schoolClass.setCode(code);
         schoolClass.setName(defaultName(r.name(), "Lớp " + code));
         schoolClass.setGradeLevel(normalizeCode(r.gradeLevel()));
         schoolClass.setAcademicYearId(year.getId());
+        Cohort cohort = ensureCohort(year, r.gradeLevel(), "system");
+        schoolClass.setCohortId(cohort == null ? null : cohort.getId());
         schoolClass.setStudyShift(studyShift);
         schoolClass.setRoomId(room == null ? null : room.getId());
         schoolClass.setRoomCode(room == null ? null : room.getCode());
@@ -292,6 +365,9 @@ public class StructureService {
     public SchoolClass assignHomeroomTeacher(String classId, String teacherId,
                                              String teacherName, String assignedBy) {
         SchoolClass schoolClass = getClass(classId);
+        AcademicYear year = getYear(schoolClass.getAcademicYearId());
+        requireNotClosed(year.getStatus(), "Không thể thay đổi giáo viên chủ nhiệm của năm học đã đóng");
+        requireHomeroomTeacherAvailable(year.getId(), teacherId, schoolClass.getId());
         schoolClass.setHomeroomTeacherId(teacherId);
         schoolClass.setHomeroomTeacherName(teacherName);
         schoolClass.setHomeroomAssignedAt(Instant.now());
@@ -313,13 +389,27 @@ public class StructureService {
         return classes.findByHomeroomTeacherId(teacherId);
     }
 
+    private void requireHomeroomTeacherAvailable(
+            String academicYearId, String teacherId, String excludedClassId) {
+        classes.findFirstByAcademicYearIdAndHomeroomTeacherIdAndIdNot(
+                        academicYearId, teacherId, excludedClassId)
+                .ifPresent(existing -> {
+                    AcademicYear year = getYear(academicYearId);
+                    throw ApiException.conflict(
+                            "Giáo viên đã chủ nhiệm lớp " + existing.getCode()
+                                    + " trong năm học " + year.getCode()
+                                    + ". Mỗi giáo viên chỉ được chủ nhiệm một lớp trong cùng năm học.");
+                });
+    }
+
     @Transactional
     public ClassEnrollment recordEnrollment(String studentId, String classId) {
         SchoolClass schoolClass = getClass(classId);
         String yearId = schoolClass.getAcademicYearId();
         ClassEnrollment enrollment = enrollments.findByAcademicYearIdAndClassIdAndStudentId(yearId, classId, studentId)
                 .orElseGet(() -> ClassEnrollment.builder().id(Ids.gen("ce")).studentId(studentId)
-                        .classId(classId).academicYearId(yearId).enrolledAt(Instant.now()).build());
+                        .classId(classId).academicYearId(yearId).cohortId(schoolClass.getCohortId())
+                        .enrolledAt(Instant.now()).build());
         List<ClassEnrollment> active = enrollments.findByStudentIdAndStatus(studentId, "ACTIVE");
         active.stream().filter(item -> !item.getId().equals(enrollment.getId())).forEach(item -> {
             item.setStatus("TRANSFERRED");
@@ -327,8 +417,36 @@ public class StructureService {
         });
         enrollments.saveAll(active);
         enrollment.setStatus("ACTIVE");
+        enrollment.setCohortId(schoolClass.getCohortId());
         enrollment.setEndedAt(null);
         return enrollments.save(enrollment);
+    }
+
+    @Transactional
+    public void closeEnrollmentForGraduation(String studentId, Instant graduatedAt) {
+        List<ClassEnrollment> active = enrollments.findByStudentIdAndStatus(studentId, "ACTIVE");
+        active.forEach(item -> {
+            item.setStatus("GRADUATED");
+            item.setEndedAt(graduatedAt);
+        });
+        enrollments.saveAll(active);
+    }
+
+    @Transactional
+    public void completeCohortIfEligible(String cohortId, Instant completedAt) {
+        if (cohortId == null || cohortId.isBlank()) return;
+        Cohort cohort = cohorts.findById(cohortId).orElse(null);
+        if (cohort == null) return;
+        Long total = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM users WHERE role='STUDENT' AND cohort_id=?", Long.class, cohortId);
+        Long unfinished = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM users WHERE role='STUDENT' AND cohort_id=? AND COALESCE(student_status,'ENROLLED')<>'GRADUATED'",
+                Long.class, cohortId);
+        if (total != null && total > 0 && unfinished != null && unfinished == 0) {
+            cohort.setStatus("COMPLETED");
+            cohort.setCompletedAt(completedAt);
+            cohorts.save(cohort);
+        }
     }
 
     public List<ClassEnrollment> enrollmentHistory(String studentId) {
@@ -697,6 +815,26 @@ public class StructureService {
                   )
                 """, Long.class, academicYearId, academicYearId);
         return count == null ? 0 : count;
+    }
+
+    private Cohort ensureCohort(AcademicYear year, String gradeLevel, String actorId) {
+        int grade = parseGrade(gradeLevel);
+        if (grade < 10 || grade > 12 || year.getStartDate() == null) return null;
+        int entryYear = year.getStartDate().getYear() - (grade - 10);
+        int graduationYear = entryYear + 3;
+        String code = entryYear + "-" + graduationYear;
+        return cohorts.findByCode(code).orElseGet(() -> cohorts.save(Cohort.builder()
+                .id("cohort-" + code)
+                .code(code)
+                .name("Niên khóa " + code)
+                .entryYear(entryYear)
+                .graduationYear(graduationYear)
+                .durationYears(3)
+                .status("ACTIVE")
+                .entryAcademicYearId(grade == 10 ? year.getId() : null)
+                .createdAt(Instant.now())
+                .createdBy(actorId)
+                .build()));
     }
 
     private String orGen(String id, String prefix) {
