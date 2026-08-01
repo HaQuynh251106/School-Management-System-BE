@@ -79,6 +79,49 @@ class SecurityIntegrationTest {
     }
 
     @Test
+    void adminPasswordResetClearsPreviousLoginThrottle() throws Exception {
+        String admin = login("admin", "admin@123");
+        JsonNode created = body(mvc.perform(post("/users")
+                .header("Authorization", "Bearer " + admin)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"username":"lock-reset-accountant","password":"Initial123@@",
+                         "fullName":"Kiểm thử khóa đăng nhập","role":"ACCOUNTANT"}
+                        """))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+
+        for (int i = 0; i < 5; i++) {
+            mvc.perform(post("/auth/login")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"username":"lock-reset-accountant","password":"WrongPassword@@"}
+                                    """))
+                    .andExpect(status().isUnauthorized());
+        }
+        mvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"username":"lock-reset-accountant","password":"Initial123@@"}
+                                """))
+                .andExpect(status().isTooManyRequests());
+
+        mvc.perform(post("/users/{id}/reset-password", created.path("id").asText())
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"newPassword\":\"ResetPassword123@@\"}"))
+                .andExpect(status().isOk());
+
+        mvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"username":"lock-reset-accountant","password":"ResetPassword123@@"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.user.passwordChangeRequired").value(true));
+    }
+
+    @Test
     void preservesSafeClientRequestIdInStructuredErrors() throws Exception {
         String requestId = "web-test-20260728-001";
         mvc.perform(get("/users").header("X-Request-ID", requestId))
@@ -1540,7 +1583,7 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"status\":\"ACTIVE\"}"))
-                .andExpect(status().isConflict());
+                .andExpect(status().isBadRequest());
 
         mvc.perform(post("/academic-years/ay-2026/rollover")
                         .header("Authorization", "Bearer " + admin)

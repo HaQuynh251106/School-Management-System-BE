@@ -7,8 +7,10 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
 import java.util.List;
@@ -27,11 +29,13 @@ public class StructureService {
     private final ClassEnrollmentRepository enrollments;
     private final CohortRepository cohorts;
     private final JdbcTemplate jdbc;
+    private final Clock clock;
 
     public StructureService(AcademicYearRepository years, SemesterRepository semesters,
                             SchoolClassRepository classes, SubjectRepository subjects,
                             RoomRepository rooms,
-                            ClassEnrollmentRepository enrollments, CohortRepository cohorts, JdbcTemplate jdbc) {
+                            ClassEnrollmentRepository enrollments, CohortRepository cohorts, JdbcTemplate jdbc,
+                            Clock clock) {
         this.years = years;
         this.semesters = semesters;
         this.classes = classes;
@@ -40,6 +44,7 @@ public class StructureService {
         this.enrollments = enrollments;
         this.cohorts = cohorts;
         this.jdbc = jdbc;
+        this.clock = clock;
     }
 
     // ---------- Năm học ----------
@@ -109,6 +114,9 @@ public class StructureService {
         }
         if ("ACTIVE".equals(target)) {
             if (!"PLANNED".equals(year.getStatus())) throw ApiException.badRequest("Chỉ năm học dự kiến mới có thể kích hoạt");
+            if (year.getStartDate() != null && today().isBefore(year.getStartDate())) {
+                throw ApiException.badRequest("Chưa đến ngày bắt đầu năm học " + year.getStartDate());
+            }
             if (semesters.findByAcademicYearId(id).isEmpty()) {
                 throw ApiException.badRequest("Cần tạo ít nhất một học kỳ trước khi kích hoạt năm học");
             }
@@ -222,6 +230,9 @@ public class StructureService {
         if ("CLOSED".equals(semester.getStatus())) throw ApiException.badRequest("Học kỳ đã đóng không thể mở lại");
         if ("ACTIVE".equals(target)) {
             AcademicYear year = getYear(semester.getAcademicYearId());
+            if (semester.getStartDate() != null && today().isBefore(semester.getStartDate())) {
+                throw ApiException.badRequest("Chưa đến ngày bắt đầu học kỳ " + semester.getStartDate());
+            }
             if (!"ACTIVE".equals(year.getStatus())) {
                 throw ApiException.badRequest("Phải kích hoạt năm học trước khi kích hoạt học kỳ");
             }
@@ -853,5 +864,9 @@ public class StructureService {
         if (gradeLevel == null) return 0;
         try { return Integer.parseInt(gradeLevel.replaceAll("\\D", "")); }
         catch (NumberFormatException ignored) { return 0; }
+    }
+
+    private LocalDate today() {
+        return LocalDate.now(clock.withZone(ZoneId.of("Asia/Ho_Chi_Minh")));
     }
 }

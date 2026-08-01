@@ -42,9 +42,25 @@ public class LoginAttemptService {
         attempts.remove(key(username, ipAddress));
     }
 
+    /**
+     * Xóa giới hạn của một tài khoản trên mọi địa chỉ mạng. Admin dùng thao tác
+     * này sau khi tạo/cấp lại mật khẩu; nếu không, người dùng vẫn có thể bị giữ
+     * ở trạng thái khóa 15 phút dù thông tin đăng nhập mới đã hợp lệ.
+     */
+    public void clearForUsername(String username) {
+        String normalized = normalizeUsername(username);
+        if (normalized.isEmpty()) return;
+        String prefix = normalized + "|";
+        attempts.keySet().removeIf(value -> value.startsWith(prefix));
+    }
+
     private String key(String username, String ipAddress) {
-        return (username == null ? "" : username.trim().toLowerCase(Locale.ROOT))
+        return normalizeUsername(username)
                 + "|" + (ipAddress == null ? "unknown" : ipAddress);
+    }
+
+    private String normalizeUsername(String username) {
+        return username == null ? "" : username.trim().toLowerCase(Locale.ROOT);
     }
 
     private record Attempt(int failures, Instant expiresAt) {}

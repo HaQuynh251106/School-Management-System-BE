@@ -34,7 +34,10 @@ $databasePort = [int]$Matches[2]
 $databaseName = $Matches[3]
 $projectPostgresData = Join-Path $root "data\postgres"
 $installedPostgresData = Join-Path $env:ProgramFiles "PostgreSQL\17\data"
-$postgresData = if (Test-Path -LiteralPath (Join-Path $installedPostgresData "PG_VERSION")) {
+$configuredPostgresData = [Environment]::GetEnvironmentVariable("SSE_PG_DATA_DIR", "Process")
+$postgresData = if ($configuredPostgresData -and (Test-Path -LiteralPath (Join-Path $configuredPostgresData "PG_VERSION"))) {
+    $configuredPostgresData
+} elseif (Test-Path -LiteralPath (Join-Path $installedPostgresData "PG_VERSION")) {
     $installedPostgresData
 } else {
     $projectPostgresData

@@ -36,16 +36,19 @@ public class UserService {
     private final PasswordEncoder encoder;
     private final RefreshTokenRepository refreshTokens;
     private final StructureService structure;
+    private final LoginAttemptService loginAttempts;
 
     public UserService(UserRepository users, ParentStudentRepository relations,
                        PasswordResetTokenRepository resetTokens, PasswordEncoder encoder,
-                       RefreshTokenRepository refreshTokens, StructureService structure) {
+                       RefreshTokenRepository refreshTokens, StructureService structure,
+                       LoginAttemptService loginAttempts) {
         this.users = users;
         this.relations = relations;
         this.resetTokens = resetTokens;
         this.encoder = encoder;
         this.refreshTokens = refreshTokens;
         this.structure = structure;
+        this.loginAttempts = loginAttempts;
     }
 
     // ---------- Tra cứu ----------
@@ -400,6 +403,7 @@ public class UserService {
                 .createdAt(Instant.now())
                 .build();
         User saved = users.save(u);
+        loginAttempts.clearForUsername(saved.getUsername());
         if ("STUDENT".equals(saved.getRole()) && saved.getClassId() != null) {
             structure.recordEnrollment(saved.getId(), saved.getClassId());
         }
@@ -464,6 +468,7 @@ public class UserService {
         u.setTokenVersion(u.getTokenVersion() + 1);
         users.save(u);
         revokeRefreshTokens(u.getId());
+        loginAttempts.clearForUsername(u.getUsername());
         return pwd;
     }
 
@@ -534,6 +539,7 @@ public class UserService {
         u.setTokenVersion(u.getTokenVersion() + 1);
         users.save(u);
         revokeRefreshTokens(u.getId());
+        loginAttempts.clearForUsername(u.getUsername());
         t.setUsedAt(Instant.now());
         resetTokens.save(t);
     }
@@ -552,6 +558,7 @@ public class UserService {
         user.setTokenVersion(user.getTokenVersion() + 1);
         users.save(user);
         revokeRefreshTokens(userId);
+        loginAttempts.clearForUsername(user.getUsername());
     }
 
     @Transactional
