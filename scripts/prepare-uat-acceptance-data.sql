@@ -22,6 +22,31 @@ SELECT 'uat-hk2-'||class_id||'-'||day_of_week||'-'||period_no,
        period_no,start_time,end_time,'sm-2026-2',NULL,locked
 FROM timetable_slots WHERE semester_id='sm-2026-1';
 
+-- Hai phiên bản lịch đã phát hành, mỗi học kỳ đúng một bản và giữ ảnh chụp 180 tiết.
+DELETE FROM timetable_plans WHERE semester_id IN ('sm-2026-1','sm-2026-2');
+INSERT INTO timetable_plans
+    (id,semester_id,name,status,version_no,option_no,quality_score,progress_percent,
+     total_assignments,total_periods,scheduled_periods,unscheduled_periods,conflict_summary,
+     configuration_json,created_by,created_at,updated_at,published_by,published_at)
+SELECT 'uat-published-'||semester_id,semester_id,
+       'Lịch chính thức '||CASE semester_id WHEN 'sm-2026-1' THEN 'học kỳ 1' ELSE 'học kỳ 2' END,
+       'PUBLISHED',1,1,100,100,72,180,180,0,'Không có xung đột','{"source":"uat"}',
+       'u-academic-staff-1',now(),now(),'u-academic-staff-1',now()
+FROM (VALUES ('sm-2026-1'),('sm-2026-2')) semesters(semester_id);
+
+INSERT INTO timetable_plan_slots
+    (id,plan_id,assignment_id,class_id,class_code,study_shift,subject_id,subject_name,
+     teacher_id,teacher_name,room_code,day_of_week,period_no,start_time,end_time,locked,created_at)
+SELECT 'uat-plan-slot-'||slot.id,'uat-published-'||slot.semester_id,NULL,slot.class_id,classroom.code,
+       classroom.study_shift,slot.subject_id,slot.subject_name,slot.teacher_id,slot.teacher_name,
+       slot.room_code,slot.day_of_week,slot.period_no,slot.start_time,slot.end_time,slot.locked,now()
+FROM timetable_slots slot JOIN classes classroom ON classroom.id=slot.class_id
+WHERE slot.semester_id IN ('sm-2026-1','sm-2026-2');
+
+UPDATE timetable_slots
+SET published_plan_id='uat-published-'||semester_id
+WHERE semester_id IN ('sm-2026-1','sm-2026-2');
+
 -- Mỗi học sinh đầu cấp có một phụ huynh để thử đủ quy trình nhập học và phân lớp.
 INSERT INTO users
     (id,username,password_hash,full_name,email,phone,role,status,created_at,password_change_required,token_version)

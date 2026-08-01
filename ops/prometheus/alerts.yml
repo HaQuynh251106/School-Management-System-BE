@@ -1,0 +1,43 @@
+groups:
+  - name: smart-school-critical
+    rules:
+      - alert: BackendUnavailable
+        expr: up{job="sse-backend"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Backend Smart School không phản hồi
+          description: Prometheus không lấy được metrics từ Backend trong 2 phút.
+
+      - alert: BackendHighErrorRate
+        expr: |
+          sum(rate(http_server_requests_seconds_count{job="sse-backend",status=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(http_server_requests_seconds_count{job="sse-backend"}[5m])), 0.001) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Tỷ lệ lỗi Backend vượt 5%
+          description: Hơn 5% yêu cầu HTTP trả về lỗi 5xx trong 5 phút.
+
+      - alert: BackendHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(http_server_requests_seconds_bucket{job="sse-backend"}[5m]))) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Backend phản hồi chậm
+          description: p95 thời gian phản hồi vượt 2 giây trong 10 phút.
+
+      - alert: PostgresConnectionPoolNearCapacity
+        expr: hikaricp_connections_active / clamp_min(hikaricp_connections_max, 1) > 0.85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Connection pool PostgreSQL gần đầy
+          description: HikariCP đã sử dụng trên 85% kết nối trong 10 phút.

@@ -4,6 +4,10 @@ services:
       context: .
     image: school-management-backend:staging
     pull_policy: never
+    ports:
+      - "${SSE_STAGING_MANAGEMENT_PORT:-4101}:4001"
+    environment:
+      SSE_SEED_ENABLED: "true"
   web:
     build:
       context: ../School-Management-System-Web-FE

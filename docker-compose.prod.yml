@@ -31,6 +31,9 @@ services:
       SSE_COOKIE_SECURE: "true"
       SSE_SEED_ENABLED: "false"
       SSE_STORAGE_PATH: /data/uploads
+      SSE_LOG_PATH: /data/logs
+      SSE_ENVIRONMENT: production
+      SSE_MANAGEMENT_PORT: 4001
       SSE_PAYMENT_MODE: ${SSE_PAYMENT_MODE:-disabled}
       SSE_VIETQR_BANK_ID: ${SSE_VIETQR_BANK_ID:-}
       SSE_VIETQR_ACCOUNT_NO: ${SSE_VIETQR_ACCOUNT_NO:-}
@@ -50,8 +53,9 @@ services:
       - "${SSE_BACKEND_PORT:-4000}:4000"
     volumes:
       - uploads-data:/data/uploads
+      - backend-logs:/data/logs
     healthcheck:
-      test: ["CMD-SHELL", "curl --fail --silent http://localhost:4000/actuator/health | grep -q UP"]
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:4001/actuator/health | grep -q UP"]
       interval: 15s
       timeout: 5s
       retries: 10
@@ -71,9 +75,42 @@ services:
       retries: 10
     networks: [school-internal]
 
+  postgres-backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend-storage-init:
+        condition: service_completed_successfully
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGDATABASE: ${SSE_DB_NAME:-sse_db}
+      PGUSER: ${SSE_DB_USER:-sse}
+      PGPASSWORD: ${SSE_DB_PASSWORD:?SSE_DB_PASSWORD is required}
+      BACKUP_INTERVAL_SECONDS: ${SSE_BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${SSE_BACKUP_RETENTION_DAYS:-30}
+    entrypoint: ["/bin/sh", "/opt/sse/backup-loop.sh"]
+    volumes:
+      - ./ops/backup:/opt/sse:ro
+      - postgres-backups:/backups
+    networks: [school-internal]
+
+  backend-storage-init:
+    image: alpine:3.20
+    restart: "no"
+    command: ["sh", "-c", "chown -R 999:999 /data/uploads /data/logs"]
+    volumes:
+      - uploads-data:/data/uploads
+      - backend-logs:/data/logs
+    networks: [school-internal]
+
 networks:
   school-internal:
 
 volumes:
   postgres-data:
   uploads-data:
+  backend-logs:
+  postgres-backups:

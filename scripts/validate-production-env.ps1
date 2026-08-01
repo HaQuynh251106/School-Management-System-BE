@@ -6,6 +6,7 @@ param(
 $required = @(
     'SSE_DB_PASSWORD',
     'SSE_JWT_SECRET',
+    'SSE_GRAFANA_ADMIN_PASSWORD',
     'SSE_CORS_ALLOWED_ORIGINS',
     'SSE_PASSWORD_RESET_URL',
     'SSE_VIETQR_BANK_ID',
@@ -35,6 +36,9 @@ if ($missing.Count -gt 0) {
 }
 if ($values['SSE_JWT_SECRET'].Length -lt 32) {
     throw 'SSE_JWT_SECRET phải có ít nhất 32 ký tự.'
+}
+if ($values['SSE_GRAFANA_ADMIN_PASSWORD'].Length -lt 16) {
+    throw 'SSE_GRAFANA_ADMIN_PASSWORD phải có ít nhất 16 ký tự.'
 }
 if ($values['SSE_PAYMENT_MODE'] -ne 'vietqr') {
     throw 'SSE_PAYMENT_MODE phải là vietqr.'

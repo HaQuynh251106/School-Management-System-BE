@@ -58,7 +58,7 @@ jobs:
 
       - name: Smoke test staging
         run: |
-          curl --fail --retry 10 --retry-delay 3 http://127.0.0.1:4100/actuator/health
+          curl --fail --retry 10 --retry-delay 3 http://127.0.0.1:4101/actuator/health
           curl --fail --retry 10 --retry-delay 3 http://127.0.0.1:5180/
 
       - name: Collect service logs on failure

@@ -91,11 +91,15 @@ sse:
     initial-delay-ms: ${SSE_EXAM_REMINDER_INITIAL_DELAY_MS:20000}
 
 logging:
+  file:
+    path: ${SSE_LOG_PATH:logs}
   level:
     com.sse.app: INFO
     org.hibernate.SQL: WARN
 
 management:
+  server:
+    port: ${SSE_MANAGEMENT_PORT:${server.port}}
   health:
     mail:
       enabled: ${SSE_MAIL_ENABLED:false}
@@ -108,6 +112,13 @@ management:
       probes:
         enabled: true
       show-details: never
+  metrics:
+    tags:
+      application: ${spring.application.name}
+      environment: ${SSE_ENVIRONMENT:local}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
   info:
     env:
       enabled: true

@@ -1,0 +1,69 @@
+services:
+  backend:
+    volumes:
+      - backend-logs:/data/logs
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+    volumes:
+      - ./ops/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "${SSE_PROMETHEUS_PORT:-9090}:9090"
+    networks: [school-internal]
+
+  loki:
+    image: grafana/loki:3.2.1
+    restart: unless-stopped
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki-data:/loki
+    ports:
+      - "${SSE_LOKI_PORT:-3100}:3100"
+    networks: [school-internal]
+
+  promtail:
+    image: grafana/promtail:3.2.1
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./ops/promtail:/etc/promtail:ro
+      - backend-logs:/var/log/sse:ro
+    networks: [school-internal]
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    command: --config.file=/etc/alertmanager/alertmanager.yml
+    volumes:
+      - ./ops/alertmanager:/etc/alertmanager:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "${SSE_ALERTMANAGER_PORT:-9093}:9093"
+    networks: [school-internal]
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${SSE_GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${SSE_GRAFANA_ADMIN_PASSWORD:?SSE_GRAFANA_ADMIN_PASSWORD is required}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "${SSE_GRAFANA_PORT:-3000}:3000"
+    depends_on: [prometheus, loki]
+    networks: [school-internal]
+
+volumes:
+  backend-logs:
+  prometheus-data:
+  loki-data:
+  alertmanager-data:
+  grafana-data:
