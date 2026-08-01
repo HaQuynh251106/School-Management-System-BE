@@ -2,6 +2,7 @@ package com.sse.app;
 
 import com.sse.app.academic.structure.StructureDtos.CreateAcademicYearRequest;
 import com.sse.app.academic.structure.StructureDtos.CreateClassRequest;
+import com.sse.app.academic.structure.IntakeClassPlacementService;
 import com.sse.app.academic.structure.StructureService;
 import com.sse.app.identity.AlumniService;
 import com.sse.app.identity.IdentityDtos.CreateUserRequest;
@@ -29,6 +30,7 @@ class AlumniLifecycleIntegrationTest {
     @Autowired StructureService structure;
     @Autowired UserService users;
     @Autowired AlumniService alumni;
+    @Autowired IntakeClassPlacementService intakePlacement;
     @Autowired JdbcTemplate jdbc;
 
     @Test
@@ -72,6 +74,8 @@ class AlumniLifecycleIntegrationTest {
         });
 
         assertThat(users.list("STUDENT", null, null)).noneMatch(item -> item.id().equals(student.id()));
+        assertThat(intakePlacement.candidates(year.getId(), "K10"))
+                .noneMatch(item -> item.id().equals(student.id()));
         assertThat(users.getById(student.id()).getId()).isEqualTo(student.id());
     }
 }

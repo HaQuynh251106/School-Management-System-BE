@@ -8,10 +8,16 @@ import com.sse.app.identity.*;
 import com.sse.app.notification.NotificationService;
 import com.sse.app.security.CurrentUser;
 import lombok.RequiredArgsConstructor;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.*;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.util.*;
 
 @Service @RequiredArgsConstructor
@@ -23,6 +29,10 @@ public class ExamService {
     private final ExamRoomRepository rooms;
     private final ExamGradingAssignmentRepository gradingAssignments;
     private final ExamCandidateRepository candidates;
+    private final ExamSeatingPlanRepository seatingPlans;
+    private final ExamSeatingPlanItemRepository seatingPlanItems;
+    private final ExamProctorPlanRepository proctorPlans;
+    private final ExamProctorPlanItemRepository proctorPlanItems;
     private final ExamResultRepository results;
     private final ExamReviewRepository reviews;
     private final ExamScoreAdjustmentRepository adjustments;
@@ -30,6 +40,7 @@ public class ExamService {
     private final UserService users;
     private final TeachingAssignmentService teachingAssignments;
     private final NotificationService notifications;
+    private final JdbcTemplate jdbc;
 
     public List<PeriodSummary> listPeriods(String academicYearId, String semesterId) {
         return periods.findAll().stream()
@@ -122,6 +133,15 @@ public class ExamService {
             }
             if (scheduleRooms.stream().anyMatch(room -> room.getProctorOneId() == null || room.getProctorOneId().isBlank())) {
                 throw ApiException.conflict("Môn " + schedule.getSubjectName() + " còn phòng chưa có giám thị chính");
+            }
+            OrganizationReadiness readiness = organizationReadiness(schedule.getId());
+            if (readiness.missingSeats() > 0) {
+                throw ApiException.conflict("Môn " + schedule.getSubjectName() + " còn thiếu "
+                        + readiness.missingSeats() + " chỗ ngồi");
+            }
+            if (!readiness.candidatesReady()) {
+                throw ApiException.conflict("Môn " + schedule.getSubjectName() + " còn "
+                        + readiness.missingCandidates() + " thí sinh chưa được xếp phòng");
             }
             Set<String> allocatedClasses = candidates.findByScheduleId(schedule.getId()).stream()
                     .map(ExamCandidate::getClassId).collect(java.util.stream.Collectors.toSet());
@@ -268,11 +288,87 @@ public class ExamService {
 
     public List<ExamRoom> rooms(String scheduleId) { requireSchedule(scheduleId); return rooms.findByScheduleId(scheduleId); }
 
+    public ExamDayPolicy examDayPolicy(String scheduleId) {
+        ExamSchedule schedule = requireSchedule(scheduleId);
+        return new ExamDayPolicy(schedule.getExamDate(), true, "Ngày thi không học thời khóa biểu thường",
+                "Các khối không thi được nghỉ cả ngày. Học sinh dự thi ra về sau ca thi cuối; "
+                        + "lịch dạy thường không làm giáo viên hoặc phòng học bị đánh dấu bận.");
+    }
+
+    public boolean isPublishedExamDay(LocalDate date) {
+        if (date == null) return false;
+        return periods.findAll().stream().filter(ExamPeriod::isSchedulePublished)
+                .flatMap(period -> schedules.findByExamPeriodId(period.getId()).stream())
+                .anyMatch(schedule -> date.equals(schedule.getExamDate()));
+    }
+
+    public List<ExamRoomAvailability> roomAvailability(String scheduleId) {
+        ExamSchedule schedule = requireSchedule(scheduleId);
+        Map<String, ExamRoom> selected = rooms.findByScheduleId(scheduleId).stream()
+                .collect(java.util.stream.Collectors.toMap(room -> room.getRoomCode().trim().toUpperCase(),
+                        room -> room, (first, ignored) -> first));
+        return structure.listRooms().stream().filter(room -> "ACTIVE".equalsIgnoreCase(room.getStatus()))
+                .map(physical -> {
+                    String code = physical.getCode().trim().toUpperCase();
+                    ExamRoom selectedRoom = selected.get(code);
+                    ExamSchedule conflict = rooms.findAll().stream()
+                            .filter(existing -> existing.getRoomCode().equalsIgnoreCase(code)
+                                    && !existing.getScheduleId().equals(scheduleId))
+                            .map(existing -> schedules.findById(existing.getScheduleId()).orElse(null))
+                            .filter(Objects::nonNull).filter(other -> overlaps(other, schedule)).findFirst().orElse(null);
+                    boolean available = conflict == null;
+                    String reason = selectedRoom != null ? "Đã chọn cho ca thi này"
+                            : available ? "Sẵn sàng vì lịch học thường được tạm dừng trong ngày thi"
+                            : "Đang được dùng cho ca thi trùng giờ";
+                    return new ExamRoomAvailability(physical.getId(), code, physical.getName(),
+                            physical.getCapacity() == null ? 0 : physical.getCapacity(), physical.getRoomType(),
+                            available, selectedRoom != null, reason,
+                            conflict == null ? null : conflict.getSubjectName(),
+                            conflict == null ? null : conflict.getStartTime());
+                })
+                .sorted(Comparator.comparingInt((ExamRoomAvailability item) -> item.selected() ? 0 : item.available() ? 1 : 2)
+                        .thenComparing(ExamRoomAvailability::roomCode))
+                .toList();
+    }
+
+    @Transactional
+    public List<ExamRoom> saveRooms(String scheduleId, BatchSaveRoomsRequest request) {
+        ExamSchedule schedule = requireSchedule(scheduleId);
+        ExamPeriod period = requirePeriod(schedule.getExamPeriodId());
+        assertEditable(period);
+        Map<String, com.sse.app.academic.structure.Room> physicalRooms = structure.listRooms().stream()
+                .filter(room -> "ACTIVE".equalsIgnoreCase(room.getStatus()))
+                .collect(java.util.stream.Collectors.toMap(
+                        room -> room.getCode().trim().toUpperCase(), room -> room, (first, ignored) -> first));
+        Set<String> existingCodes = rooms.findByScheduleId(scheduleId).stream()
+                .map(room -> room.getRoomCode().toUpperCase()).collect(java.util.stream.Collectors.toSet());
+        List<String> requestedCodes = request.roomCodes().stream().map(String::trim).map(String::toUpperCase)
+                .distinct().filter(code -> !existingCodes.contains(code)).toList();
+        if (requestedCodes.isEmpty()) throw ApiException.badRequest("Hãy chọn ít nhất một phòng chưa được thêm vào ca thi");
+        List<ExamRoom> created = new ArrayList<>();
+        for (String code : requestedCodes) {
+            com.sse.app.academic.structure.Room physical = physicalRooms.get(code);
+            if (physical == null) throw ApiException.badRequest("Phòng " + code + " không tồn tại hoặc không hoạt động");
+            int capacity = physical.getCapacity() == null || physical.getCapacity() < 1 ? 1 : physical.getCapacity();
+            SaveRoomRequest roomRequest = new SaveRoomRequest(null, code, capacity, null, null);
+            assertRoomAndProctorsAvailable(schedule, roomRequest, null, null);
+            created.add(rooms.save(ExamRoom.builder().id(Ids.gen("er")).scheduleId(scheduleId)
+                    .roomCode(code).capacity(capacity).build()));
+        }
+        invalidatePublishedSchedule(period);
+        return created;
+    }
+
     @Transactional
     public ExamRoom saveRoom(String scheduleId, SaveRoomRequest r) {
         ExamSchedule schedule = requireSchedule(scheduleId); ExamPeriod period = requirePeriod(schedule.getExamPeriodId()); assertEditable(period);
-        structure.listRooms().stream().filter(room -> room.getCode().equalsIgnoreCase(r.roomCode())).findFirst()
+        com.sse.app.academic.structure.Room physicalRoom = structure.listRooms().stream()
+                .filter(room -> room.getCode().equalsIgnoreCase(r.roomCode())).findFirst()
                 .orElseThrow(() -> ApiException.badRequest("Phòng thi không tồn tại"));
+        if (!"ACTIVE".equalsIgnoreCase(physicalRoom.getStatus())) throw ApiException.badRequest("Phòng thi không hoạt động");
+        if (physicalRoom.getCapacity() != null && r.capacity() > physicalRoom.getCapacity()) {
+            throw ApiException.badRequest("Sức chứa sử dụng không được vượt quá sức chứa thực tế " + physicalRoom.getCapacity() + " chỗ");
+        }
         User p1 = teacher(r.proctorOneId()); User p2 = teacher(r.proctorTwoId());
         if (p1 != null && p2 != null && p1.getId().equals(p2.getId())) throw ApiException.badRequest("Hai giám thị phải khác nhau");
         assertRoomAndProctorsAvailable(schedule, r, p1, p2);
@@ -432,6 +528,493 @@ public class ExamService {
                 .filter(c -> scheduleId == null || scheduleId.equals(c.getScheduleId()))
                 .filter(c -> classId == null || classId.equals(c.getClassId()))
                 .sorted(Comparator.comparing(ExamCandidate::getCandidateNo).thenComparingInt(ExamCandidate::getSeatNo)).toList();
+    }
+
+    public OrganizationReadiness organizationReadiness(String scheduleId) {
+        ExamSchedule schedule = requireSchedule(scheduleId);
+        List<CandidateSeed> expected = expectedCandidates(schedule);
+        List<ExamRoom> scheduleRooms = rooms.findByScheduleId(scheduleId);
+        List<ExamCandidate> allocated = candidates.findByScheduleId(scheduleId);
+        int totalCapacity = scheduleRooms.stream().mapToInt(ExamRoom::getCapacity).sum();
+        int proctoredCapacity = scheduleRooms.stream().filter(this::hasMainProctor).mapToInt(ExamRoom::getCapacity).sum();
+        int proctoredRooms = (int) scheduleRooms.stream().filter(this::hasMainProctor).count();
+        Set<String> expectedIds = expected.stream().map(CandidateSeed::studentId).collect(java.util.stream.Collectors.toSet());
+        int allocatedCount = (int) allocated.stream().filter(candidate -> expectedIds.contains(candidate.getStudentId()))
+                .map(ExamCandidate::getStudentId).distinct().count();
+        Map<String, ExamRoom> roomById = scheduleRooms.stream()
+                .collect(java.util.stream.Collectors.toMap(ExamRoom::getId, room -> room));
+        long invalidRoomAssignments = allocated.stream().filter(candidate -> !roomById.containsKey(candidate.getExamRoomId())).count();
+        List<String> overCapacityRooms = allocated.stream().filter(candidate -> roomById.containsKey(candidate.getExamRoomId()))
+                .collect(java.util.stream.Collectors.groupingBy(ExamCandidate::getExamRoomId, java.util.stream.Collectors.counting()))
+                .entrySet().stream().filter(entry -> entry.getValue() > roomById.get(entry.getKey()).getCapacity())
+                .map(entry -> roomById.get(entry.getKey()).getRoomCode()).sorted().toList();
+        long uniqueSeats = allocated.stream().map(candidate -> candidate.getExamRoomId() + "|" + candidate.getSeatNo()).distinct().count();
+        long validCandidateNumbers = allocated.stream().map(ExamCandidate::getCandidateNo)
+                .filter(Objects::nonNull).filter(number -> number.matches("\\d{6}")).distinct().count();
+        boolean arrangementValid = invalidRoomAssignments == 0 && overCapacityRooms.isEmpty()
+                && uniqueSeats == allocated.size() && validCandidateNumbers == allocated.size();
+        int missingSeats = Math.max(0, expected.size() - totalCapacity);
+        int missingCandidates = Math.max(0, expected.size() - allocatedCount);
+        List<String> warnings = new ArrayList<>();
+        if (expected.isEmpty()) warnings.add("Chưa có học sinh thuộc các lớp dự thi");
+        if (scheduleRooms.isEmpty()) warnings.add("Chưa chọn phòng thi");
+        if (missingSeats > 0) warnings.add("Thiếu " + missingSeats + " chỗ ngồi");
+        if (proctoredRooms < scheduleRooms.size()) warnings.add("Còn " + (scheduleRooms.size() - proctoredRooms) + " phòng chưa có giám thị chính");
+        if (missingCandidates > 0) warnings.add("Còn " + missingCandidates + " thí sinh chưa được xếp phòng");
+        if (invalidRoomAssignments > 0) warnings.add(invalidRoomAssignments + " thí sinh đang tham chiếu phòng không hợp lệ");
+        if (!overCapacityRooms.isEmpty()) warnings.add("Phòng vượt sức chứa: " + String.join(", ", overCapacityRooms));
+        if (uniqueSeats != allocated.size()) warnings.add("Có số ghế bị trùng trong cùng phòng");
+        if (validCandidateNumbers != allocated.size()) warnings.add("Số báo danh chưa đủ 6 chữ số hoặc bị trùng");
+        boolean roomsReady = !expected.isEmpty() && !scheduleRooms.isEmpty() && missingSeats == 0
+                && proctoredRooms == scheduleRooms.size();
+        boolean candidatesReady = !expected.isEmpty() && missingCandidates == 0 && allocatedCount == expected.size()
+                && allocated.size() == expected.size() && arrangementValid;
+        return new OrganizationReadiness(expected.size(), allocatedCount, totalCapacity, proctoredCapacity,
+                scheduleRooms.size(), proctoredRooms, missingSeats, missingCandidates, roomsReady, candidatesReady,
+                List.copyOf(warnings));
+    }
+
+    public List<OrganizationPlanView> organizationPlans(String scheduleId) {
+        requireSchedule(scheduleId);
+        return jdbc.query("select id from exam_organization_plans where schedule_id=? order by created_at desc",
+                (rs, row) -> rs.getString(1), scheduleId).stream().map(this::organizationPlan).toList();
+    }
+
+    @Transactional
+    public OrganizationPlanView previewOrganizationPlan(String scheduleId, PreviewOrganizationPlanRequest request,
+                                                        String actorId) {
+        ExamSchedule schedule = requireSchedule(scheduleId);
+        ExamPeriod period = requirePeriod(schedule.getExamPeriodId());
+        assertEditable(period);
+        int maxPerRoom = request.maxCandidatesPerRoom();
+        int studentsPerDesk = request.studentsPerDesk();
+        boolean includeSecond = Boolean.TRUE.equals(request.includeSecondProctor());
+        List<CandidateSeed> expected = expectedCandidates(schedule);
+        if (expected.isEmpty()) throw ApiException.conflict("Các lớp dự thi chưa có học sinh để tổ chức ca thi");
+
+        Map<String, com.sse.app.academic.structure.Room> physicalByCode = structure.listRooms().stream()
+                .filter(room -> "ACTIVE".equalsIgnoreCase(room.getStatus()))
+                .collect(java.util.stream.Collectors.toMap(room -> room.getCode().trim().toUpperCase(),
+                        room -> room, (first, ignored) -> first));
+        List<ExamRoomAvailability> available = roomAvailability(scheduleId).stream()
+                .filter(ExamRoomAvailability::available).filter(item -> item.capacity() > 0)
+                .sorted(Comparator.comparingInt((ExamRoomAvailability item) -> -Math.min(item.capacity(), maxPerRoom))
+                        .thenComparing(ExamRoomAvailability::roomCode)).toList();
+        List<OrganizationRoomDraft> selected = new ArrayList<>();
+        int selectedCapacity = 0;
+        for (ExamRoomAvailability item : available) {
+            if (selectedCapacity >= expected.size()) break;
+            int effective = Math.min(item.capacity(), maxPerRoom);
+            selected.add(new OrganizationRoomDraft(Ids.gen("er"), item.roomCode(), item.capacity(), effective,
+                    null, null, null, null, 0));
+            selectedCapacity += effective;
+        }
+        if (selected.isEmpty()) throw ApiException.conflict("Không có phòng thi khả dụng trong khung giờ đã chọn");
+
+        Map<String, Integer> dutyCounts = proctorDutyCounts();
+        List<UserDto> teacherPool = activeTeachers();
+        Set<String> usedTeachers = new HashSet<>();
+        List<OrganizationRoomDraft> proctored = new ArrayList<>();
+        for (OrganizationRoomDraft room : selected) {
+            UserDto first = chooseProctor(teacherPool, usedTeachers, schedule, period, dutyCounts);
+            if (first != null) usedTeachers.add(first.id());
+            UserDto second = includeSecond ? chooseProctor(teacherPool, usedTeachers, schedule, period, dutyCounts) : null;
+            if (second != null) usedTeachers.add(second.id());
+            proctored.add(room.withProctors(first, second));
+        }
+
+        Map<String, String> stableNumbers = candidates.findByExamPeriodId(period.getId()).stream()
+                .filter(candidate -> candidate.getCandidateNo() != null && candidate.getCandidateNo().matches("\\d{6}"))
+                .collect(java.util.stream.Collectors.toMap(ExamCandidate::getStudentId, ExamCandidate::getCandidateNo,
+                        (first, ignored) -> first, LinkedHashMap::new));
+        Set<String> usedNumbers = new HashSet<>(stableNumbers.values());
+        int nextNumber = usedNumbers.stream().mapToInt(Integer::parseInt).max().orElse(0) + 1;
+        Map<String, Integer> remaining = new LinkedHashMap<>();
+        Map<String, Integer> nextSeat = new LinkedHashMap<>();
+        proctored.forEach(room -> { remaining.put(room.roomId(), room.effectiveCapacity()); nextSeat.put(room.roomId(), 1); });
+        Map<String, OrganizationRoomDraft> lastRoomByClass = new HashMap<>();
+        List<OrganizationCandidateDraft> proposed = new ArrayList<>();
+        for (CandidateSeed seed : expected) {
+            String number = stableNumbers.get(seed.studentId());
+            if (number == null) {
+                while (usedNumbers.contains(String.format("%06d", nextNumber))) nextNumber++;
+                if (nextNumber > 999999) throw ApiException.conflict("Đã vượt giới hạn số báo danh 6 chữ số");
+                number = String.format("%06d", nextNumber++);
+                stableNumbers.put(seed.studentId(), number); usedNumbers.add(number);
+            }
+            OrganizationRoomDraft target = lastRoomByClass.get(seed.classId());
+            if (target == null || remaining.getOrDefault(target.roomId(), 0) == 0) {
+                target = proctored.stream().filter(room -> remaining.getOrDefault(room.roomId(), 0) > 0)
+                        .max(Comparator.comparingInt(room -> remaining.get(room.roomId()))).orElse(null);
+            }
+            if (target == null) continue;
+            lastRoomByClass.put(seed.classId(), target);
+            int seatNo = nextSeat.get(target.roomId());
+            nextSeat.put(target.roomId(), seatNo + 1);
+            remaining.put(target.roomId(), remaining.get(target.roomId()) - 1);
+            proposed.add(new OrganizationCandidateDraft(Ids.gen("ec"), seed, number, target.roomId(),
+                    target.roomCode(), seatNo, ((seatNo - 1) / studentsPerDesk) + 1,
+                    ((seatNo - 1) % studentsPerDesk) + 1));
+        }
+        Map<String, Long> counts = proposed.stream().collect(java.util.stream.Collectors.groupingBy(
+                OrganizationCandidateDraft::roomId, java.util.stream.Collectors.counting()));
+        List<OrganizationRoomDraft> finalizedRooms = proctored.stream()
+                .map(room -> room.withCandidateCount(counts.getOrDefault(room.roomId(), 0L).intValue())).toList();
+        int missingCandidates = expected.size() - proposed.size();
+        int missingProctors = (int) finalizedRooms.stream().filter(room -> room.proctorOneId() == null
+                || (includeSecond && room.proctorTwoId() == null)).count();
+        List<String> warnings = new ArrayList<>();
+        if (missingCandidates > 0) warnings.add("Thiếu " + missingCandidates + " chỗ ngồi");
+        if (missingProctors > 0) warnings.add("Thiếu giám thị cho " + missingProctors + " phòng");
+        if (maxPerRoom < available.stream().mapToInt(ExamRoomAvailability::capacity).max().orElse(maxPerRoom))
+            warnings.add("Đã giới hạn tối đa " + maxPerRoom + " thí sinh mỗi phòng theo cấu hình");
+
+        jdbc.update("update exam_organization_plans set status='SUPERSEDED' where schedule_id=? and status='PREVIEW'", scheduleId);
+        String planId = Ids.gen("eop");
+        jdbc.update("""
+                insert into exam_organization_plans
+                (id,schedule_id,status,max_candidates_per_room,students_per_desk,include_second_proctor,
+                 candidate_count,room_count,effective_capacity,assigned_count,missing_assignment_count,
+                 source_fingerprint,warning_summary,created_by,created_at)
+                values (?,?,'PREVIEW',?,?,?,?,?,?,?,?,?,?,?,?)
+                """, planId, scheduleId, maxPerRoom, studentsPerDesk, includeSecond, expected.size(),
+                finalizedRooms.size(), selectedCapacity, proposed.size(), missingCandidates + missingProctors,
+                organizationSourceFingerprint(schedule), warnings.isEmpty() ? null : String.join(" · ", warnings),
+                actorId, Timestamp.from(Instant.now()));
+        snapshotCurrentOrganization(planId, scheduleId, physicalByCode);
+        finalizedRooms.forEach(room -> insertOrganizationRoom(planId, "PROPOSED", room));
+        proposed.forEach(candidate -> insertOrganizationCandidate(planId, "PROPOSED", candidate));
+        return organizationPlan(planId);
+    }
+
+    @Transactional
+    public OrganizationPlanView applyOrganizationPlan(String planId, String actorId) {
+        OrganizationPlanView plan = lockedOrganizationPlan(planId);
+        if (!"PREVIEW".equals(plan.status())) throw ApiException.conflict("Chỉ bản xem trước mới có thể áp dụng");
+        if (plan.missingAssignmentCount() > 0) throw ApiException.conflict("Phương án chưa đủ phòng, giám thị hoặc chỗ ngồi");
+        ExamSchedule schedule = requireSchedule(plan.scheduleId());
+        ExamPeriod period = requirePeriod(schedule.getExamPeriodId());
+        assertEditable(period);
+        if (!organizationPlanFingerprint(planId).equals(organizationSourceFingerprint(schedule)))
+            throw ApiException.conflict("Dữ liệu phòng, giáo viên hoặc thí sinh đã thay đổi; hãy tạo lại bản xem trước");
+        validateOrganizationProposal(schedule, period, plan.rooms(), plan.candidates(),
+                plan.includeSecondProctor(), plan.studentsPerDesk());
+        replaceOrganizationState(schedule, plan.rooms(), plan.candidates());
+        jdbc.update("update exam_organization_plans set status='SUPERSEDED' where schedule_id=? and status='APPLIED'", schedule.getId());
+        jdbc.update("update exam_organization_plans set status='APPLIED',applied_by=?,applied_at=? where id=?",
+                actorId, Timestamp.from(Instant.now()), planId);
+        invalidatePublishedSchedule(period);
+        return organizationPlan(planId);
+    }
+
+    @Transactional
+    public OrganizationPlanView undoOrganizationPlan(String planId, String actorId) {
+        OrganizationPlanView plan = lockedOrganizationPlan(planId);
+        if (!"APPLIED".equals(plan.status())) throw ApiException.conflict("Chỉ phương án đang áp dụng mới có thể hoàn tác");
+        ExamSchedule schedule = requireSchedule(plan.scheduleId());
+        ExamPeriod period = requirePeriod(schedule.getExamPeriodId());
+        assertEditable(period);
+        if (!matchesOrganizationState(schedule.getId(), plan.rooms(), plan.candidates()))
+            throw ApiException.conflict("Dữ liệu tổ chức ca thi đã được chỉnh sửa; không thể hoàn tác an toàn");
+        replaceOrganizationState(schedule, organizationRoomRows(planId, "PREVIOUS", plan.studentsPerDesk()),
+                organizationCandidateRows(planId, "PREVIOUS"));
+        jdbc.update("update exam_organization_plans set status='UNDONE',undone_by=?,undone_at=? where id=?",
+                actorId, Timestamp.from(Instant.now()), planId);
+        invalidatePublishedSchedule(period);
+        return organizationPlan(planId);
+    }
+
+    public List<SeatingPlanView> seatingPlans(String scheduleId) {
+        requireSchedule(scheduleId);
+        return seatingPlans.findByScheduleIdOrderByCreatedAtDesc(scheduleId).stream().map(this::seatingPlanView).toList();
+    }
+
+    @Transactional
+    public SeatingPlanView previewSeatingPlan(String scheduleId, PreviewSeatingPlanRequest request, String actorId) {
+        ExamSchedule schedule = requireSchedule(scheduleId);
+        ExamPeriod period = requirePeriod(schedule.getExamPeriodId());
+        assertEditable(period);
+        List<ExamRoom> availableRooms = rooms.findByScheduleId(scheduleId).stream()
+                .sorted(Comparator.comparing(ExamRoom::getRoomCode)).toList();
+        Set<String> selectedIds = request != null && request.roomIds() != null && !request.roomIds().isEmpty()
+                ? new LinkedHashSet<>(request.roomIds())
+                : availableRooms.stream().map(ExamRoom::getId).collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        List<ExamRoom> selectedRooms = availableRooms.stream().filter(room -> selectedIds.contains(room.getId())).toList();
+        if (selectedRooms.isEmpty()) throw ApiException.badRequest("Hãy chọn ít nhất một phòng để tạo phương án");
+        if (selectedRooms.size() != selectedIds.size()) throw ApiException.badRequest("Có phòng không thuộc ca thi đã chọn");
+
+        List<CandidateSeed> expected = expectedCandidates(schedule);
+        if (expected.isEmpty()) throw ApiException.conflict("Các lớp dự thi chưa có học sinh để xếp phòng");
+        List<ExamCandidate> previous = candidates.findByScheduleId(scheduleId);
+        Map<String, String> stableNumbers = candidates.findByExamPeriodId(period.getId()).stream()
+                .filter(candidate -> candidate.getCandidateNo() != null && candidate.getCandidateNo().matches("\\d{6}"))
+                .collect(java.util.stream.Collectors.toMap(ExamCandidate::getStudentId, ExamCandidate::getCandidateNo,
+                        (first, ignored) -> first, LinkedHashMap::new));
+        Set<String> usedNumbers = new HashSet<>(stableNumbers.values());
+        int nextNumber = usedNumbers.stream().mapToInt(Integer::parseInt).max().orElse(0) + 1;
+
+        Map<String, Integer> remaining = new LinkedHashMap<>();
+        Map<String, Integer> nextSeat = new LinkedHashMap<>();
+        selectedRooms.forEach(room -> { remaining.put(room.getId(), room.getCapacity()); nextSeat.put(room.getId(), 1); });
+        Map<String, ExamRoom> roomById = selectedRooms.stream().collect(java.util.stream.Collectors.toMap(ExamRoom::getId, room -> room));
+        List<PlannedCandidate> proposed = new ArrayList<>();
+        for (CandidateSeed seed : expected) {
+            String number = stableNumbers.get(seed.studentId());
+            if (number == null) {
+                while (usedNumbers.contains(String.format("%06d", nextNumber))) nextNumber++;
+                if (nextNumber > 999999) throw ApiException.conflict("Đã vượt giới hạn số báo danh 6 chữ số");
+                number = String.format("%06d", nextNumber++);
+                stableNumbers.put(seed.studentId(), number);
+                usedNumbers.add(number);
+            }
+            ExamRoom target = chooseRoomForClass(seed.classId(), proposed, selectedRooms, remaining);
+            if (target == null) {
+                proposed.add(new PlannedCandidate(seed, number, null, null));
+            } else {
+                int seat = nextSeat.get(target.getId());
+                nextSeat.put(target.getId(), seat + 1);
+                remaining.put(target.getId(), remaining.get(target.getId()) - 1);
+                proposed.add(new PlannedCandidate(seed, number, target, seat));
+            }
+        }
+
+        int assigned = (int) proposed.stream().filter(item -> item.room() != null).count();
+        int totalCapacity = selectedRooms.stream().mapToInt(ExamRoom::getCapacity).sum();
+        List<String> warnings = new ArrayList<>();
+        if (assigned < expected.size()) warnings.add("Thiếu " + (expected.size() - assigned) + " chỗ ngồi; hãy chọn thêm phòng");
+        long missingProctors = selectedRooms.stream().filter(room -> !hasMainProctor(room)).count();
+        if (missingProctors > 0) warnings.add("Còn " + missingProctors + " phòng chưa có giám thị chính");
+        long splitClasses = proposed.stream().filter(item -> item.room() != null)
+                .collect(java.util.stream.Collectors.groupingBy(item -> item.seed().classId(),
+                        java.util.stream.Collectors.mapping(item -> item.room().getId(), java.util.stream.Collectors.toSet())))
+                .values().stream().filter(roomIds -> roomIds.size() > 1).count();
+        if (splitClasses > 0) warnings.add(splitClasses + " lớp được chia sang nhiều phòng để tận dụng sức chứa");
+
+        seatingPlans.findByScheduleIdOrderByCreatedAtDesc(scheduleId).stream()
+                .filter(existing -> "PREVIEW".equals(existing.getStatus()))
+                .forEach(existing -> existing.setStatus("SUPERSEDED"));
+        ExamSeatingPlan plan = seatingPlans.save(ExamSeatingPlan.builder().id(Ids.gen("esp"))
+                .examPeriodId(period.getId()).scheduleId(scheduleId).status("PREVIEW")
+                .candidateCount(expected.size()).totalCapacity(totalCapacity).assignedCount(assigned)
+                .unassignedCount(expected.size() - assigned)
+                .sourceFingerprint(scheduleSourceFingerprint(schedule, selectedRooms, expected, previous))
+                .selectedRoomIds(selectedRooms.stream().map(ExamRoom::getId).collect(java.util.stream.Collectors.joining(",")))
+                .warningSummary(String.join(" · ", warnings)).createdBy(actorId).createdAt(Instant.now()).build());
+        List<ExamSeatingPlanItem> items = new ArrayList<>();
+        previous.forEach(candidate -> items.add(planItem(plan.getId(), "PREVIOUS", candidate)));
+        proposed.forEach(item -> items.add(planItem(plan.getId(), item)));
+        seatingPlanItems.saveAll(items);
+        return seatingPlanView(plan);
+    }
+
+    @Transactional
+    public SeatingPlanView applySeatingPlan(String planId, String actorId) {
+        ExamSeatingPlan plan = seatingPlans.findById(planId).orElseThrow(() -> ApiException.notFound("Phương án xếp phòng"));
+        if (!"PREVIEW".equals(plan.getStatus())) throw ApiException.conflict("Chỉ phương án đang xem trước mới có thể áp dụng");
+        ExamSchedule schedule = requireSchedule(plan.getScheduleId());
+        ExamPeriod period = requirePeriod(schedule.getExamPeriodId());
+        assertEditable(period);
+        List<ExamRoom> selectedRooms = selectedRooms(plan, schedule);
+        List<CandidateSeed> expected = expectedCandidates(schedule);
+        String currentFingerprint = scheduleSourceFingerprint(schedule, selectedRooms, expected, candidates.findByScheduleId(schedule.getId()));
+        if (!plan.getSourceFingerprint().equals(currentFingerprint)) {
+            throw ApiException.conflict("Dữ liệu lớp, phòng hoặc thí sinh đã thay đổi; hãy tạo lại bản xem trước");
+        }
+        if (plan.getUnassignedCount() > 0) throw ApiException.conflict("Phương án còn " + plan.getUnassignedCount() + " thí sinh chưa có chỗ");
+        List<ExamRoom> missingProctor = selectedRooms.stream().filter(room -> !hasMainProctor(room)).toList();
+        if (!missingProctor.isEmpty()) throw ApiException.conflict("Chưa có giám thị chính cho phòng "
+                + missingProctor.stream().map(ExamRoom::getRoomCode).collect(java.util.stream.Collectors.joining(", ")));
+        selectedRooms.forEach(room -> assertRoomAndProctorsAvailable(schedule,
+                new SaveRoomRequest(room.getId(), room.getRoomCode(), room.getCapacity(), room.getProctorOneId(), room.getProctorTwoId()),
+                teacher(room.getProctorOneId()), teacher(room.getProctorTwoId())));
+        List<ExamSeatingPlanItem> proposed = seatingPlanItems.findByPlanIdAndRowType(planId, "PROPOSED");
+        if (proposed.size() != plan.getCandidateCount() || proposed.stream().anyMatch(item -> item.getExamRoomId() == null)) {
+            throw ApiException.conflict("Phương án không đầy đủ; hãy tạo lại bản xem trước");
+        }
+        candidates.deleteByScheduleId(schedule.getId());
+        candidates.flush();
+        candidates.saveAll(proposed.stream().map(item -> candidateFromPlan(plan, item)).toList());
+        seatingPlans.findByScheduleIdOrderByCreatedAtDesc(schedule.getId()).stream()
+                .filter(other -> "APPLIED".equals(other.getStatus())).forEach(other -> other.setStatus("SUPERSEDED"));
+        plan.setStatus("APPLIED"); plan.setAppliedBy(actorId); plan.setAppliedAt(Instant.now());
+        invalidatePublishedSchedule(period);
+        return seatingPlanView(seatingPlans.save(plan));
+    }
+
+    @Transactional
+    public SeatingPlanView undoSeatingPlan(String planId, String actorId) {
+        ExamSeatingPlan plan = seatingPlans.findById(planId).orElseThrow(() -> ApiException.notFound("Phương án xếp phòng"));
+        if (!"APPLIED".equals(plan.getStatus())) throw ApiException.conflict("Chỉ phương án đang được áp dụng mới có thể hoàn tác");
+        ExamSchedule schedule = requireSchedule(plan.getScheduleId());
+        ExamPeriod period = requirePeriod(schedule.getExamPeriodId());
+        assertEditable(period);
+        List<ExamSeatingPlanItem> proposed = seatingPlanItems.findByPlanIdAndRowType(planId, "PROPOSED");
+        if (!matchesCurrentCandidates(proposed, candidates.findByScheduleId(schedule.getId()))) {
+            throw ApiException.conflict("Danh sách hiện tại đã được chỉnh sửa; không thể hoàn tác an toàn");
+        }
+        List<ExamSeatingPlanItem> previous = seatingPlanItems.findByPlanIdAndRowType(planId, "PREVIOUS");
+        candidates.deleteByScheduleId(schedule.getId());
+        candidates.flush();
+        candidates.saveAll(previous.stream().map(item -> candidateFromPlan(plan, item)).toList());
+        plan.setStatus("UNDONE"); plan.setUndoneBy(actorId); plan.setUndoneAt(Instant.now());
+        invalidatePublishedSchedule(period);
+        return seatingPlanView(seatingPlans.save(plan));
+    }
+
+    public List<EligibleProctor> eligibleProctors(String scheduleId, String roomId) {
+        ExamSchedule schedule = requireSchedule(scheduleId);
+        ExamPeriod period = requirePeriod(schedule.getExamPeriodId());
+        if (roomId != null && !roomId.isBlank()) {
+            ExamRoom room = rooms.findById(roomId).orElseThrow(() -> ApiException.notFound("Phòng thi"));
+            if (!scheduleId.equals(room.getScheduleId())) throw ApiException.badRequest("Phòng không thuộc ca thi đã chọn");
+        }
+        Map<String, Integer> dutyCounts = proctorDutyCounts();
+        Set<String> occupiedInSchedule = rooms.findByScheduleId(scheduleId).stream()
+                .filter(room -> roomId == null || !room.getId().equals(roomId))
+                .flatMap(room -> java.util.stream.Stream.of(room.getProctorOneId(), room.getProctorTwoId()))
+                .filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
+        return activeTeachers().stream()
+                .filter(teacher -> !occupiedInSchedule.contains(teacher.id()))
+                .filter(teacher -> teacherBusyReason(schedule, period, teacher.id(), true) == null)
+                .sorted(proctorComparator(schedule, period, dutyCounts))
+                .map(teacher -> new EligibleProctor(teacher.id(), teacher.teacherCode(), teacher.fullName(),
+                        dutyCounts.getOrDefault(teacher.id(), 0), isQualifiedForSubject(teacher, schedule, period),
+                        proctorRecommendation(teacher, schedule, period, dutyCounts)))
+                .toList();
+    }
+
+    public List<ProctorPlanView> proctorPlans(String scheduleId) {
+        requireSchedule(scheduleId);
+        return proctorPlans.findByScheduleIdOrderByCreatedAtDesc(scheduleId).stream()
+                .map(this::proctorPlanView).toList();
+    }
+
+    @Transactional
+    public ProctorPlanView previewProctorPlan(String scheduleId, PreviewProctorPlanRequest request, String actorId) {
+        ExamSchedule schedule = requireSchedule(scheduleId);
+        ExamPeriod period = requirePeriod(schedule.getExamPeriodId());
+        assertEditable(period);
+        List<ExamRoom> scheduleRooms = rooms.findByScheduleId(scheduleId).stream()
+                .sorted(Comparator.comparing(ExamRoom::getRoomCode)).toList();
+        if (scheduleRooms.isEmpty()) throw ApiException.conflict("Hãy chọn phòng thi trước khi phân công giám thị");
+        Set<String> lockedIds = request != null && request.lockedRoomIds() != null
+                ? new HashSet<>(request.lockedRoomIds()) : Set.of();
+        if (lockedIds.stream().anyMatch(id -> scheduleRooms.stream().noneMatch(room -> room.getId().equals(id)))) {
+            throw ApiException.badRequest("Có phòng được khóa không thuộc ca thi đã chọn");
+        }
+        boolean includeSecond = request != null && Boolean.TRUE.equals(request.includeSecondProctor());
+        Map<String, Integer> dutyCounts = proctorDutyCounts();
+        List<UserDto> teacherPool = activeTeachers();
+        Set<String> usedTeachers = new HashSet<>();
+        List<ExamProctorPlanItem> drafted = new ArrayList<>();
+
+        for (ExamRoom room : scheduleRooms) {
+            if (!lockedIds.contains(room.getId())) continue;
+            String status = "READY";
+            String message = "Giữ nguyên theo lựa chọn đã khóa";
+            if (!hasMainProctor(room)) {
+                status = "MISSING"; message = "Phòng đã khóa nhưng chưa có giám thị chính";
+            } else if (!reserveProctor(room.getProctorOneId(), usedTeachers)
+                    || (room.getProctorTwoId() != null && !reserveProctor(room.getProctorTwoId(), usedTeachers))) {
+                status = "CONFLICT"; message = "Giáo viên bị trùng giữa các phòng đã khóa";
+            } else {
+                String busy = teacherBusyReason(schedule, period, room.getProctorOneId(), true);
+                if (busy == null && room.getProctorTwoId() != null) busy = teacherBusyReason(schedule, period, room.getProctorTwoId(), true);
+                if (busy != null) { status = "CONFLICT"; message = busy; }
+            }
+            drafted.add(proctorPlanItem(null, room, true, room.getProctorOneId(), room.getProctorOneName(),
+                    room.getProctorTwoId(), room.getProctorTwoName(), status, message, dutyCounts));
+        }
+
+        for (ExamRoom room : scheduleRooms) {
+            if (lockedIds.contains(room.getId())) continue;
+            UserDto first = chooseProctor(teacherPool, usedTeachers, schedule, period, dutyCounts);
+            if (first != null) usedTeachers.add(first.id());
+            UserDto second = includeSecond ? chooseProctor(teacherPool, usedTeachers, schedule, period, dutyCounts) : null;
+            if (second != null) usedTeachers.add(second.id());
+            String status = first == null || (includeSecond && second == null) ? "MISSING" : "READY";
+            String message = first == null ? "Không còn giáo viên khả dụng cho giám thị chính"
+                    : includeSecond && second == null ? "Đã có giám thị chính nhưng thiếu giám thị hỗ trợ"
+                    : "Đề xuất theo lịch rảnh, khác môn thi và số ca đang phụ trách";
+            drafted.add(proctorPlanItem(null, room, false,
+                    first == null ? null : first.id(), first == null ? null : first.fullName(),
+                    second == null ? null : second.id(), second == null ? null : second.fullName(),
+                    status, message, dutyCounts));
+        }
+        drafted.sort(Comparator.comparing(ExamProctorPlanItem::getRoomCode));
+        int readyCount = (int) drafted.stream().filter(item -> "READY".equals(item.getStatus())).count();
+        int missingCount = drafted.size() - readyCount;
+        String warning = missingCount == 0 ? "" : "Còn " + missingCount + " phòng cần điều chỉnh thủ công";
+        proctorPlans.findByScheduleIdOrderByCreatedAtDesc(scheduleId).stream()
+                .filter(existing -> "PREVIEW".equals(existing.getStatus()))
+                .forEach(existing -> existing.setStatus("SUPERSEDED"));
+        ExamProctorPlan plan = proctorPlans.save(ExamProctorPlan.builder().id(Ids.gen("epp"))
+                .scheduleId(scheduleId).status("PREVIEW").includeSecondProctor(includeSecond)
+                .roomCount(scheduleRooms.size()).readyRoomCount(readyCount).missingAssignmentCount(missingCount)
+                .sourceFingerprint(proctorSourceFingerprint(schedule, period)).warningSummary(warning)
+                .createdBy(actorId).createdAt(Instant.now()).build());
+        drafted.forEach(item -> item.setPlanId(plan.getId()));
+        proctorPlanItems.saveAll(drafted);
+        return proctorPlanView(plan);
+    }
+
+    @Transactional
+    public ProctorPlanView applyProctorPlan(String planId, String actorId) {
+        ExamProctorPlan plan = proctorPlans.findById(planId).orElseThrow(() -> ApiException.notFound("Phương án giám thị"));
+        if (!"PREVIEW".equals(plan.getStatus())) throw ApiException.conflict("Chỉ bản xem trước mới có thể áp dụng");
+        ExamSchedule schedule = requireSchedule(plan.getScheduleId());
+        ExamPeriod period = requirePeriod(schedule.getExamPeriodId());
+        assertEditable(period);
+        if (!plan.getSourceFingerprint().equals(proctorSourceFingerprint(schedule, period))) {
+            throw ApiException.conflict("Lịch hoặc phân công đã thay đổi; hãy tạo lại bản xem trước");
+        }
+        if (plan.getMissingAssignmentCount() > 0) throw ApiException.conflict("Phương án còn phòng chưa đủ giám thị");
+        List<ExamProctorPlanItem> items = proctorPlanItems.findByPlanId(planId);
+        validateProctorProposal(schedule, period, items, false);
+        Map<String, ExamRoom> roomById = rooms.findByScheduleId(schedule.getId()).stream()
+                .collect(java.util.stream.Collectors.toMap(ExamRoom::getId, room -> room));
+        for (ExamProctorPlanItem item : items) {
+            ExamRoom room = roomById.get(item.getRoomId());
+            if (room == null) throw ApiException.conflict("Phòng thi đã thay đổi; hãy tạo lại phương án");
+            removeProctorNotifications(room);
+            room.setProctorOneId(item.getProposedProctorOneId()); room.setProctorOneName(item.getProposedProctorOneName());
+            room.setProctorTwoId(item.getProposedProctorTwoId()); room.setProctorTwoName(item.getProposedProctorTwoName());
+        }
+        rooms.saveAll(roomById.values());
+        proctorPlans.findByScheduleIdOrderByCreatedAtDesc(schedule.getId()).stream()
+                .filter(existing -> "APPLIED".equals(existing.getStatus())).forEach(existing -> existing.setStatus("SUPERSEDED"));
+        plan.setStatus("APPLIED"); plan.setAppliedBy(actorId); plan.setAppliedAt(Instant.now());
+        invalidatePublishedSchedule(period);
+        return proctorPlanView(proctorPlans.save(plan));
+    }
+
+    @Transactional
+    public ProctorPlanView undoProctorPlan(String planId, String actorId) {
+        ExamProctorPlan plan = proctorPlans.findById(planId).orElseThrow(() -> ApiException.notFound("Phương án giám thị"));
+        if (!"APPLIED".equals(plan.getStatus())) throw ApiException.conflict("Chỉ phương án đang áp dụng mới có thể hoàn tác");
+        ExamSchedule schedule = requireSchedule(plan.getScheduleId());
+        ExamPeriod period = requirePeriod(schedule.getExamPeriodId());
+        assertEditable(period);
+        List<ExamProctorPlanItem> items = proctorPlanItems.findByPlanId(planId);
+        Map<String, ExamRoom> roomById = rooms.findByScheduleId(schedule.getId()).stream()
+                .collect(java.util.stream.Collectors.toMap(ExamRoom::getId, room -> room));
+        boolean unchanged = items.stream().allMatch(item -> {
+            ExamRoom room = roomById.get(item.getRoomId());
+            return room != null && Objects.equals(room.getProctorOneId(), item.getProposedProctorOneId())
+                    && Objects.equals(room.getProctorTwoId(), item.getProposedProctorTwoId());
+        });
+        if (!unchanged) throw ApiException.conflict("Phân công hiện tại đã được chỉnh sửa; không thể hoàn tác an toàn");
+        validateProctorProposal(schedule, period, items, true);
+        for (ExamProctorPlanItem item : items) {
+            ExamRoom room = roomById.get(item.getRoomId());
+            removeProctorNotifications(room);
+            room.setProctorOneId(item.getPreviousProctorOneId()); room.setProctorOneName(item.getPreviousProctorOneName());
+            room.setProctorTwoId(item.getPreviousProctorTwoId()); room.setProctorTwoName(item.getPreviousProctorTwoName());
+        }
+        rooms.saveAll(roomById.values());
+        plan.setStatus("UNDONE"); plan.setUndoneBy(actorId); plan.setUndoneAt(Instant.now());
+        invalidatePublishedSchedule(period);
+        return proctorPlanView(proctorPlans.save(plan));
     }
 
     public List<ExamResult> results(String periodId, String scheduleId, String studentId) {
@@ -675,6 +1258,502 @@ public class ExamService {
             }
         }
         return sent;
+    }
+
+    private List<UserDto> activeTeachers() {
+        return users.list("TEACHER", null, null).stream()
+                .filter(teacher -> "ACTIVE".equals(teacher.status())).toList();
+    }
+
+    private Map<String, Integer> proctorDutyCounts() {
+        Map<String, Integer> counts = new HashMap<>();
+        for (ExamRoom room : rooms.findAll()) {
+            if (room.getProctorOneId() != null) counts.merge(room.getProctorOneId(), 1, Integer::sum);
+            if (room.getProctorTwoId() != null) counts.merge(room.getProctorTwoId(), 1, Integer::sum);
+        }
+        return counts;
+    }
+
+    private Comparator<UserDto> proctorComparator(ExamSchedule schedule, ExamPeriod period,
+                                                   Map<String, Integer> dutyCounts) {
+        return Comparator.<UserDto>comparingInt(teacher -> isQualifiedForSubject(teacher, schedule, period) ? 1 : 0)
+                .thenComparingInt(teacher -> dutyCounts.getOrDefault(teacher.id(), 0))
+                .thenComparing(UserDto::fullName);
+    }
+
+    private UserDto chooseProctor(List<UserDto> pool, Set<String> usedTeachers, ExamSchedule schedule,
+                                  ExamPeriod period, Map<String, Integer> dutyCounts) {
+        return pool.stream().filter(teacher -> !usedTeachers.contains(teacher.id()))
+                .filter(teacher -> teacherBusyReason(schedule, period, teacher.id(), true) == null)
+                .sorted(proctorComparator(schedule, period, dutyCounts)).findFirst().orElse(null);
+    }
+
+    private boolean reserveProctor(String teacherId, Set<String> usedTeachers) {
+        if (teacherId == null || teacherId.isBlank()) return true;
+        return usedTeachers.add(teacherId);
+    }
+
+    private String teacherBusyReason(ExamSchedule schedule, ExamPeriod period, String teacherId,
+                                     boolean ignoreCurrentSchedule) {
+        if (teacherId == null || teacherId.isBlank()) return null;
+        for (ExamRoom room : rooms.findAll()) {
+            ExamSchedule other = schedules.findById(room.getScheduleId()).orElse(null);
+            if (other == null || (ignoreCurrentSchedule && other.getId().equals(schedule.getId())) || !overlaps(schedule, other)) continue;
+            if (teacherId.equals(room.getProctorOneId()) || teacherId.equals(room.getProctorTwoId())) {
+                return "Đã coi thi môn " + other.getSubjectName() + " cùng thời gian";
+            }
+        }
+        // Ngày thi thay thế lịch học thường: khối không thi nghỉ cả ngày, học sinh dự thi
+        // ra về sau ca cuối. Vì vậy chỉ ca coi thi khác thực sự trùng giờ mới làm giáo viên bận.
+        return null;
+    }
+
+    private String proctorRecommendation(UserDto teacher, ExamSchedule schedule, ExamPeriod period,
+                                         Map<String, Integer> dutyCounts) {
+        int duties = dutyCounts.getOrDefault(teacher.id(), 0);
+        return (isQualifiedForSubject(teacher, schedule, period) ? "Cùng chuyên môn môn thi" : "Khác chuyên môn môn thi")
+                + " · đang có " + duties + " ca coi · lịch dạy thường được tạm dừng";
+    }
+
+    private ExamProctorPlanItem proctorPlanItem(String planId, ExamRoom room, boolean locked,
+                                                String proposedOneId, String proposedOneName,
+                                                String proposedTwoId, String proposedTwoName,
+                                                String status, String message, Map<String, Integer> dutyCounts) {
+        return ExamProctorPlanItem.builder().id(Ids.gen("eppi")).planId(planId)
+                .roomId(room.getId()).roomCode(room.getRoomCode()).locked(locked)
+                .previousProctorOneId(room.getProctorOneId()).previousProctorOneName(room.getProctorOneName())
+                .previousProctorTwoId(room.getProctorTwoId()).previousProctorTwoName(room.getProctorTwoName())
+                .proposedProctorOneId(proposedOneId).proposedProctorOneName(proposedOneName)
+                .proposedProctorTwoId(proposedTwoId).proposedProctorTwoName(proposedTwoName)
+                .status(status).message(message)
+                .proctorOneDutyCount(proposedOneId == null ? null : dutyCounts.getOrDefault(proposedOneId, 0))
+                .proctorTwoDutyCount(proposedTwoId == null ? null : dutyCounts.getOrDefault(proposedTwoId, 0)).build();
+    }
+
+    private ProctorPlanView proctorPlanView(ExamProctorPlan plan) {
+        List<ProctorPlanItem> items = proctorPlanItems.findByPlanId(plan.getId()).stream()
+                .sorted(Comparator.comparing(ExamProctorPlanItem::getRoomCode))
+                .map(item -> new ProctorPlanItem(item.getRoomId(), item.getRoomCode(), item.isLocked(),
+                        item.getPreviousProctorOneId(), item.getPreviousProctorOneName(),
+                        item.getPreviousProctorTwoId(), item.getPreviousProctorTwoName(),
+                        item.getProposedProctorOneId(), item.getProposedProctorOneName(),
+                        item.getProposedProctorTwoId(), item.getProposedProctorTwoName(), item.getStatus(),
+                        item.getMessage(), item.getProctorOneDutyCount(), item.getProctorTwoDutyCount())).toList();
+        return new ProctorPlanView(plan.getId(), plan.getScheduleId(), plan.getStatus(), plan.isIncludeSecondProctor(),
+                plan.getRoomCount(), plan.getReadyRoomCount(), plan.getMissingAssignmentCount(), plan.getWarningSummary(),
+                plan.getCreatedAt(), plan.getAppliedAt(), plan.getUndoneAt(), items);
+    }
+
+    private String proctorSourceFingerprint(ExamSchedule schedule, ExamPeriod period) {
+        StringBuilder source = new StringBuilder(schedule.getId()).append('|').append(schedule.getExamDate())
+                .append('|').append(schedule.getStartTime()).append('|').append(schedule.getDurationMinutes());
+        rooms.findByScheduleId(schedule.getId()).stream().sorted(Comparator.comparing(ExamRoom::getId))
+                .forEach(room -> source.append("|CURRENT:").append(room.getId()).append(':')
+                        .append(Objects.toString(room.getProctorOneId(), "")).append(':')
+                        .append(Objects.toString(room.getProctorTwoId(), "")));
+        rooms.findAll().stream().sorted(Comparator.comparing(ExamRoom::getId)).forEach(room -> {
+            ExamSchedule other = schedules.findById(room.getScheduleId()).orElse(null);
+            if (other != null && !other.getId().equals(schedule.getId()) && overlaps(schedule, other)) {
+                source.append("|OTHER:").append(room.getId()).append(':')
+                        .append(Objects.toString(room.getProctorOneId(), "")).append(':')
+                        .append(Objects.toString(room.getProctorTwoId(), ""));
+            }
+        });
+        return sha256(source.toString());
+    }
+
+    private void validateProctorProposal(ExamSchedule schedule, ExamPeriod period,
+                                         List<ExamProctorPlanItem> items, boolean previous) {
+        Set<String> used = new HashSet<>();
+        for (ExamProctorPlanItem item : items) {
+            String first = previous ? item.getPreviousProctorOneId() : item.getProposedProctorOneId();
+            String second = previous ? item.getPreviousProctorTwoId() : item.getProposedProctorTwoId();
+            if (!previous && (first == null || first.isBlank())) throw ApiException.conflict("Phòng " + item.getRoomCode() + " chưa có giám thị chính");
+            for (String teacherId : List.of(first == null ? "" : first, second == null ? "" : second)) {
+                if (teacherId.isBlank()) continue;
+                teacher(teacherId);
+                if (!used.add(teacherId)) throw ApiException.conflict("Một giáo viên đang được xếp cho nhiều phòng trong cùng ca thi");
+                String busy = teacherBusyReason(schedule, period, teacherId, true);
+                if (busy != null) throw ApiException.conflict(busy);
+            }
+        }
+    }
+
+    private String sha256(String source) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(source.getBytes(StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(digest);
+        } catch (java.security.NoSuchAlgorithmException exception) {
+            throw new IllegalStateException(exception);
+        }
+    }
+
+    private record OrganizationRoomDraft(String roomId, String roomCode, int physicalCapacity,
+                                         int effectiveCapacity, String proctorOneId, String proctorOneName,
+                                         String proctorTwoId, String proctorTwoName, int candidateCount) {
+        OrganizationRoomDraft withProctors(UserDto first, UserDto second) {
+            return new OrganizationRoomDraft(roomId, roomCode, physicalCapacity, effectiveCapacity,
+                    first == null ? null : first.id(), first == null ? null : first.fullName(),
+                    second == null ? null : second.id(), second == null ? null : second.fullName(), candidateCount);
+        }
+        OrganizationRoomDraft withCandidateCount(int count) {
+            return new OrganizationRoomDraft(roomId, roomCode, physicalCapacity, effectiveCapacity,
+                    proctorOneId, proctorOneName, proctorTwoId, proctorTwoName, count);
+        }
+    }
+    private record OrganizationCandidateDraft(String candidateId, CandidateSeed seed, String candidateNo,
+                                              String roomId, String roomCode, int seatNo,
+                                              int deskNo, int seatPosition) {}
+
+    private OrganizationPlanView lockedOrganizationPlan(String planId) {
+        List<String> ids = jdbc.query("select id from exam_organization_plans where id=? for update",
+                (rs, row) -> rs.getString(1), planId);
+        if (ids.isEmpty()) throw ApiException.notFound("Phương án tổ chức ca thi");
+        return organizationPlan(planId);
+    }
+
+    private OrganizationPlanView organizationPlan(String planId) {
+        List<OrganizationPlanView> values = jdbc.query("select * from exam_organization_plans where id=?", (rs, row) -> {
+            int studentsPerDesk = rs.getInt("students_per_desk");
+            return new OrganizationPlanView(rs.getString("id"), rs.getString("schedule_id"), rs.getString("status"),
+                    rs.getInt("max_candidates_per_room"), studentsPerDesk, rs.getBoolean("include_second_proctor"),
+                    rs.getInt("candidate_count"), rs.getInt("room_count"), rs.getInt("effective_capacity"),
+                    rs.getInt("assigned_count"), rs.getInt("missing_assignment_count"), rs.getString("warning_summary"),
+                    instant(rs, "created_at"), instant(rs, "applied_at"), instant(rs, "undone_at"),
+                    organizationRoomRows(planId, "PROPOSED", studentsPerDesk), organizationCandidateRows(planId, "PROPOSED"));
+        }, planId);
+        if (values.isEmpty()) throw ApiException.notFound("Phương án tổ chức ca thi");
+        return values.get(0);
+    }
+
+    private List<OrganizationPlanRoom> organizationRoomRows(String planId, String rowType, int studentsPerDesk) {
+        return jdbc.query("""
+                select * from exam_organization_plan_rooms
+                where plan_id=? and row_type=? order by room_code
+                """, (rs, row) -> {
+            int effective = rs.getInt("effective_capacity");
+            int candidateCount = rs.getInt("candidate_count");
+            String first = rs.getString("proctor_one_id");
+            String second = rs.getString("proctor_two_id");
+            return new OrganizationPlanRoom(rs.getString("room_id"), rs.getString("room_code"),
+                    rs.getInt("physical_capacity"), effective,
+                    (candidateCount + studentsPerDesk - 1) / studentsPerDesk,
+                    first, rs.getString("proctor_one_name"), second, rs.getString("proctor_two_name"),
+                    candidateCount, first != null && !first.isBlank());
+        }, planId, rowType);
+    }
+
+    private List<OrganizationPlanCandidate> organizationCandidateRows(String planId, String rowType) {
+        return jdbc.query("""
+                select * from exam_organization_plan_candidates
+                where plan_id=? and row_type=? order by candidate_no
+                """, (rs, row) -> new OrganizationPlanCandidate(rs.getString("student_id"),
+                rs.getString("student_name"), rs.getString("student_code"), rs.getString("class_id"),
+                rs.getString("class_code"), rs.getString("candidate_no"), rs.getString("room_id"),
+                rs.getString("room_code"), rs.getInt("seat_no"), rs.getInt("desk_no"),
+                rs.getInt("seat_position")), planId, rowType);
+    }
+
+    private void snapshotCurrentOrganization(String planId, String scheduleId,
+                                             Map<String, com.sse.app.academic.structure.Room> physicalByCode) {
+        Map<String, Integer> counts = candidates.findByScheduleId(scheduleId).stream().collect(
+                java.util.stream.Collectors.groupingBy(ExamCandidate::getExamRoomId,
+                        java.util.stream.Collectors.collectingAndThen(java.util.stream.Collectors.counting(), Long::intValue)));
+        for (ExamRoom room : rooms.findByScheduleId(scheduleId)) {
+            com.sse.app.academic.structure.Room physical = physicalByCode.get(room.getRoomCode().toUpperCase());
+            insertOrganizationRoom(planId, "PREVIOUS", new OrganizationRoomDraft(room.getId(), room.getRoomCode(),
+                    physical == null || physical.getCapacity() == null ? room.getCapacity() : physical.getCapacity(),
+                    room.getCapacity(), room.getProctorOneId(), room.getProctorOneName(), room.getProctorTwoId(),
+                    room.getProctorTwoName(), counts.getOrDefault(room.getId(), 0)));
+        }
+        for (ExamCandidate candidate : candidates.findByScheduleId(scheduleId)) {
+            int deskNo = candidate.getDeskNo() == null ? Math.max(1, candidate.getSeatNo()) : candidate.getDeskNo();
+            int position = candidate.getSeatPosition() == null ? 1 : candidate.getSeatPosition();
+            jdbc.update("""
+                    insert into exam_organization_plan_candidates
+                    (id,plan_id,row_type,candidate_id,student_id,student_name,student_code,class_id,class_code,
+                     candidate_no,room_id,room_code,seat_no,desk_no,seat_position)
+                    values (?,?, 'PREVIOUS',?,?,?,?,?,?,?,?,?,?,?,?)
+                    """, Ids.gen("eopc"), planId, candidate.getId(), candidate.getStudentId(), candidate.getStudentName(),
+                    candidate.getStudentCode(), candidate.getClassId(), candidate.getClassCode(), candidate.getCandidateNo(),
+                    candidate.getExamRoomId(), rooms.findById(candidate.getExamRoomId()).map(ExamRoom::getRoomCode).orElse(""),
+                    candidate.getSeatNo(), deskNo, position);
+        }
+    }
+
+    private void insertOrganizationRoom(String planId, String rowType, OrganizationRoomDraft room) {
+        jdbc.update("""
+                insert into exam_organization_plan_rooms
+                (id,plan_id,row_type,room_id,room_code,physical_capacity,effective_capacity,proctor_one_id,
+                 proctor_one_name,proctor_two_id,proctor_two_name,candidate_count)
+                values (?,?,?,?,?,?,?,?,?,?,?,?)
+                """, Ids.gen("eopr"), planId, rowType, room.roomId(), room.roomCode(), room.physicalCapacity(),
+                room.effectiveCapacity(), room.proctorOneId(), room.proctorOneName(), room.proctorTwoId(),
+                room.proctorTwoName(), room.candidateCount());
+    }
+
+    private void insertOrganizationCandidate(String planId, String rowType, OrganizationCandidateDraft candidate) {
+        jdbc.update("""
+                insert into exam_organization_plan_candidates
+                (id,plan_id,row_type,candidate_id,student_id,student_name,student_code,class_id,class_code,
+                 candidate_no,room_id,room_code,seat_no,desk_no,seat_position)
+                values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """, Ids.gen("eopc"), planId, rowType, candidate.candidateId(), candidate.seed().studentId(),
+                candidate.seed().studentName(), candidate.seed().studentCode(), candidate.seed().classId(),
+                candidate.seed().classCode(), candidate.candidateNo(), candidate.roomId(), candidate.roomCode(),
+                candidate.seatNo(), candidate.deskNo(), candidate.seatPosition());
+    }
+
+    private void validateOrganizationProposal(ExamSchedule schedule, ExamPeriod period,
+                                              List<OrganizationPlanRoom> plannedRooms,
+                                              List<OrganizationPlanCandidate> plannedCandidates,
+                                              boolean includeSecond, int studentsPerDesk) {
+        if (plannedRooms.isEmpty()) throw ApiException.conflict("Phương án chưa có phòng thi");
+        Map<String, ExamRoomAvailability> availability = roomAvailability(schedule.getId()).stream()
+                .collect(java.util.stream.Collectors.toMap(ExamRoomAvailability::roomCode, item -> item));
+        Set<String> teachers = new HashSet<>();
+        Set<String> roomIds = new HashSet<>();
+        for (OrganizationPlanRoom room : plannedRooms) {
+            ExamRoomAvailability physical = availability.get(room.roomCode());
+            if (physical == null || !physical.available()) throw ApiException.conflict("Phòng " + room.roomCode() + " không còn khả dụng");
+            if (room.effectiveCapacity() < 1 || room.effectiveCapacity() > room.physicalCapacity())
+                throw ApiException.conflict("Sức chứa phòng " + room.roomCode() + " không hợp lệ");
+            if (!roomIds.add(room.roomId())) throw ApiException.conflict("Phòng thi bị trùng trong phương án");
+            if (room.proctorOneId() == null || (includeSecond && room.proctorTwoId() == null))
+                throw ApiException.conflict("Phòng " + room.roomCode() + " chưa đủ giám thị");
+            for (String teacherId : Arrays.asList(room.proctorOneId(), room.proctorTwoId())) {
+                if (teacherId == null || teacherId.isBlank()) continue;
+                teacher(teacherId);
+                if (!teachers.add(teacherId)) throw ApiException.conflict("Một giáo viên đang được xếp cho nhiều phòng");
+                String busy = teacherBusyReason(schedule, period, teacherId, true);
+                if (busy != null) throw ApiException.conflict(busy);
+            }
+        }
+        List<CandidateSeed> expected = expectedCandidates(schedule);
+        Set<String> expectedStudents = expected.stream().map(CandidateSeed::studentId).collect(java.util.stream.Collectors.toSet());
+        Set<String> students = new HashSet<>(); Set<String> numbers = new HashSet<>(); Set<String> seats = new HashSet<>();
+        Map<String, Integer> counts = new HashMap<>();
+        for (OrganizationPlanCandidate candidate : plannedCandidates) {
+            if (!expectedStudents.contains(candidate.studentId()) || !students.add(candidate.studentId()))
+                throw ApiException.conflict("Danh sách thí sinh không khớp lớp dự thi");
+            if (!candidate.candidateNo().matches("\\d{6}") || !numbers.add(candidate.candidateNo()))
+                throw ApiException.conflict("Số báo danh phải gồm 6 chữ số và không được trùng");
+            if (!roomIds.contains(candidate.roomId()) || !seats.add(candidate.roomId() + "|" + candidate.seatNo()))
+                throw ApiException.conflict("Số ghế hoặc phòng thi của thí sinh không hợp lệ");
+            if (candidate.deskNo() != ((candidate.seatNo() - 1) / studentsPerDesk) + 1
+                    || candidate.seatPosition() != ((candidate.seatNo() - 1) % studentsPerDesk) + 1)
+                throw ApiException.conflict("Số bàn hoặc vị trí ngồi không đúng cấu hình");
+            counts.merge(candidate.roomId(), 1, Integer::sum);
+        }
+        if (students.size() != expectedStudents.size()) throw ApiException.conflict("Phương án chưa xếp đủ thí sinh");
+        plannedRooms.forEach(room -> {
+            if (counts.getOrDefault(room.roomId(), 0) > room.effectiveCapacity())
+                throw ApiException.conflict("Phòng " + room.roomCode() + " vượt sức chứa cấu hình");
+        });
+    }
+
+    private void replaceOrganizationState(ExamSchedule schedule, List<OrganizationPlanRoom> plannedRooms,
+                                          List<OrganizationPlanCandidate> plannedCandidates) {
+        candidates.deleteByScheduleId(schedule.getId()); candidates.flush();
+        List<ExamRoom> currentRooms = rooms.findByScheduleId(schedule.getId());
+        currentRooms.forEach(this::removeProctorNotifications);
+        rooms.deleteAll(currentRooms); rooms.flush();
+        List<ExamRoom> replacements = plannedRooms.stream().map(room -> ExamRoom.builder().id(room.roomId())
+                .scheduleId(schedule.getId()).roomCode(room.roomCode()).capacity(room.effectiveCapacity())
+                .proctorOneId(room.proctorOneId()).proctorOneName(room.proctorOneName())
+                .proctorTwoId(room.proctorTwoId()).proctorTwoName(room.proctorTwoName()).build()).toList();
+        rooms.saveAll(replacements); rooms.flush();
+        String periodId = schedule.getExamPeriodId();
+        candidates.saveAll(plannedCandidates.stream().map(item -> ExamCandidate.builder().id(Ids.gen("ec"))
+                .examPeriodId(periodId).scheduleId(schedule.getId()).examRoomId(item.roomId())
+                .studentId(item.studentId()).studentName(item.studentName()).studentCode(item.studentCode())
+                .classId(item.classId()).classCode(item.classCode()).candidateNo(item.candidateNo())
+                .seatNo(item.seatNo()).deskNo(item.deskNo()).seatPosition(item.seatPosition()).build()).toList());
+    }
+
+    private boolean matchesOrganizationState(String scheduleId, List<OrganizationPlanRoom> plannedRooms,
+                                             List<OrganizationPlanCandidate> plannedCandidates) {
+        Set<String> expectedRooms = plannedRooms.stream().map(room -> room.roomId() + "|" + room.roomCode() + "|"
+                + room.effectiveCapacity() + "|" + Objects.toString(room.proctorOneId(), "") + "|"
+                + Objects.toString(room.proctorTwoId(), "")).collect(java.util.stream.Collectors.toSet());
+        Set<String> currentRooms = rooms.findByScheduleId(scheduleId).stream().map(room -> room.getId() + "|"
+                + room.getRoomCode() + "|" + room.getCapacity() + "|" + Objects.toString(room.getProctorOneId(), "")
+                + "|" + Objects.toString(room.getProctorTwoId(), "")).collect(java.util.stream.Collectors.toSet());
+        Set<String> expectedCandidates = plannedCandidates.stream().map(candidate -> candidate.studentId() + "|"
+                + candidate.candidateNo() + "|" + candidate.roomId() + "|" + candidate.seatNo() + "|"
+                + candidate.deskNo() + "|" + candidate.seatPosition()).collect(java.util.stream.Collectors.toSet());
+        Set<String> currentCandidates = candidates.findByScheduleId(scheduleId).stream().map(candidate -> candidate.getStudentId()
+                + "|" + candidate.getCandidateNo() + "|" + candidate.getExamRoomId() + "|" + candidate.getSeatNo()
+                + "|" + candidate.getDeskNo() + "|" + candidate.getSeatPosition()).collect(java.util.stream.Collectors.toSet());
+        return expectedRooms.equals(currentRooms) && expectedCandidates.equals(currentCandidates);
+    }
+
+    private String organizationSourceFingerprint(ExamSchedule schedule) {
+        StringBuilder source = new StringBuilder(schedule.getId()).append('|').append(schedule.getExamDate())
+                .append('|').append(schedule.getStartTime()).append('|').append(schedule.getDurationMinutes());
+        Optional.ofNullable(schedule.getClassIds()).orElse(Set.of()).stream().sorted().forEach(id -> source.append("|CLASS:").append(id));
+        expectedCandidates(schedule).stream().sorted(Comparator.comparing(CandidateSeed::studentId))
+                .forEach(seed -> source.append("|STUDENT:").append(seed.studentId()).append(':').append(seed.classId()));
+        structure.listRooms().stream().sorted(Comparator.comparing(com.sse.app.academic.structure.Room::getCode))
+                .forEach(room -> source.append("|PHYSICAL:").append(room.getCode()).append(':')
+                        .append(room.getCapacity()).append(':').append(room.getStatus()));
+        rooms.findByScheduleId(schedule.getId()).stream().sorted(Comparator.comparing(ExamRoom::getId))
+                .forEach(room -> source.append("|ROOM:").append(room.getId()).append(':').append(room.getRoomCode())
+                        .append(':').append(room.getCapacity()).append(':').append(room.getProctorOneId())
+                        .append(':').append(room.getProctorTwoId()));
+        candidates.findByScheduleId(schedule.getId()).stream().sorted(Comparator.comparing(ExamCandidate::getStudentId))
+                .forEach(candidate -> source.append("|CANDIDATE:").append(candidate.getStudentId()).append(':')
+                        .append(candidate.getCandidateNo()).append(':').append(candidate.getExamRoomId()).append(':')
+                        .append(candidate.getSeatNo()));
+        rooms.findAll().stream().sorted(Comparator.comparing(ExamRoom::getId)).forEach(room -> {
+            ExamSchedule other = schedules.findById(room.getScheduleId()).orElse(null);
+            if (other != null && !other.getId().equals(schedule.getId()) && overlaps(schedule, other))
+                source.append("|CONFLICT:").append(room.getRoomCode()).append(':').append(room.getProctorOneId())
+                        .append(':').append(room.getProctorTwoId());
+        });
+        return sha256(source.toString());
+    }
+
+    private String organizationPlanFingerprint(String planId) {
+        List<String> values = jdbc.query("select source_fingerprint from exam_organization_plans where id=?",
+                (rs, row) -> rs.getString(1), planId);
+        if (values.isEmpty()) throw ApiException.notFound("Phương án tổ chức ca thi");
+        return values.get(0);
+    }
+
+    private Instant instant(ResultSet rs, String column) throws SQLException {
+        Timestamp value = rs.getTimestamp(column);
+        return value == null ? null : value.toInstant();
+    }
+
+    private record CandidateSeed(String studentId, String studentName, String studentCode,
+                                 String classId, String classCode) {}
+    private record PlannedCandidate(CandidateSeed seed, String candidateNo, ExamRoom room, Integer seatNo) {}
+
+    private List<CandidateSeed> expectedCandidates(ExamSchedule schedule) {
+        if (schedule.getClassIds() == null) return List.of();
+        List<CandidateSeed> expected = new ArrayList<>();
+        for (String classId : schedule.getClassIds().stream()
+                .sorted(Comparator.comparing(classId -> structure.getClass(classId).getCode())).toList()) {
+            SchoolClass schoolClass = structure.getClass(classId);
+            users.list("STUDENT", null, classId).stream()
+                    .sorted(Comparator.comparing(UserDto::studentCode, Comparator.nullsLast(String::compareTo))
+                            .thenComparing(UserDto::fullName))
+                    .forEach(student -> expected.add(new CandidateSeed(student.id(), student.fullName(),
+                            student.studentCode(), classId, schoolClass.getCode())));
+        }
+        return expected.stream().collect(java.util.stream.Collectors.toMap(CandidateSeed::studentId,
+                seed -> seed, (first, ignored) -> first, LinkedHashMap::new)).values().stream().toList();
+    }
+
+    private ExamRoom chooseRoomForClass(String classId, List<PlannedCandidate> proposed,
+                                        List<ExamRoom> selectedRooms, Map<String, Integer> remaining) {
+        Optional<ExamRoom> current = proposed.stream()
+                .filter(item -> item.seed().classId().equals(classId) && item.room() != null
+                        && remaining.getOrDefault(item.room().getId(), 0) > 0)
+                .map(PlannedCandidate::room).findFirst();
+        if (current.isPresent()) return current.get();
+        return selectedRooms.stream().filter(room -> remaining.getOrDefault(room.getId(), 0) > 0)
+                .max(Comparator.<ExamRoom>comparingInt(room -> remaining.get(room.getId()))
+                        .thenComparing(ExamRoom::getRoomCode, Comparator.reverseOrder()))
+                .orElse(null);
+    }
+
+    private ExamSeatingPlanItem planItem(String planId, String rowType, ExamCandidate candidate) {
+        return ExamSeatingPlanItem.builder().id(Ids.gen("espi")).planId(planId).rowType(rowType)
+                .studentId(candidate.getStudentId()).studentName(candidate.getStudentName())
+                .studentCode(candidate.getStudentCode()).classId(candidate.getClassId())
+                .classCode(candidate.getClassCode()).candidateNo(candidate.getCandidateNo())
+                .examRoomId(candidate.getExamRoomId())
+                .roomCode(rooms.findById(candidate.getExamRoomId()).map(ExamRoom::getRoomCode).orElse(null))
+                .seatNo(candidate.getSeatNo()).build();
+    }
+
+    private ExamSeatingPlanItem planItem(String planId, PlannedCandidate candidate) {
+        return ExamSeatingPlanItem.builder().id(Ids.gen("espi")).planId(planId).rowType("PROPOSED")
+                .studentId(candidate.seed().studentId()).studentName(candidate.seed().studentName())
+                .studentCode(candidate.seed().studentCode()).classId(candidate.seed().classId())
+                .classCode(candidate.seed().classCode()).candidateNo(candidate.candidateNo())
+                .examRoomId(candidate.room() == null ? null : candidate.room().getId())
+                .roomCode(candidate.room() == null ? null : candidate.room().getRoomCode())
+                .seatNo(candidate.seatNo()).build();
+    }
+
+    private ExamCandidate candidateFromPlan(ExamSeatingPlan plan, ExamSeatingPlanItem item) {
+        return ExamCandidate.builder().id(Ids.gen("ec")).examPeriodId(plan.getExamPeriodId())
+                .scheduleId(plan.getScheduleId()).examRoomId(item.getExamRoomId())
+                .studentId(item.getStudentId()).studentName(item.getStudentName()).studentCode(item.getStudentCode())
+                .classId(item.getClassId()).classCode(item.getClassCode()).candidateNo(item.getCandidateNo())
+                .seatNo(item.getSeatNo() == null ? 0 : item.getSeatNo()).build();
+    }
+
+    private List<ExamRoom> selectedRooms(ExamSeatingPlan plan, ExamSchedule schedule) {
+        Set<String> ids = Arrays.stream(plan.getSelectedRoomIds().split(","))
+                .filter(value -> !value.isBlank()).collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        List<ExamRoom> selected = rooms.findByScheduleId(schedule.getId()).stream()
+                .filter(room -> ids.contains(room.getId())).sorted(Comparator.comparing(ExamRoom::getRoomCode)).toList();
+        if (selected.size() != ids.size()) throw ApiException.conflict("Danh sách phòng đã thay đổi; hãy tạo lại bản xem trước");
+        return selected;
+    }
+
+    private SeatingPlanView seatingPlanView(ExamSeatingPlan plan) {
+        List<ExamSeatingPlanItem> proposed = seatingPlanItems.findByPlanIdAndRowType(plan.getId(), "PROPOSED").stream()
+                .sorted(Comparator.comparing(ExamSeatingPlanItem::getClassCode)
+                        .thenComparing(ExamSeatingPlanItem::getCandidateNo)).toList();
+        Map<String, ExamRoom> existingRooms = rooms.findByScheduleId(plan.getScheduleId()).stream()
+                .collect(java.util.stream.Collectors.toMap(ExamRoom::getId, room -> room));
+        List<SeatingPlanRoom> roomViews = Arrays.stream(plan.getSelectedRoomIds().split(","))
+                .map(existingRooms::get).filter(Objects::nonNull).sorted(Comparator.comparing(ExamRoom::getRoomCode))
+                .map(room -> {
+                    List<ExamSeatingPlanItem> assigned = proposed.stream()
+                            .filter(item -> room.getId().equals(item.getExamRoomId())).toList();
+                    List<String> classCodes = assigned.stream().map(ExamSeatingPlanItem::getClassCode).distinct().sorted().toList();
+                    return new SeatingPlanRoom(room.getId(), room.getRoomCode(), room.getCapacity(), assigned.size(),
+                            Math.max(0, room.getCapacity() - assigned.size()), hasMainProctor(room), classCodes);
+                }).toList();
+        List<SeatingPlanClass> classViews = proposed.stream().collect(java.util.stream.Collectors.groupingBy(
+                        ExamSeatingPlanItem::getClassId, LinkedHashMap::new, java.util.stream.Collectors.toList()))
+                .values().stream().map(items -> {
+                    List<String> roomCodes = items.stream().map(ExamSeatingPlanItem::getRoomCode)
+                            .filter(Objects::nonNull).distinct().sorted().toList();
+                    int assigned = (int) items.stream().filter(item -> item.getExamRoomId() != null).count();
+                    return new SeatingPlanClass(items.get(0).getClassId(), items.get(0).getClassCode(), items.size(),
+                            assigned, roomCodes.size(), roomCodes);
+                }).toList();
+        List<SeatingPlanCandidate> candidateViews = proposed.stream().map(item -> new SeatingPlanCandidate(
+                item.getStudentId(), item.getStudentName(), item.getStudentCode(), item.getClassId(), item.getClassCode(),
+                item.getCandidateNo(), item.getExamRoomId(), item.getRoomCode(), item.getSeatNo(), item.getExamRoomId() != null)).toList();
+        return new SeatingPlanView(plan.getId(), plan.getScheduleId(), plan.getStatus(), plan.getCandidateCount(),
+                plan.getTotalCapacity(), plan.getAssignedCount(), plan.getUnassignedCount(), plan.getWarningSummary(),
+                plan.getCreatedAt(), plan.getAppliedAt(), plan.getUndoneAt(), roomViews, classViews, candidateViews);
+    }
+
+    private String scheduleSourceFingerprint(ExamSchedule schedule, List<ExamRoom> selectedRooms,
+                                             List<CandidateSeed> expected, List<ExamCandidate> current) {
+        StringBuilder source = new StringBuilder(schedule.getId()).append('|').append(schedule.getExamDate())
+                .append('|').append(schedule.getStartTime()).append('|').append(schedule.getDurationMinutes());
+        selectedRooms.stream().sorted(Comparator.comparing(ExamRoom::getId)).forEach(room -> source.append("|R:")
+                .append(room.getId()).append(':').append(room.getCapacity()).append(':')
+                .append(Objects.toString(room.getProctorOneId(), "")).append(':')
+                .append(Objects.toString(room.getProctorTwoId(), "")));
+        expected.stream().sorted(Comparator.comparing(CandidateSeed::studentId)).forEach(seed -> source.append("|S:")
+                .append(seed.studentId()).append(':').append(seed.classId()));
+        current.stream().sorted(Comparator.comparing(ExamCandidate::getStudentId)).forEach(candidate -> source.append("|C:")
+                .append(candidate.getStudentId()).append(':').append(candidate.getExamRoomId()).append(':')
+                .append(candidate.getCandidateNo()).append(':').append(candidate.getSeatNo()));
+        return sha256(source.toString());
+    }
+
+    private boolean matchesCurrentCandidates(List<ExamSeatingPlanItem> planned, List<ExamCandidate> current) {
+        Set<String> plannedRows = planned.stream().map(item -> item.getStudentId() + "|" + item.getExamRoomId()
+                + "|" + item.getCandidateNo() + "|" + item.getSeatNo()).collect(java.util.stream.Collectors.toSet());
+        Set<String> currentRows = current.stream().map(item -> item.getStudentId() + "|" + item.getExamRoomId()
+                + "|" + item.getCandidateNo() + "|" + item.getSeatNo()).collect(java.util.stream.Collectors.toSet());
+        return planned.size() == current.size() && plannedRows.equals(currentRows);
+    }
+
+    private boolean hasMainProctor(ExamRoom room) {
+        return room.getProctorOneId() != null && !room.getProctorOneId().isBlank();
     }
 
     private void invalidatePublishedSchedule(ExamPeriod period) {

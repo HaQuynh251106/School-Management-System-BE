@@ -16,6 +16,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 
 /** A2: Quản trị cơ cấu đào tạo. Là điểm truy cập chéo-domain cho academic.structure. */
 @Service
@@ -605,11 +606,16 @@ public class StructureService {
         String code = normalizeCode(r.code());
         boolean supportsMorning = r.supportsMorning() == null || r.supportsMorning();
         boolean supportsAfternoon = r.supportsAfternoon() == null || r.supportsAfternoon();
+        String roomType = normalizeRoomType(r.roomType());
         validateRoomShifts(supportsMorning, supportsAfternoon);
         if (rooms.findByCode(code).isPresent()) throw ApiException.conflict("Mã phòng đã tồn tại");
         return rooms.save(Room.builder().id(orGen(r.id(), "rm")).code(code)
                 .name(defaultName(r.name(), "Phòng " + code)).capacity(r.capacity())
-                .supportsMorning(supportsMorning).supportsAfternoon(supportsAfternoon).build());
+                .supportsMorning(supportsMorning).supportsAfternoon(supportsAfternoon)
+                .roomType(roomType).equipmentTags(trimToNull(r.equipmentTags()))
+                .status(normalizeRoomStatus(r.status()))
+                .homeRoomEligible(r.homeRoomEligible() == null ? "GENERAL".equals(roomType) : r.homeRoomEligible())
+                .notes(trimToNull(r.notes())).build());
     }
 
     @Transactional
@@ -618,6 +624,8 @@ public class StructureService {
         String code = normalizeCode(r.code());
         boolean supportsMorning = r.supportsMorning() == null || r.supportsMorning();
         boolean supportsAfternoon = r.supportsAfternoon() == null || r.supportsAfternoon();
+        String roomType = normalizeRoomType(r.roomType());
+        String status = normalizeRoomStatus(r.status());
         validateRoomShifts(supportsMorning, supportsAfternoon);
         List<SchoolClass> assignedClasses = classes.findByRoomId(id);
         if (!supportsMorning && assignedClasses.stream().anyMatch(item -> "MORNING".equals(item.getStudyShift()))) {
@@ -636,6 +644,11 @@ public class StructureService {
         room.setCapacity(r.capacity());
         room.setSupportsMorning(supportsMorning);
         room.setSupportsAfternoon(supportsAfternoon);
+        room.setRoomType(roomType);
+        room.setEquipmentTags(trimToNull(r.equipmentTags()));
+        room.setStatus(status);
+        room.setHomeRoomEligible(r.homeRoomEligible() == null ? room.isHomeRoomEligible() : r.homeRoomEligible());
+        room.setNotes(trimToNull(r.notes()));
         Room saved = rooms.save(room);
         assignedClasses.forEach(item -> item.setRoomCode(saved.getCode()));
         classes.saveAll(assignedClasses);
@@ -656,6 +669,9 @@ public class StructureService {
         Room room = rooms.findByCode(normalizeCode(roomCode))
                 .orElseThrow(() -> ApiException.badRequest("Phòng học không tồn tại"));
         SchoolClass schoolClass = getClass(classId);
+        if (!"ACTIVE".equalsIgnoreCase(room.getStatus())) {
+            throw ApiException.badRequest("Phòng " + room.getCode() + " hiện không sẵn sàng sử dụng");
+        }
         validateRoomSupportsShift(room, schoolClass.getStudyShift());
         classes.findByAcademicYearIdAndStudyShiftAndRoomId(
                         schoolClass.getAcademicYearId(), schoolClass.getStudyShift(), room.getId())
@@ -674,6 +690,13 @@ public class StructureService {
                                         String studyShift, String roomId, int classCapacity) {
         if (roomId == null || roomId.isBlank()) return null;
         Room room = rooms.findById(roomId).orElseThrow(() -> ApiException.notFound("Phòng học"));
+        if (!"ACTIVE".equalsIgnoreCase(room.getStatus())) {
+            throw ApiException.badRequest("Phòng " + room.getCode() + " hiện không sẵn sàng sử dụng");
+        }
+        if (!room.isHomeRoomEligible() || !"GENERAL".equalsIgnoreCase(room.getRoomType())) {
+            throw ApiException.badRequest("Phòng " + room.getCode()
+                    + " là phòng chức năng, không thể dùng làm phòng chủ nhiệm cố định");
+        }
         validateRoomSupportsShift(room, studyShift);
         classes.findByAcademicYearIdAndStudyShiftAndRoomId(academicYearId, studyShift, roomId)
                 .filter(item -> currentClassId == null || !item.getId().equals(currentClassId))
@@ -864,6 +887,22 @@ public class StructureService {
         if (gradeLevel == null) return 0;
         try { return Integer.parseInt(gradeLevel.replaceAll("\\D", "")); }
         catch (NumberFormatException ignored) { return 0; }
+    }
+
+    private String normalizeRoomType(String value) {
+        String normalized = value == null || value.isBlank() ? "GENERAL" : value.trim().toUpperCase(Locale.ROOT);
+        if (!Set.of("GENERAL", "LAB", "COMPUTER", "LANGUAGE", "SPORT", "ART", "LIBRARY", "MULTIPURPOSE", "OTHER").contains(normalized)) {
+            throw ApiException.badRequest("Loại phòng không hợp lệ");
+        }
+        return normalized;
+    }
+
+    private String normalizeRoomStatus(String value) {
+        String normalized = value == null || value.isBlank() ? "ACTIVE" : value.trim().toUpperCase(Locale.ROOT);
+        if (!Set.of("ACTIVE", "MAINTENANCE", "INACTIVE").contains(normalized)) {
+            throw ApiException.badRequest("Trạng thái phòng không hợp lệ");
+        }
+        return normalized;
     }
 
     private LocalDate today() {

@@ -7,6 +7,7 @@ import com.sse.app.academic.structure.Semester;
 import com.sse.app.academic.structure.StructureService;
 import com.sse.app.academic.leave.LeaveRequest;
 import com.sse.app.academic.leave.LeaveRequestService;
+import com.sse.app.academic.exam.ExamService;
 import com.sse.app.common.Ids;
 import com.sse.app.common.ApiException;
 import com.sse.app.identity.User;
@@ -42,12 +43,13 @@ public class AttendanceService {
     private final StructureService structure;
     private final AttendanceSessionAccessRepository sessionAccesses;
     private final LeaveRequestService leaveRequests;
+    private final ExamService exams;
     private final Clock clock;
 
     public AttendanceService(AttendanceRepository records, TimetableService timetable,
                              UserService users, NotificationService notifications,
                              StructureService structure, AttendanceSessionAccessRepository sessionAccesses,
-                             LeaveRequestService leaveRequests, Clock clock) {
+                             LeaveRequestService leaveRequests, ExamService exams, Clock clock) {
         this.records = records;
         this.timetable = timetable;
         this.users = users;
@@ -55,6 +57,7 @@ public class AttendanceService {
         this.structure = structure;
         this.sessionAccesses = sessionAccesses;
         this.leaveRequests = leaveRequests;
+        this.exams = exams;
         this.clock = clock;
     }
 
@@ -90,10 +93,17 @@ public class AttendanceService {
     }
 
     public AttendanceDayStatus dayStatus(LocalDate date) {
-        return notifications.schoolHolidayOn(date)
-                .map(holiday -> new AttendanceDayStatus(false, holiday.getId(), holiday.getTitle(), holiday.getBody(),
-                        holiday.getHolidayStartDate(), holiday.getHolidayEndDate()))
-                .orElseGet(() -> new AttendanceDayStatus(true, null, null, null, null, null));
+        Announcement holiday = notifications.schoolHolidayOn(date).orElse(null);
+        if (holiday != null) {
+            return new AttendanceDayStatus(false, holiday.getId(), holiday.getTitle(), holiday.getBody(),
+                    holiday.getHolidayStartDate(), holiday.getHolidayEndDate());
+        }
+        if (exams.isPublishedExamDay(date)) {
+            return new AttendanceDayStatus(false, null, "Ngày tổ chức thi",
+                    "Không học theo thời khóa biểu thường; khối không thi được nghỉ, học sinh dự thi ra về sau ca cuối.",
+                    date, date);
+        }
+        return new AttendanceDayStatus(true, null, null, null, null, null);
     }
 
     public AttendanceSessionStatus sessionStatus(String slotId, LocalDate date) {
@@ -139,7 +149,7 @@ public class AttendanceService {
     public synchronized int sendDueReminders(ZonedDateTime now) {
         ZonedDateTime schoolNow = now.withZoneSameInstant(SCHOOL_ZONE);
         LocalDate date = schoolNow.toLocalDate();
-        if (notifications.schoolHolidayOn(date).isPresent()) return 0;
+        if (notifications.schoolHolidayOn(date).isPresent() || exams.isPublishedExamDay(date)) return 0;
         String day = date.getDayOfWeek().name().substring(0, 3);
         int sent = 0;
         for (TimetableSlot slot : timetable.list(null, null, null, day)) {
@@ -257,6 +267,11 @@ public class AttendanceService {
         Announcement holiday = notifications.schoolHolidayOn(date).orElse(null);
         if (holiday != null) {
             return status("HOLIDAY", false, false, "Không cần điểm danh ngày nghỉ: " + holiday.getTitle(),
+                    slot, date, null);
+        }
+        if (exams.isPublishedExamDay(date)) {
+            return status("EXAM_DAY", false, false,
+                    "Không cần điểm danh: nhà trường tổ chức thi, lịch học thường được tạm dừng",
                     slot, date, null);
         }
         if (!isScheduledOccurrence(slot, date)) {

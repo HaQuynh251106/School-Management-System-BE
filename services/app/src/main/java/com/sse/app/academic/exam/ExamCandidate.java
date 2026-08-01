@@ -20,4 +20,6 @@ public class ExamCandidate {
     @Column(nullable = false) private String classCode;
     @Column(nullable = false) private String candidateNo;
     @Column(nullable = false) private int seatNo;
+    private Integer deskNo;
+    private Integer seatPosition;
 }

@@ -116,7 +116,7 @@ class ExamGradingWorkflowIntegrationTest {
         String roomCode = "EXAM-" + suffix.toUpperCase();
         structure.createRoom(new CreateRoomRequest(
                 "rm-grading-" + suffix, roomCode, "Phòng kiểm thử " + suffix,
-                45, true, true));
+                45, true, true, "GENERAL", null, "ACTIVE", true, null));
         exams.createPeriod(new SavePeriodRequest(
                 periodId,
                 "EXAM-GRADING-" + suffix.toUpperCase(),

@@ -81,19 +81,26 @@ public class YearRolloverService {
             throw ApiException.badRequest("Năm học mới phải bắt đầu sau ngày kết thúc năm học hiện tại");
         }
 
-        AcademicYear nextYear = structure.createYear(new CreateAcademicYearRequest(
-                null, request.nextYearCode(), request.nextYearName(), request.startDate(), request.endDate(), "PLANNED"),
-                false);
-        List<Semester> clonedSemesters = cloneSemesters(currentYear, nextYear);
+        AcademicYear nextYear = findPreparedNextYear(request).orElseGet(() -> structure.createYear(
+                new CreateAcademicYearRequest(null, request.nextYearCode(), request.nextYearName(),
+                        request.startDate(), request.endDate(), "PLANNED"), false));
+        List<Semester> clonedSemesters = ensureSemesters(currentYear, nextYear);
         boolean createIntake = request.createIntakeClasses() == null || request.createIntakeClasses();
         if (!createIntake && readiness.expectedRetained() > 0) {
             throw ApiException.badRequest("Có học sinh dự kiến lưu ban; cần tạo lớp đầu cấp/cùng khối để hệ thống xếp lớp an toàn");
         }
         List<RolloverClassPlan> classPlan = buildClassPlan(structure.listClasses(academicYearId, null), createIntake);
+        Set<String> existingClassCodes = new HashSet<>();
+        structure.listClasses(nextYear.getId(), null).forEach(item ->
+                existingClassCodes.add(item.getCode().trim().toUpperCase(Locale.ROOT)));
+        int createdClassCount = 0;
         for (RolloverClassPlan plan : classPlan) {
-            structure.createClass(new CreateClassRequest(null, plan.targetClassCode(),
-                    "Lớp " + plan.targetClassCode(), plan.targetGradeLevel(), nextYear.getId(), null,
-                    plan.studyShift(), plan.capacity(), null));
+            if (existingClassCodes.add(plan.targetClassCode().trim().toUpperCase(Locale.ROOT))) {
+                structure.createClass(new CreateClassRequest(null, plan.targetClassCode(),
+                        "Lớp " + plan.targetClassCode(), plan.targetGradeLevel(), nextYear.getId(), null,
+                        plan.studyShift(), plan.capacity(), null));
+                createdClassCount++;
+            }
         }
 
         List<StudentYearlySummary> finalized = yearEnd.finalizeYear(academicYearId, actorId);
@@ -108,7 +115,36 @@ public class YearRolloverService {
         int retained = (int) finalized.stream().filter(item -> "RETAINED".equals(item.getPromotionStatus())).count();
         int graduated = (int) finalized.stream().filter(item -> "GRADUATED".equals(item.getPromotionStatus())).count();
         return new RolloverResult(currentYear.getId(), nextYear.getId(), nextYear.getCode(),
-                clonedSemesters.size(), classPlan.size(), promoted, retained, graduated, activate, Instant.now());
+                clonedSemesters.size(), createdClassCount, promoted, retained, graduated, activate, Instant.now());
+    }
+
+    private Optional<AcademicYear> findPreparedNextYear(RolloverRequest request) {
+        Optional<AcademicYear> existing = structure.listYears().stream()
+                .filter(item -> item.getCode().equalsIgnoreCase(request.nextYearCode().trim()))
+                .findFirst();
+        if (existing.isEmpty()) return Optional.empty();
+        AcademicYear year = existing.get();
+        if (!"PLANNED".equals(year.getStatus())) {
+            throw ApiException.conflict("Năm học " + year.getCode() + " đã tồn tại nhưng không còn ở trạng thái dự kiến");
+        }
+        if (!Objects.equals(year.getStartDate(), request.startDate())
+                || !Objects.equals(year.getEndDate(), request.endDate())) {
+            throw ApiException.badRequest("Năm học " + year.getCode()
+                    + " đã được chuẩn bị với thời gian " + year.getStartDate() + " - " + year.getEndDate()
+                    + "; hãy dùng đúng thời gian đã cấu hình");
+        }
+        return existing;
+    }
+
+    private List<Semester> ensureSemesters(AcademicYear currentYear, AcademicYear nextYear) {
+        List<Semester> existing = structure.listSemesters(nextYear.getId());
+        if (!existing.isEmpty()) {
+            if (findSemester(existing, 1).isEmpty() || findSemester(existing, 2).isEmpty()) {
+                throw ApiException.badRequest("Năm học mới đã có cấu hình học kỳ chưa đầy đủ; cần đủ học kỳ I và II");
+            }
+            return existing;
+        }
+        return cloneSemesters(currentYear, nextYear);
     }
 
     private List<Semester> cloneSemesters(AcademicYear currentYear, AcademicYear nextYear) {

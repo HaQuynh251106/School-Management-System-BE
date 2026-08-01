@@ -1,6 +1,9 @@
 package com.sse.app.academic.timetable;
 
 import com.sse.app.academic.structure.SchoolClass;
+import com.sse.app.academic.structure.Room;
+import com.sse.app.academic.structure.SubjectRoomRequirement;
+import com.sse.app.academic.structure.SubjectRoomRequirementService;
 import com.sse.app.academic.structure.StructureService;
 import com.sse.app.academic.timetable.TimetableDtos.*;
 import com.sse.app.common.ApiException;
@@ -30,15 +33,18 @@ public class AutomaticTimetableService {
     private final TeachingAssignmentRepository assignments;
     private final TeacherLoadRegistrationRepository registrations;
     private final StructureService structure;
+    private final SubjectRoomRequirementService roomRequirements;
     private final TimetableService timetable;
 
     public AutomaticTimetableService(TimetableRepository slots, TeachingAssignmentRepository assignments,
                                      TeacherLoadRegistrationRepository registrations,
-                                     StructureService structure, TimetableService timetable) {
+                                     StructureService structure, SubjectRoomRequirementService roomRequirements,
+                                     TimetableService timetable) {
         this.slots = slots;
         this.assignments = assignments;
         this.registrations = registrations;
         this.structure = structure;
+        this.roomRequirements = roomRequirements;
         this.timetable = timetable;
     }
 
@@ -63,6 +69,10 @@ public class AutomaticTimetableService {
         List<AutoTimetableItem> result = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
         List<ScheduleNeed> needs = new ArrayList<>();
+        List<Room> activeRooms = structure.listRooms().stream()
+                .filter(room -> "ACTIVE".equalsIgnoreCase(room.getStatus())).toList();
+        Map<String, Room> roomsByCode = new HashMap<>();
+        activeRooms.forEach(room -> roomsByCode.put(room.getCode().toUpperCase(Locale.ROOT), room));
         for (TeachingAssignment assignment : work) {
             int already = (int) occupied.stream().filter(slot -> sameAssignment(slot, assignment)).count();
             int missing = Math.max(0, assignment.getWeeklyPeriods() - already);
@@ -76,7 +86,47 @@ public class AutomaticTimetableService {
                 for (int index = 0; index < missing; index++)
                     result.add(item(assignment, schoolClass, null, "UNSCHEDULED", message));
                 warnings.add(assignment.getClassCode() + " · " + assignment.getSubjectName() + ": " + message);
-            } else needs.add(new ScheduleNeed(assignment, schoolClass, load, missing));
+            } else {
+                List<SubjectRoomRequirement> rules = roomRequirements.rulesFor(assignment.getSubjectId());
+                SubjectRoomRequirement rule = rules.isEmpty() ? null : rules.get(0);
+                int functionalMissing = 0;
+                List<Room> functionalRooms = List.of();
+                if (rule != null && rule.getWeeklyPeriods() > 0) {
+                    int alreadyFunctional = (int) occupied.stream().filter(slot -> sameAssignment(slot, assignment))
+                            .map(TimetableSlot::getRoomCode).filter(Objects::nonNull)
+                            .map(code -> roomsByCode.get(code.toUpperCase(Locale.ROOT))).filter(Objects::nonNull)
+                            .filter(room -> roomMatches(room, rule, schoolClass)).count();
+                    functionalMissing = Math.min(missing, Math.max(0, rule.getWeeklyPeriods() - alreadyFunctional));
+                    functionalRooms = activeRooms.stream().filter(room -> roomMatches(room, rule, schoolClass))
+                            .sorted(Comparator.comparing(Room::getCode)).toList();
+                    if (functionalMissing > 0 && functionalRooms.isEmpty()) {
+                        String message = "Không có phòng " + roomTypeLabel(rule.getRoomType())
+                                + " phù hợp sức chứa, ca học và thiết bị yêu cầu";
+                        if (rule.isMandatory()) {
+                            for (int index = 0; index < functionalMissing; index++)
+                                result.add(item(assignment, schoolClass, null, null, "UNSCHEDULED", message));
+                            missing -= functionalMissing;
+                        } else message += "; hệ thống chuyển các tiết này về phòng chủ nhiệm";
+                        warnings.add(assignment.getClassCode() + " · " + assignment.getSubjectName() + ": " + message);
+                        functionalMissing = 0;
+                    }
+                }
+                if (functionalMissing > 0) {
+                    needs.add(new ScheduleNeed(assignment, schoolClass, load, functionalMissing,
+                            functionalRooms, "Phòng " + roomTypeLabel(rule.getRoomType())));
+                }
+                int regularMissing = missing - functionalMissing;
+                if (regularMissing > 0) {
+                    Room homeRoom = roomsByCode.get(schoolClass.getRoomCode().toUpperCase(Locale.ROOT));
+                    if (homeRoom == null) {
+                        String message = "Phòng chủ nhiệm chưa sẵn sàng sử dụng";
+                        for (int index = 0; index < regularMissing; index++)
+                            result.add(item(assignment, schoolClass, null, null, "UNSCHEDULED", message));
+                        warnings.add(assignment.getClassCode() + " · " + assignment.getSubjectName() + ": " + message);
+                    } else needs.add(new ScheduleNeed(assignment, schoolClass, load, regularMissing,
+                            List.of(homeRoom), "Phòng chủ nhiệm"));
+                }
+            }
         }
 
         int baseOccupiedSize = occupied.size();
@@ -182,7 +232,8 @@ public class AutomaticTimetableService {
         int lastIndex = need.scheduled.isEmpty() ? -1
                 : need.scheduled.stream().mapToInt(this::slotIndex).max().orElse(-1);
         return DAYS.stream().flatMap(day -> times.entrySet().stream()
-                        .map(entry -> new Candidate(day, entry.getKey(), entry.getValue()[0], entry.getValue()[1])))
+                        .flatMap(entry -> need.candidateRooms.stream().map(room -> new Candidate(
+                                day, entry.getKey(), entry.getValue()[0], entry.getValue()[1], room.getCode()))))
                 .filter(candidate -> slotIndex(candidate) > lastIndex)
                 .filter(candidate -> !unavailable.contains(candidate.day() + ":" + candidate.period()))
                 .filter(candidate -> noConflict(need.assignment, need.schoolClass, candidate, occupied))
@@ -202,7 +253,7 @@ public class AutomaticTimetableService {
                 .classId(assignment.getClassId()).classCode(assignment.getClassCode())
                 .studyShift(schoolClass.getStudyShift()).subjectId(assignment.getSubjectId())
                 .subjectName(assignment.getSubjectName()).teacherId(assignment.getTeacherId())
-                .teacherName(assignment.getTeacherName()).roomCode(schoolClass.getRoomCode())
+                .teacherName(assignment.getTeacherName()).roomCode(candidate.roomCode())
                 .dayOfWeek(candidate.day()).periodNo(candidate.period())
                 .startTime(candidate.start()).endTime(candidate.end()).semesterId(semesterId).build();
     }
@@ -213,12 +264,13 @@ public class AutomaticTimetableService {
         Map<Integer, String[]> times = "AFTERNOON".equalsIgnoreCase(need.schoolClass.getStudyShift())
                 ? AFTERNOON : MORNING;
         for (String day : DAYS) for (var entry : times.entrySet()) {
-            Candidate candidate = new Candidate(day, entry.getKey(), entry.getValue()[0], entry.getValue()[1]);
+            Candidate candidate = new Candidate(day, entry.getKey(), entry.getValue()[0], entry.getValue()[1],
+                    need.candidateRooms.get(0).getCode());
             if (blocked.contains(day + ":" + entry.getKey())) unavailable++;
             for (TimetableSlot slot : occupied) {
                 if (!day.equals(slot.getDayOfWeek()) || !overlaps(candidate, slot)) continue;
                 if (need.assignment.getClassId().equals(slot.getClassId())
-                        || need.schoolClass.getRoomCode().equals(slot.getRoomCode())) classBusy++;
+                        || candidate.roomCode().equals(slot.getRoomCode())) classBusy++;
                 if (need.assignment.getTeacherId().equals(slot.getTeacherId())) teacherBusy++;
             }
         }
@@ -234,7 +286,8 @@ public class AutomaticTimetableService {
         Map<Integer, String[]> times = "AFTERNOON".equalsIgnoreCase(schoolClass.getStudyShift())
                 ? AFTERNOON : MORNING;
         return DAYS.stream().flatMap(day -> times.entrySet().stream()
-                        .map(entry -> new Candidate(day, entry.getKey(), entry.getValue()[0], entry.getValue()[1])))
+                        .map(entry -> new Candidate(day, entry.getKey(), entry.getValue()[0], entry.getValue()[1],
+                                schoolClass.getRoomCode())))
                 .filter(candidate -> !unavailable.contains(candidate.day() + ":" + candidate.period()))
                 .filter(candidate -> noConflict(assignment, schoolClass, candidate, occupied))
                 .min(Comparator.comparingInt((Candidate candidate) -> classDayLoad(
@@ -254,7 +307,7 @@ public class AutomaticTimetableService {
             if (!overlaps(candidate, slot)) continue;
             if (assignment.getClassId().equals(slot.getClassId())
                     || assignment.getTeacherId().equals(slot.getTeacherId())
-                    || schoolClass.getRoomCode().equals(slot.getRoomCode())) return false;
+                    || candidate.roomCode().equals(slot.getRoomCode())) return false;
         }
         return true;
     }
@@ -267,7 +320,8 @@ public class AutomaticTimetableService {
         Map<Integer, String[]> times = "AFTERNOON".equalsIgnoreCase(schoolClass.getStudyShift()) ? AFTERNOON : MORNING;
         Set<String> unavailable = new HashSet<>(csv(load.getUnavailableSlots()));
         for (String day : DAYS) for (var entry : times.entrySet()) {
-            Candidate candidate = new Candidate(day, entry.getKey(), entry.getValue()[0], entry.getValue()[1]);
+            Candidate candidate = new Candidate(day, entry.getKey(), entry.getValue()[0], entry.getValue()[1],
+                    schoolClass.getRoomCode());
             if (!unavailable.contains(day + ":" + entry.getKey()) && noConflict(item, schoolClass, candidate, occupied)) count++;
         }
         return count;
@@ -300,35 +354,74 @@ public class AutomaticTimetableService {
                 && assignment.getSubjectId().equals(slot.getSubjectId()) && day.equals(slot.getDayOfWeek())).count();
     }
 
+    private static boolean roomMatches(Room room, SubjectRoomRequirement rule, SchoolClass schoolClass) {
+        if (!rule.getRoomType().equalsIgnoreCase(room.getRoomType())) return false;
+        if ("MORNING".equalsIgnoreCase(schoolClass.getStudyShift()) && !room.isSupportsMorning()) return false;
+        if ("AFTERNOON".equalsIgnoreCase(schoolClass.getStudyShift()) && !room.isSupportsAfternoon()) return false;
+        int requiredCapacity = Math.max(schoolClass.getCapacity(), schoolClass.getStudentCount());
+        if (room.getCapacity() != null && room.getCapacity() < requiredCapacity) return false;
+        Set<String> required = new HashSet<>(csv(rule.getRequiredEquipment()));
+        Set<String> available = new HashSet<>(csv(room.getEquipmentTags()));
+        return available.containsAll(required);
+    }
+
+    private static String roomTypeLabel(String type) {
+        return switch (type == null ? "" : type.toUpperCase(Locale.ROOT)) {
+            case "LAB" -> "thí nghiệm";
+            case "COMPUTER" -> "máy tính";
+            case "LANGUAGE" -> "ngoại ngữ";
+            case "SPORT" -> "thể chất";
+            case "ART" -> "nghệ thuật";
+            case "LIBRARY" -> "thư viện";
+            case "MULTIPURPOSE" -> "đa năng";
+            default -> "chuyên dụng";
+        };
+    }
+
     private static List<String> csv(String value) {
-        return value == null || value.isBlank() ? List.of() : Arrays.stream(value.split(",")).map(String::trim).toList();
+        return value == null || value.isBlank() ? List.of() : Arrays.stream(value.split(","))
+                .map(String::trim).map(part -> part.toLowerCase(Locale.ROOT)).filter(part -> !part.isBlank()).toList();
     }
 
     private static AutoTimetableItem item(TeachingAssignment assignment, SchoolClass schoolClass,
                                           Candidate candidate, String status, String message) {
         return new AutoTimetableItem(assignment.getClassId(), assignment.getClassCode(), schoolClass.getStudyShift(),
                 assignment.getSubjectId(), assignment.getSubjectName(), assignment.getTeacherId(),
-                assignment.getTeacherName(), schoolClass.getRoomCode(),
+                assignment.getTeacherName(), candidate == null ? schoolClass.getRoomCode() : candidate.roomCode(),
                 candidate == null ? null : candidate.day(), candidate == null ? 0 : candidate.period(),
                 candidate == null ? null : candidate.start(), candidate == null ? null : candidate.end(),
                 status, message);
     }
 
-    private record Candidate(String day, int period, String start, String end) {}
+    private static AutoTimetableItem item(TeachingAssignment assignment, SchoolClass schoolClass,
+                                          Candidate candidate, String roomCode, String status, String message) {
+        AutoTimetableItem value = item(assignment, schoolClass, candidate, status, message);
+        if (candidate != null || roomCode == null) return value;
+        return new AutoTimetableItem(value.classId(), value.classCode(), value.studyShift(), value.subjectId(),
+                value.subjectName(), value.teacherId(), value.teacherName(), roomCode, value.dayOfWeek(),
+                value.periodNo(), value.startTime(), value.endTime(), value.status(), value.message());
+    }
+
+    private record Candidate(String day, int period, String start, String end, String roomCode) {}
 
     private static final class ScheduleNeed {
         private final TeachingAssignment assignment;
         private final SchoolClass schoolClass;
         private final TeacherLoadRegistration load;
+        private final List<Room> candidateRooms;
+        private final String roomLabel;
         private final int originalRemaining;
         private final List<Candidate> scheduled = new ArrayList<>();
         private int remaining;
 
         private ScheduleNeed(TeachingAssignment assignment, SchoolClass schoolClass,
-                             TeacherLoadRegistration load, int remaining) {
+                             TeacherLoadRegistration load, int remaining,
+                             List<Room> candidateRooms, String roomLabel) {
             this.assignment = assignment;
             this.schoolClass = schoolClass;
             this.load = load;
+            this.candidateRooms = candidateRooms;
+            this.roomLabel = roomLabel;
             this.originalRemaining = remaining;
             this.remaining = remaining;
         }

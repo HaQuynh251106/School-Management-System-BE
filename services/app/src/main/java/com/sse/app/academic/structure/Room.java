@@ -20,4 +20,17 @@ public class Room {
     @Builder.Default
     @Column(nullable = false)
     private boolean supportsAfternoon = true;
+    @Builder.Default
+    @Column(nullable = false)
+    private String roomType = "GENERAL";
+    @Column(length = 1000)
+    private String equipmentTags;
+    @Builder.Default
+    @Column(nullable = false)
+    private String status = "ACTIVE";
+    @Builder.Default
+    @Column(nullable = false)
+    private boolean homeRoomEligible = true;
+    @Column(length = 1000)
+    private String notes;
 }

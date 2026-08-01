@@ -22,6 +22,21 @@ interface ExamCandidateRepository extends JpaRepository<ExamCandidate, String> {
     Optional<ExamCandidate> findFirstByExamPeriodIdAndStudentIdOrderByCandidateNo(String examPeriodId, String studentId);
     long countByExamRoomId(String examRoomId);
     void deleteByScheduleIdAndClassId(String scheduleId, String classId);
+    void deleteByScheduleId(String scheduleId);
+}
+interface ExamSeatingPlanRepository extends JpaRepository<ExamSeatingPlan, String> {
+    List<ExamSeatingPlan> findByScheduleIdOrderByCreatedAtDesc(String scheduleId);
+}
+interface ExamSeatingPlanItemRepository extends JpaRepository<ExamSeatingPlanItem, String> {
+    List<ExamSeatingPlanItem> findByPlanId(String planId);
+    List<ExamSeatingPlanItem> findByPlanIdAndRowType(String planId, String rowType);
+    void deleteByPlanId(String planId);
+}
+interface ExamProctorPlanRepository extends JpaRepository<ExamProctorPlan, String> {
+    List<ExamProctorPlan> findByScheduleIdOrderByCreatedAtDesc(String scheduleId);
+}
+interface ExamProctorPlanItemRepository extends JpaRepository<ExamProctorPlanItem, String> {
+    List<ExamProctorPlanItem> findByPlanId(String planId);
 }
 interface ExamResultRepository extends JpaRepository<ExamResult, String> {
     List<ExamResult> findByExamPeriodId(String examPeriodId);

@@ -18,6 +18,52 @@ public final class ExamDtos {
             @Min(15) @Max(480) int durationMinutes, String notes) {}
     public record SaveRoomRequest(String id, @NotBlank String roomCode, @Min(1) @Max(1000) int capacity,
             String proctorOneId, String proctorTwoId) {}
+    public record BatchSaveRoomsRequest(@NotEmpty List<@NotBlank String> roomCodes) {}
+    public record ExamRoomAvailability(String roomId, String roomCode, String roomName, int capacity,
+            String roomType, boolean available, boolean selected, String reason,
+            String conflictingSubject, String conflictingStartTime) {}
+    public record ExamDayPolicy(LocalDate examDate, boolean regularClassesSuspended,
+            String title, String description) {}
+    public record PreviewOrganizationPlanRequest(@Min(1) @Max(1000) int maxCandidatesPerRoom,
+            @Min(1) @Max(4) int studentsPerDesk, Boolean includeSecondProctor) {}
+    public record OrganizationPlanRoom(String roomId, String roomCode, int physicalCapacity,
+            int effectiveCapacity, int deskCount, String proctorOneId, String proctorOneName,
+            String proctorTwoId, String proctorTwoName, int candidateCount, boolean ready) {}
+    public record OrganizationPlanCandidate(String studentId, String studentName, String studentCode,
+            String classId, String classCode, String candidateNo, String roomId, String roomCode,
+            int seatNo, int deskNo, int seatPosition) {}
+    public record OrganizationPlanView(String id, String scheduleId, String status,
+            int maxCandidatesPerRoom, int studentsPerDesk, boolean includeSecondProctor,
+            int candidateCount, int roomCount, int effectiveCapacity, int assignedCount,
+            int missingAssignmentCount, String warningSummary, Instant createdAt, Instant appliedAt,
+            Instant undoneAt, List<OrganizationPlanRoom> rooms, List<OrganizationPlanCandidate> candidates) {}
+    public record PreviewSeatingPlanRequest(List<String> roomIds) {}
+    public record OrganizationReadiness(int candidateCount, int allocatedCount, int totalCapacity,
+            int proctoredCapacity, int roomCount, int proctoredRoomCount, int missingSeats,
+            int missingCandidates, boolean roomsReady, boolean candidatesReady, List<String> warnings) {}
+    public record SeatingPlanRoom(String roomId, String roomCode, int capacity, int assignedCount,
+            int remainingCapacity, boolean hasMainProctor, List<String> classCodes) {}
+    public record SeatingPlanClass(String classId, String classCode, int candidateCount,
+            int assignedCount, int roomCount, List<String> roomCodes) {}
+    public record SeatingPlanCandidate(String studentId, String studentName, String studentCode,
+            String classId, String classCode, String candidateNo, String roomId, String roomCode,
+            Integer seatNo, boolean assigned) {}
+    public record SeatingPlanView(String id, String scheduleId, String status, int candidateCount,
+            int totalCapacity, int assignedCount, int unassignedCount, String warningSummary,
+            Instant createdAt, Instant appliedAt, Instant undoneAt, List<SeatingPlanRoom> rooms,
+            List<SeatingPlanClass> classes, List<SeatingPlanCandidate> candidates) {}
+    public record PreviewProctorPlanRequest(List<String> lockedRoomIds, Boolean includeSecondProctor) {}
+    public record EligibleProctor(String teacherId, String teacherCode, String teacherName,
+            int currentDutyCount, boolean teachesExamSubject, String recommendation) {}
+    public record ProctorPlanItem(String roomId, String roomCode, boolean locked,
+            String previousProctorOneId, String previousProctorOneName,
+            String previousProctorTwoId, String previousProctorTwoName,
+            String proposedProctorOneId, String proposedProctorOneName,
+            String proposedProctorTwoId, String proposedProctorTwoName,
+            String status, String message, Integer proctorOneDutyCount, Integer proctorTwoDutyCount) {}
+    public record ProctorPlanView(String id, String scheduleId, String status, boolean includeSecondProctor,
+            int roomCount, int readyRoomCount, int missingAssignmentCount, String warningSummary,
+            Instant createdAt, Instant appliedAt, Instant undoneAt, List<ProctorPlanItem> items) {}
     public record SaveGradingAssignmentRequest(@NotBlank String classId, @NotBlank String teacherId) {}
     public record EligibleGrader(String teacherId, String teacherCode, String teacherName) {}
     public record AllocateCandidatesRequest(@NotBlank String classId) {}

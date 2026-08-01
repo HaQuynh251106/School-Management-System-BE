@@ -58,10 +58,20 @@ public final class StructureDtos {
 
     public record CreateRoomRequest(String id, @NotBlank String code, String name,
                                     @Min(1) @Max(1000) Integer capacity,
-                                    Boolean supportsMorning, Boolean supportsAfternoon) {}
+                                    Boolean supportsMorning, Boolean supportsAfternoon,
+                                    @Pattern(regexp = "GENERAL|LAB|COMPUTER|LANGUAGE|SPORT|ART|LIBRARY|MULTIPURPOSE|OTHER") String roomType,
+                                    String equipmentTags,
+                                    @Pattern(regexp = "ACTIVE|MAINTENANCE|INACTIVE") String status,
+                                    Boolean homeRoomEligible,
+                                    String notes) {}
 
     public record UpdateRoomRequest(@NotBlank String code, String name,
                                     @Min(1) @Max(1000) Integer capacity,
-                                    Boolean supportsMorning, Boolean supportsAfternoon) {}
+                                    Boolean supportsMorning, Boolean supportsAfternoon,
+                                    @Pattern(regexp = "GENERAL|LAB|COMPUTER|LANGUAGE|SPORT|ART|LIBRARY|MULTIPURPOSE|OTHER") String roomType,
+                                    String equipmentTags,
+                                    @Pattern(regexp = "ACTIVE|MAINTENANCE|INACTIVE") String status,
+                                    Boolean homeRoomEligible,
+                                    String notes) {}
 
 }

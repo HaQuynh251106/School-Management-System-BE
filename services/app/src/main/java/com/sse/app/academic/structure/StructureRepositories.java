@@ -39,6 +39,11 @@ interface RoomRepository extends JpaRepository<Room, String> {
     Optional<Room> findByCode(String code);
 }
 
+interface SubjectRoomRequirementRepository extends JpaRepository<SubjectRoomRequirement, String> {
+    List<SubjectRoomRequirement> findBySubjectId(String subjectId);
+    Optional<SubjectRoomRequirement> findBySubjectIdAndRoomType(String subjectId, String roomType);
+}
+
 interface ClassEnrollmentRepository extends JpaRepository<ClassEnrollment, String> {
     List<ClassEnrollment> findByStudentIdAndStatus(String studentId, String status);
     Optional<ClassEnrollment> findByAcademicYearIdAndClassIdAndStudentId(

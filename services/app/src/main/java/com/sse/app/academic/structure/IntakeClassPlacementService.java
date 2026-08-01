@@ -243,6 +243,8 @@ public class IntakeClassPlacementService {
     }
 
     private boolean isWaitingForPlacement(User user, String academicYearId, Map<String, SchoolClass> yearClasses) {
+        String lifecycleStatus = safe(user.getStudentStatus()).toUpperCase(Locale.ROOT);
+        if (Set.of("GRADUATED", "TRANSFERRED", "WITHDRAWN").contains(lifecycleStatus)) return false;
         if (user.getClassId() != null && !user.getClassId().isBlank()) return false;
         return enrollments.findByStudentIdAndStatus(user.getId(), "ACTIVE").stream()
                 .noneMatch(item -> academicYearId.equals(item.getAcademicYearId()) || yearClasses.containsKey(item.getClassId()));
