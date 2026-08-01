@@ -21,13 +21,15 @@
 |---|---:|
 | Backend Maven | 54 test đạt |
 | Web unit/component | 27 test đạt |
-| Web Playwright sáu vai trò | 12/12 đạt trên staging |
+| Web Playwright đăng nhập/phân quyền sáu vai trò | 12/12 đạt trên staging |
+| Web Playwright toàn bộ màn hình theo vai trò | 6/6 hành trình, 53 URL đạt; không có JavaScript error hoặc HTTP 5xx |
 | Mobile analyze | Không có issue |
 | Mobile integration thực | 4/4 đạt |
 | Kiểm tra dữ liệu UAT SQL | Đạt |
 | Restore PostgreSQL tách biệt | 79 bảng, 0 migration lỗi |
 | Prometheus rules | 4/4 hợp lệ |
 | Prometheus scrape Backend | `up=1` |
+| Alertmanager | Đã nhận cảnh báo UAT tổng hợp qua receiver `operations` |
 | Loki JSON log | Đã nhận stream `sse-backend` |
 | Backup tự động staging | Đã tạo và xác minh |
 
