@@ -98,7 +98,29 @@ class SecurityIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.metrics.length()").value(4))
                 .andExpect(jsonPath("$.charts.length()").value(2))
-                .andExpect(jsonPath("$.charts[0].data.length()", greaterThanOrEqualTo(1)));
+                .andExpect(jsonPath("$.charts[0].data.length()", greaterThanOrEqualTo(1)))
+                .andExpect(jsonPath("$.adminOverview.activeStudents").isNumber())
+                .andExpect(jsonPath("$.adminOverview.activeTeachers").isNumber())
+                .andExpect(jsonPath("$.adminOverview.timetableCoverage").isNumber())
+                .andExpect(jsonPath("$.adminOverview.calendarItems").isArray())
+                .andExpect(jsonPath("$.adminOverview.workItems.length()", greaterThanOrEqualTo(1)));
+    }
+
+    @Test
+    void operationalDashboardsExposeRoleSpecificCalendarAndWorkItems() throws Exception {
+        for (String[] account : List.of(
+                new String[]{"giaovu", "Giaovu123@@", "ACADEMIC_STAFF"},
+                new String[]{"ketoan", "Ketoan123@@", "ACCOUNTANT"},
+                new String[]{"gv.hoa", "teacher@123", "TEACHER"}
+        )) {
+            String token = login(account[0], account[1]);
+            mvc.perform(get("/dashboard").header("Authorization", "Bearer " + token))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.metrics.length()").value(4))
+                    .andExpect(jsonPath("$.roleOverview.role").value(account[2]))
+                    .andExpect(jsonPath("$.roleOverview.calendarItems").isArray())
+                    .andExpect(jsonPath("$.roleOverview.workItems.length()", greaterThanOrEqualTo(1)));
+        }
     }
 
     @Test
