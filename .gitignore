@@ -26,6 +26,7 @@ logs/
 # Env
 .env
 .env.local
+.env.*.local
 *.local.yml
 
 # Docker volumes

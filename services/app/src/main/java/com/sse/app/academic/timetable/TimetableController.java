@@ -22,15 +22,18 @@ public class TimetableController {
     private final StructureService structure;
     private final TeachingAssignmentService teachingAssignments;
     private final AutomaticTimetableService automaticTimetable;
+    private final TimetableVersionService versions;
 
     public TimetableController(TimetableService timetable, UserService users, StructureService structure,
                                TeachingAssignmentService teachingAssignments,
-                               AutomaticTimetableService automaticTimetable) {
+                               AutomaticTimetableService automaticTimetable,
+                               TimetableVersionService versions) {
         this.timetable = timetable;
         this.users = users;
         this.structure = structure;
         this.teachingAssignments = teachingAssignments;
         this.automaticTimetable = automaticTimetable;
+        this.versions = versions;
     }
 
     @GetMapping("/timetableSlots")
@@ -54,6 +57,44 @@ public class TimetableController {
             @Valid @RequestBody TimetableDtos.AutoTimetableRequest request) {
         CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return automaticTimetable.plan(request);
+    }
+
+    @GetMapping("/timetable-versions")
+    public List<TimetableDtos.TimetableVersion> versions(@RequestParam String semesterId) {
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        return versions.list(semesterId);
+    }
+
+    @GetMapping("/timetable-versions/{id}/slots")
+    public List<TimetableDtos.TimetableVersionSlot> versionSlots(@PathVariable String id) {
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        return versions.slots(id);
+    }
+
+    @PostMapping("/timetable-versions")
+    public TimetableDtos.TimetableVersion createVersion(
+            @Valid @RequestBody TimetableDtos.CreateVersionRequest request) {
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        return versions.snapshot(request.semesterId(), request.name(), CurrentUserHolder.require().id());
+    }
+
+    @PostMapping("/timetable-versions/{id}/publish")
+    public TimetableDtos.TimetableVersion publishVersion(@PathVariable String id) {
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        return versions.publish(id, CurrentUserHolder.require().id());
+    }
+
+    @PostMapping("/timetable-versions/{id}/restore")
+    public TimetableDtos.TimetableVersion restoreVersion(@PathVariable String id,
+            @Valid @RequestBody TimetableDtos.RestoreVersionRequest request) {
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        return versions.restore(id, request.name(), CurrentUserHolder.require().id());
+    }
+
+    @DeleteMapping("/timetable-versions/{id}")
+    public void deleteVersion(@PathVariable String id) {
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        versions.deleteDraft(id);
     }
 
     @DeleteMapping("/timetableSlots/{id}")

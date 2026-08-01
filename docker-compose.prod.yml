@@ -51,7 +51,7 @@ services:
     volumes:
       - uploads-data:/data/uploads
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:4000/actuator/health | grep -q UP"]
+      test: ["CMD-SHELL", "curl --fail --silent http://localhost:4000/actuator/health | grep -q UP"]
       interval: 15s
       timeout: 5s
       retries: 10
@@ -65,7 +65,7 @@ services:
     ports:
       - "${SSE_WEB_PORT:-80}:80"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost/ >/dev/null"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null"]
       interval: 15s
       timeout: 5s
       retries: 10

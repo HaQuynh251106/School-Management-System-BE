@@ -28,4 +28,6 @@ public class TimetableSlot {
     private String startTime;   // "07:00"
     private String endTime;     // "07:45"
     private String semesterId;
+    private String publishedPlanId;
+    private boolean locked;
 }

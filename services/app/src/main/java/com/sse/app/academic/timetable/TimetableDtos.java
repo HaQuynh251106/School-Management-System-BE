@@ -6,6 +6,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Pattern;
 import java.util.List;
+import java.time.Instant;
 
 public final class TimetableDtos {
     private TimetableDtos() {}
@@ -40,5 +41,28 @@ public final class TimetableDtos {
             String semesterId, int existingSlots, int proposedSlots,
             int unscheduledSlots, boolean applied,
             List<AutoTimetableItem> items, List<String> warnings
+    ) {}
+
+    public record CreateVersionRequest(
+            @NotBlank String semesterId,
+            @NotBlank String name
+    ) {}
+
+    public record RestoreVersionRequest(@NotBlank String name) {}
+
+    public record TimetableVersion(
+            String id, String semesterId, String name, String status,
+            Integer versionNo, Integer qualityScore, Integer totalPeriods,
+            Integer scheduledPeriods, Integer unscheduledPeriods,
+            String conflictSummary, String sourcePlanId,
+            String createdBy, Instant createdAt, Instant updatedAt,
+            String publishedBy, Instant publishedAt
+    ) {}
+
+    public record TimetableVersionSlot(
+            String id, String planId, String classId, String classCode, String studyShift,
+            String subjectId, String subjectName, String teacherId, String teacherName,
+            String roomCode, String dayOfWeek, Integer periodNo,
+            String startTime, String endTime, Boolean locked
     ) {}
 }

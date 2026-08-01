@@ -14,8 +14,12 @@ COPY common/src common/src
 COPY services/app/src services/app/src
 RUN mvn -B -pl services/app -am clean package
 
-FROM eclipse-temurin:17-jre-alpine
-RUN addgroup -S sse && adduser -S sse -G sse
+FROM eclipse-temurin:17-jre-jammy
+RUN groupadd --system sse \
+    && useradd --system --gid sse --home-dir /app sse \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /workspace/services/app/target/sse-app.jar app.jar
 USER sse

@@ -1,0 +1,13 @@
+services:
+  backend:
+    build:
+      context: .
+    image: school-management-backend:staging
+    pull_policy: never
+  web:
+    build:
+      context: ../School-Management-System-Web-FE
+      args:
+        VITE_API_BASE: ${SSE_STAGING_PUBLIC_API:-http://127.0.0.1:4100}
+    image: school-management-web:staging
+    pull_policy: never
