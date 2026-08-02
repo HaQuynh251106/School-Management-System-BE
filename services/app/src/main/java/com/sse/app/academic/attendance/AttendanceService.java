@@ -3,6 +3,7 @@ package com.sse.app.academic.attendance;
 import com.sse.app.academic.attendance.AttendanceDtos.*;
 import com.sse.app.academic.timetable.TimetableService;
 import com.sse.app.academic.timetable.TimetableSlot;
+import com.sse.app.academic.timetable.TeachingOperationService;
 import com.sse.app.academic.structure.Semester;
 import com.sse.app.academic.structure.StructureService;
 import com.sse.app.academic.leave.LeaveRequest;
@@ -44,12 +45,14 @@ public class AttendanceService {
     private final AttendanceSessionAccessRepository sessionAccesses;
     private final LeaveRequestService leaveRequests;
     private final ExamService exams;
+    private final TeachingOperationService teachingOperations;
     private final Clock clock;
 
     public AttendanceService(AttendanceRepository records, TimetableService timetable,
                              UserService users, NotificationService notifications,
                              StructureService structure, AttendanceSessionAccessRepository sessionAccesses,
-                             LeaveRequestService leaveRequests, ExamService exams, Clock clock) {
+                             LeaveRequestService leaveRequests, ExamService exams,
+                             TeachingOperationService teachingOperations, Clock clock) {
         this.records = records;
         this.timetable = timetable;
         this.users = users;
@@ -58,6 +61,7 @@ public class AttendanceService {
         this.sessionAccesses = sessionAccesses;
         this.leaveRequests = leaveRequests;
         this.exams = exams;
+        this.teachingOperations = teachingOperations;
         this.clock = clock;
     }
 
@@ -76,9 +80,18 @@ public class AttendanceService {
     }
 
     public void assertCanManageSlot(CurrentUser actor, String slotId) {
+        assertCanManageSlot(actor, slotId, null);
+    }
+
+    public void assertCanManageSlot(CurrentUser actor, String slotId, LocalDate date) {
         TimetableSlot slot = requireSlot(slotId);
         if (actor.isTeacher()) {
-            if (!actor.id().equals(slot.getTeacherId())) {
+            boolean assignedOccurrence = date == null
+                    ? actor.id().equals(slot.getTeacherId())
+                    : (actor.id().equals(slot.getTeacherId())
+                        && !teachingOperations.isAssignedAwayFromOriginalTeacher(slotId, date))
+                      || teachingOperations.canTeachOccurrence(actor.id(), slotId, date);
+            if (!assignedOccurrence) {
                 throw ApiException.forbidden("Không có quyền điểm danh tiết học của giáo viên khác");
             }
             User teacher = users.getById(actor.id());
@@ -112,14 +125,14 @@ public class AttendanceService {
 
     public List<LeaveRequest> approvedLeaves(String slotId, LocalDate date, CurrentUser actor) {
         TimetableSlot slot = requireSlot(slotId);
-        assertCanManageSlot(actor, slotId);
+        assertCanManageSlot(actor, slotId, date);
         return leaveRequests.approvedForClassOn(slot.getClassId(), date);
     }
 
     @Transactional
     public AttendanceSessionStatus unlockLateAttendance(UnlockAttendanceRequest request, CurrentUser actor) {
         TimetableSlot slot = requireSlot(request.slotId());
-        assertCanManageSlot(actor, slot.getId());
+        assertCanManageSlot(actor, slot.getId(), request.date());
         AttendanceSessionStatus current = sessionStatus(slot, request.date(), schoolNow());
         if ("LATE_UNLOCKED".equals(current.state()) || "COMPLETED_LATE".equals(current.state())) {
             return current;
@@ -152,7 +165,7 @@ public class AttendanceService {
         if (notifications.schoolHolidayOn(date).isPresent() || exams.isPublishedExamDay(date)) return 0;
         String day = date.getDayOfWeek().name().substring(0, 3);
         int sent = 0;
-        for (TimetableSlot slot : timetable.list(null, null, null, day)) {
+        for (TimetableSlot slot : timetable.list(null, null, null, null)) {
             if (!isScheduledOccurrence(slot, date)) continue;
             LocalTime start = parseTime(slot.getStartTime());
             LocalTime end = parseTime(slot.getEndTime());
@@ -161,9 +174,10 @@ public class AttendanceService {
 
             String occurrenceId = slot.getId() + ":" + date;
             if (!schoolNow.toLocalTime().isBefore(end)) {
-                if (notifications.hasNotification(slot.getTeacherId(), "ATTENDANCE_MISSED", occurrenceId)) continue;
+                String effectiveTeacherId = teachingOperations.effectiveTeacherIdForOccurrence(slot.getId(), date);
+                if (notifications.hasNotification(effectiveTeacherId, "ATTENDANCE_MISSED", occurrenceId)) continue;
                 String classCode = structure.getClass(slot.getClassId()).getCode();
-                notifications.notifyUser(slot.getTeacherId(), "ATTENDANCE_MISSED", "URGENT",
+                notifications.notifyUser(effectiveTeacherId, "ATTENDANCE_MISSED", "URGENT",
                         "Chưa hoàn tất điểm danh tiết " + slot.getPeriodNo(),
                         "Môn " + slot.getSubjectName() + " · Lớp " + classCode + " · "
                                 + slot.getStartTime() + "–" + slot.getEndTime()
@@ -180,7 +194,7 @@ public class AttendanceService {
             sessionAccesses.save(access);
 
             String classCode = structure.getClass(slot.getClassId()).getCode();
-            notifications.notifyUser(slot.getTeacherId(), "ATTENDANCE_REMINDER", "IMPORTANT",
+            notifications.notifyUser(teachingOperations.effectiveTeacherIdForOccurrence(slot.getId(), date), "ATTENDANCE_REMINDER", "IMPORTANT",
                     "Đến giờ điểm danh tiết " + slot.getPeriodNo(),
                     "Môn " + slot.getSubjectName() + " · Lớp " + classCode + " · "
                             + slot.getStartTime() + "–" + slot.getEndTime()
@@ -195,7 +209,7 @@ public class AttendanceService {
     public List<AttendanceRecord> bulkMark(BulkAttendanceRequest req, CurrentUser actor) {
         TimetableSlot slot = requireSlot(req.slotId());
         structure.assertSemesterWritable(slot.getSemesterId());
-        assertCanManageSlot(actor, req.slotId());
+        assertCanManageSlot(actor, req.slotId(), req.date());
         validateOccurrence(slot, req.date());
 
         Set<String> seenStudents = new HashSet<>();
@@ -319,7 +333,7 @@ public class AttendanceService {
         Semester semester = structure.getSemester(slot.getSemesterId());
         if ((semester.getStartDate() != null && date.isBefore(semester.getStartDate()))
                 || (semester.getEndDate() != null && date.isAfter(semester.getEndDate()))) return false;
-        return date.getDayOfWeek().name().substring(0, 3).equalsIgnoreCase(slot.getDayOfWeek());
+        return teachingOperations.isValidOccurrence(slot.getId(), date);
     }
 
     private LocalTime parseTime(String value) {

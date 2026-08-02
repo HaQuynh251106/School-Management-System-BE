@@ -26,6 +26,7 @@ import java.util.*;
 @Service
 public class UserService {
 
+    private static final int LEGACY_LIST_LIMIT = 200;
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
     private static final char[] TEMP_PASSWORD_ALPHABET =
             "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789".toCharArray();
@@ -156,7 +157,7 @@ public class UserService {
     // ---------- Quản trị người dùng (A1) ----------
 
     public List<UserDto> list(String role, String q, String classId) {
-        return filteredUsers(role, q, classId).stream()
+        return filteredUsers(role, q, classId, false).stream()
                 .map(this::toDto)
                 .toList();
     }
@@ -253,37 +254,23 @@ public class UserService {
     }
 
     public List<UserDto> listSummaries(String role, String q, String classId) {
-        return filteredUsers(role, q, classId).stream()
+        return filteredUsers(role, q, classId, true).stream()
                 .map(this::toSummaryDto)
                 .toList();
     }
 
-    private List<User> filteredUsers(String role, String q, String classId) {
-        List<User> base;
-        boolean filterParentsByClass = "PARENT".equalsIgnoreCase(role)
-                && classId != null && !classId.isBlank();
-        if (filterParentsByClass) {
-            Set<String> studentIds = users.findByClassId(classId).stream()
-                    .filter(user -> "STUDENT".equals(user.getRole()))
-                    .map(User::getId)
-                    .collect(java.util.stream.Collectors.toSet());
-            Set<String> parentIds = relations.findAll().stream()
-                    .filter(relation -> studentIds.contains(relation.getStudentId()))
-                    .map(ParentStudent::getParentId)
-                    .collect(java.util.stream.Collectors.toSet());
-            base = users.findAllById(parentIds);
-        } else if (role != null && !role.isBlank()) base = users.findByRole(role);
-        else if (classId != null && !classId.isBlank()) base = users.findByClassId(classId);
-        else base = users.findAll();
-
-        String needle = q == null ? null : q.trim().toLowerCase();
-        return base.stream()
-                .filter(u -> !"STUDENT".equalsIgnoreCase(role)
-                        || !"GRADUATED".equals(u.getStudentStatus()))
-                .filter(u -> filterParentsByClass || classId == null || classId.isBlank()
-                        || classId.equals(u.getClassId()))
-                .filter(u -> needle == null || needle.isEmpty() || matches(u, needle))
-                .toList();
+    private List<User> filteredUsers(String role, String q, String classId, boolean boundedSelector) {
+        Specification<User> specification = userSpecification(role, q, classId, null, null);
+        if (boundedSelector) {
+            // Compatibility endpoint for small selectors. Never materialize the
+            // full school population; large management screens use /users/page.
+            return users.findAll(specification,
+                            PageRequest.of(0, LEGACY_LIST_LIMIT, userSort("fullName")))
+                    .getContent();
+        }
+        // Internal business services may need the complete scoped class/school
+        // population. Filtering still happens in SQL instead of in application RAM.
+        return users.findAll(specification, userSort("fullName"));
     }
 
     private Specification<User> userSpecification(String role, String q, String classId,
@@ -366,11 +353,15 @@ public class UserService {
         if (users.existsByUsername(r.username())) {
             throw ApiException.conflict("Tên đăng nhập đã tồn tại");
         }
+        validateUniqueIdentifiers(null, r.email(), r.studentCode(), r.teacherCode());
         String id = (r.id() == null || r.id().isBlank()) ? Ids.gen("u") : r.id();
         // Học sinh không nhập mã thủ công — hệ thống tự sinh mã HS.
         String studentCode = r.studentCode();
         if ("STUDENT".equals(r.role()) && (studentCode == null || studentCode.isBlank())) {
-            studentCode = "HS2025" + String.format("%03d", users.findByRole("STUDENT").size() + 1);
+            String prefix = "HS" + java.time.Year.now().getValue();
+            int sequence = users.findByRole("STUDENT").size() + 1;
+            do studentCode = prefix + String.format("%05d", sequence++);
+            while (users.existsByStudentCodeIgnoreCase(studentCode));
         }
         String cohortId = "STUDENT".equals(r.role()) ? structure.cohortIdForClass(r.classId()) : null;
         User u = User.builder()
@@ -379,7 +370,7 @@ public class UserService {
                 .passwordHash(encoder.encode(r.password()))
                 .fullName(r.fullName())
                 .role(r.role())
-                .email(r.email())
+                .email(normalizeEmail(r.email()))
                 .phone(r.phone())
                 .avatarUrl(r.avatarUrl())
                 .status("ACTIVE")
@@ -390,7 +381,9 @@ public class UserService {
                 .classId(r.classId())
                 .className(r.className())
                 .cohortId(cohortId)
-                .studentStatus("STUDENT".equals(r.role()) ? "ENROLLED" : null)
+                .studentStatus("STUDENT".equals(r.role())
+                        ? (r.classId() == null || r.classId().isBlank() ? "PENDING_PLACEMENT" : "ENROLLED")
+                        : null)
                 .dateOfBirth(r.dateOfBirth())
                 .gender(r.gender())
                 .placeOfBirth(r.placeOfBirth())
@@ -413,9 +406,10 @@ public class UserService {
     @Transactional
     public UserDto update(String id, UpdateUserRequest r) {
         User u = getById(id);
+        validateUniqueIdentifiers(id, r.email(), r.studentCode(), r.teacherCode());
         String previousClassId = u.getClassId();
         if (r.fullName() != null)   u.setFullName(r.fullName());
-        if (r.email() != null)      u.setEmail(r.email());
+        if (r.email() != null)      u.setEmail(normalizeEmail(r.email()));
         if (r.phone() != null)      u.setPhone(r.phone());
         if (r.avatarUrl() != null)  u.setAvatarUrl(r.avatarUrl());
         if (r.teacherCode() != null)u.setTeacherCode(r.teacherCode());
@@ -448,11 +442,44 @@ public class UserService {
     }
 
     @Transactional
+    public UserDto updateTeacherSpecialization(String id, String mainSubject) {
+        User teacher = getById(id);
+        if (!"TEACHER".equals(teacher.getRole())) {
+            throw ApiException.badRequest("Người dùng không phải giáo viên");
+        }
+        teacher.setMainSubject(mainSubject.trim());
+        return toDto(users.save(teacher));
+    }
+
+    @Transactional
     public UserDto setStatus(String id, String status) {
         User u = getById(id);
         if (!Objects.equals(u.getStatus(), status)) u.setTokenVersion(u.getTokenVersion() + 1);
         u.setStatus(status);
         return toDto(users.save(u));
+    }
+
+    private void validateUniqueIdentifiers(String currentUserId, String email, String studentCode, String teacherCode) {
+        if (email != null && !email.isBlank()) {
+            users.findByEmailIgnoreCase(email.trim()).filter(other -> !other.getId().equals(currentUserId))
+                    .ifPresent(other -> { throw ApiException.conflict("Email đã được sử dụng"); });
+        }
+        if (studentCode != null && !studentCode.isBlank()) {
+            users.findByStudentCodeIgnoreCase(studentCode.trim()).filter(other -> !other.getId().equals(currentUserId))
+                    .ifPresent(other -> { throw ApiException.conflict("Mã học sinh đã tồn tại"); });
+        }
+        if (teacherCode != null && !teacherCode.isBlank()) {
+            users.findByTeacherCodeIgnoreCase(teacherCode.trim()).filter(other -> !other.getId().equals(currentUserId))
+                    .ifPresent(other -> { throw ApiException.conflict("Mã giáo viên đã tồn tại"); });
+        }
+    }
+
+    public void assertUniqueIdentifiersForImport(String email, String studentCode, String teacherCode) {
+        validateUniqueIdentifiers(null, email, studentCode, teacherCode);
+    }
+
+    private String normalizeEmail(String email) {
+        return email == null || email.isBlank() ? null : email.trim().toLowerCase(java.util.Locale.ROOT);
     }
 
     /** A1: admin reset mật khẩu; trả lại mật khẩu mới (sinh ngẫu nhiên nếu không truyền). */

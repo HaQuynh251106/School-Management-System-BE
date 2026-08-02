@@ -17,6 +17,7 @@ import com.sse.app.notification.NotificationService;
 import com.sse.app.security.CurrentUser;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.Instant;
 import java.util.*;
@@ -32,10 +33,12 @@ public class YearEndService {
     private final UserService users;
     private final NotificationService notifications;
     private final GradeCalculationService gradeCalculations;
+    private final JdbcTemplate jdbc;
 
     public YearEndService(StudentYearlySummaryRepository summaries, StructureService structure,
                           TeachingAssignmentService teachingAssignments, GradeService grades, UserService users,
-                          NotificationService notifications, GradeCalculationService gradeCalculations) {
+                          NotificationService notifications, GradeCalculationService gradeCalculations,
+                          JdbcTemplate jdbc) {
         this.summaries = summaries;
         this.structure = structure;
         this.teachingAssignments = teachingAssignments;
@@ -43,6 +46,7 @@ public class YearEndService {
         this.users = users;
         this.notifications = notifications;
         this.gradeCalculations = gradeCalculations;
+        this.jdbc = jdbc;
     }
 
     @Transactional
@@ -111,8 +115,49 @@ public class YearEndService {
                 .orElseThrow(() -> ApiException.notFound("Kết quả tổng kết học sinh"));
     }
 
+    /** Chuẩn bị dữ liệu đúng một lớp để các API phân trang không phải tải toàn trường. */
+    @Transactional
+    public List<StudentYearlySummary> classPreview(String academicYearId, String classId) {
+        AcademicYear year = structure.getYear(academicYearId);
+        SchoolClass schoolClass = structure.getClass(classId);
+        if (!academicYearId.equals(schoolClass.getAcademicYearId())) {
+            throw ApiException.badRequest("Lớp không thuộc năm học đã chọn");
+        }
+        if (!"CLOSED".equals(year.getStatus())) {
+            List<Semester> semesters = structure.listSemesters(academicYearId);
+            for (UserDto student : users.list("STUDENT", null, classId)) {
+                evaluateAndSave(academicYearId, semesters, student);
+            }
+        }
+        return summaries.findByAcademicYearIdAndClassIdOrderByStudentName(academicYearId, classId);
+    }
+
+    /**
+     * Snapshot đã lưu cho các màn hình danh mục. Không tính lại hàng nghìn đầu điểm
+     * mỗi khi người dùng chỉ mở danh sách lớp/học sinh.
+     */
+    public List<StudentYearlySummary> storedClassSummaries(String academicYearId, String classId) {
+        SchoolClass schoolClass = structure.getClass(classId);
+        if (!academicYearId.equals(schoolClass.getAcademicYearId())) {
+            throw ApiException.badRequest("Lớp không thuộc năm học đã chọn");
+        }
+        return summaries.findByAcademicYearIdAndClassIdOrderByStudentName(academicYearId, classId);
+    }
+
     @Transactional
     public StudentYearlySummary setConduct(String academicYearId, String studentId, String conduct, CurrentUser actor) {
+        return setConductInternal(academicYearId, studentId, conduct, actor, false);
+    }
+
+    /** Chỉ được gọi từ quy trình điều chỉnh học bạ chính thức đã được Giáo vụ mở. */
+    @Transactional
+    public StudentYearlySummary setConductForReportCardRevision(String academicYearId, String studentId,
+                                                                String conduct, CurrentUser actor) {
+        return setConductInternal(academicYearId, studentId, conduct, actor, true);
+    }
+
+    private StudentYearlySummary setConductInternal(String academicYearId, String studentId, String conduct,
+                                                    CurrentUser actor, boolean allowFinalizedRevision) {
         if (conduct == null || !Set.of("GOOD", "FAIR", "AVERAGE", "WEAK").contains(conduct)) {
             throw ApiException.badRequest("Hạnh kiểm phải là Tốt, Khá, Trung bình hoặc Yếu");
         }
@@ -126,12 +171,16 @@ public class YearEndService {
         if (!actor.id().equals(schoolClass.getHomeroomTeacherId())) {
             throw ApiException.forbidden("Chỉ giáo viên chủ nhiệm của lớp được đánh giá hạnh kiểm");
         }
-        if (summary.getFinalizedAt() != null) throw ApiException.conflict("Năm học đã được chốt");
+        if (summary.getFinalizedAt() != null && !allowFinalizedRevision) {
+            throw ApiException.conflict("Năm học đã được chốt; Giáo vụ phải mở bản điều chỉnh học bạ chính thức");
+        }
         String previousConduct = summary.getConductGrade();
         summary.setConductGrade(conduct);
-        summary.setPromotionStatus(summary.getSemesterOneAverage() != null && summary.getSemesterTwoAverage() != null
-                && summary.getAverageScore() != null && summary.getMissingRequirements() == null
-                ? "READY" : "INCOMPLETE");
+        if (summary.getFinalizedAt() == null) {
+            summary.setPromotionStatus(summary.getSemesterOneAverage() != null && summary.getSemesterTwoAverage() != null
+                    && summary.getAverageScore() != null && summary.getMissingRequirements() == null
+                    ? "READY" : "INCOMPLETE");
+        }
         summary.setUpdatedAt(Instant.now());
         StudentYearlySummary saved = summaries.save(summary);
         if (!Objects.equals(previousConduct, conduct)) {
@@ -143,6 +192,20 @@ public class YearEndService {
                     "Cập nhật hạnh kiểm của học sinh", body, "YEARLY_SUMMARY", saved.getId());
         }
         return saved;
+    }
+
+    /** Tính lại điểm tổng hợp trong phiên điều chỉnh nhưng không tự ý thay đổi kết quả chuyển lớp đã chốt. */
+    @Transactional
+    public StudentYearlySummary refreshOfficialRevision(String academicYearId, String studentId) {
+        StudentYearlySummary summary = summaries.findByAcademicYearIdAndStudentId(academicYearId, studentId)
+                .orElseThrow(() -> ApiException.notFound("Kết quả tổng kết học sinh"));
+        Evaluation evaluation = evaluateGrades(studentId, summary.getClassId(), structure.listSemesters(academicYearId));
+        summary.setSemesterOneAverage(evaluation.semesterOneAverage());
+        summary.setSemesterTwoAverage(evaluation.semesterTwoAverage());
+        summary.setAverageScore(evaluation.annualAverage());
+        summary.setMissingRequirements(evaluation.missing());
+        summary.setUpdatedAt(Instant.now());
+        return summaries.saveAndFlush(summary);
     }
 
     @Transactional
@@ -161,6 +224,11 @@ public class YearEndService {
                 || s.getMissingRequirements() != null || s.getConductGrade() == null).count();
         if (incomplete > 0) {
             throw ApiException.badRequest("Còn " + incomplete + " học sinh thiếu điểm hoặc hạnh kiểm; chưa thể chốt năm học");
+        }
+        int lockedReportCards = lockedOrPublishedReportCardCount(academicYearId);
+        if (lockedReportCards < list.size()) {
+            throw ApiException.badRequest("Cần khóa đủ " + list.size() + " học bạ trước khi tổng kết năm học; hiện đã khóa "
+                    + lockedReportCards);
         }
         Instant now = Instant.now();
         Set<String> graduatedCohorts = new LinkedHashSet<>();
@@ -216,6 +284,19 @@ public class YearEndService {
         graduatedCohorts.forEach(cohortId -> structure.completeCohortIfEligible(cohortId, now));
         structure.closeYear(academicYearId);
         return summaries.findByAcademicYearIdOrderByStudentName(academicYearId);
+    }
+
+    /** PUBLISHED là trạng thái tiếp theo của LOCKED nên vẫn đáp ứng điều kiện khóa học bạ. */
+    public int lockedOrPublishedReportCardCount(String academicYearId) {
+        Integer count = jdbc.queryForObject(
+                """
+                select count(distinct rc.student_id)
+                from report_cards rc
+                join student_yearly_summaries ys
+                  on ys.academic_year_id=rc.academic_year_id and ys.student_id=rc.student_id
+                where rc.academic_year_id=? and rc.status in ('LOCKED','PUBLISHED')
+                """, Integer.class, academicYearId);
+        return count == null ? 0 : count;
     }
 
     public List<StudentYearlySummary> summaries(String academicYearId) {

@@ -23,13 +23,13 @@ public class WorkloadPlanningController {
 
     @PutMapping("/curriculum-requirements")
     public CurriculumRequirement saveRequirement(@Valid @RequestBody SaveCurriculumRequirementRequest request) {
-        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         return planning.saveRequirement(request);
     }
 
     @DeleteMapping("/curriculum-requirements/{id}")
     public void deleteRequirement(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         planning.deleteRequirement(id);
     }
 
@@ -53,20 +53,20 @@ public class WorkloadPlanningController {
 
     @GetMapping("/teacher-load-registrations")
     public List<TeacherLoadResponse> registrations(@RequestParam String semesterId) {
-        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         return planning.listRegistrations(semesterId);
     }
 
     @PutMapping("/teacher-load-registrations/{id}/status")
     public TeacherLoadResponse review(@PathVariable String id,
                                       @Valid @RequestBody ReviewTeacherLoadRequest request) {
-        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         return planning.review(id, request, CurrentUserHolder.require().id());
     }
 
     @PostMapping("/teaching-assignments/auto-plan")
     public AutoAssignmentPlan autoPlan(@Valid @RequestBody AutoAssignmentRequest request) {
-        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         return planning.plan(request, CurrentUserHolder.require().id());
     }
 }

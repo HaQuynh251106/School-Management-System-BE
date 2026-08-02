@@ -10,6 +10,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -33,6 +34,7 @@ class CriticalBusinessWorkflowE2ETest {
 
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper json;
+    @Autowired JdbcTemplate jdbc;
 
     @Test
     @DisplayName("API trả lỗi nghiệp vụ rõ ràng khi JSON không hợp lệ")
@@ -69,6 +71,87 @@ class CriticalBusinessWorkflowE2ETest {
                                 {"id":"ay-e2e-denied","code":"2098-2099","name":"Không được tạo",
                                  "startDate":"2098-08-15","endDate":"2099-05-31"}
                                 """))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("Học bạ chỉ hiển thị cho đúng vai trò và chỉ công khai sau khi phát hành")
+    void reportCardWorkflowProtectsUnpublishedStudentRecords() throws Exception {
+        String academicStaff = login("giaovu", "Giaovu123@@");
+        String teacher = login("gv.nguyenminh", "nguyenminh123@");
+        String student = login("hs.nguyenminhan", "nguyenminhanh123@@");
+        String parent = login("ph.nguyenvanhung", "nguyenvanhung123@");
+        String accountant = login("ketoan", "Ketoan123@@");
+
+        JsonNode cards = response(get("/report-cards")
+                        .queryParam("academicYearId", "ay-2026")
+                        .header("Authorization", bearer(academicStaff)), 200);
+        String cardId = cards.get(0).path("id").asText();
+        org.assertj.core.api.Assertions.assertThat(cards.get(0).path("status").asText()).isEqualTo("DRAFT");
+
+        mvc.perform(get("/report-cards/overview")
+                        .queryParam("academicYearId", "ay-2026")
+                        .header("Authorization", bearer(academicStaff)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.classCount").isNumber())
+                .andExpect(jsonPath("$.studentCount").isNumber());
+        mvc.perform(get("/report-cards/classes")
+                        .queryParam("academicYearId", "ay-2026")
+                        .header("Authorization", bearer(academicStaff)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].classId").isNotEmpty())
+                .andExpect(jsonPath("$[0].studentCount").isNumber());
+        mvc.perform(get("/report-cards/students")
+                        .queryParam("academicYearId", "ay-2026")
+                        .queryParam("classId", "c-10a1")
+                        .queryParam("page", "0")
+                        .queryParam("size", "5")
+                        .header("Authorization", bearer(academicStaff)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items").isArray())
+                .andExpect(jsonPath("$.page").value(0))
+                .andExpect(jsonPath("$.size").value(5));
+
+        jdbc.update("update report_cards set status='HOMEROOM_SUBMITTED' where id=?", cardId);
+        mvc.perform(post("/report-cards/u-student-1/approve")
+                        .queryParam("academicYearId", "ay-2026")
+                        .header("Authorization", bearer(academicStaff))
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPROVED"));
+        mvc.perform(post("/report-cards/u-student-1/publish")
+                        .queryParam("academicYearId", "ay-2026")
+                        .header("Authorization", bearer(academicStaff))
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isConflict());
+
+        mvc.perform(get("/report-cards")
+                        .queryParam("academicYearId", "ay-2026")
+                        .header("Authorization", bearer(teacher)))
+                .andExpect(status().isOk());
+        mvc.perform(get("/report-cards/students")
+                        .queryParam("academicYearId", "ay-2026")
+                        .queryParam("classId", "c-10a1")
+                        .header("Authorization", bearer(teacher)))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/report-cards/u-student-1")
+                        .queryParam("academicYearId", "ay-2026")
+                        .header("Authorization", bearer(student)))
+                .andExpect(status().isNotFound());
+
+        mvc.perform(get("/report-cards/u-student-1")
+                        .queryParam("academicYearId", "ay-2026")
+                        .header("Authorization", bearer(parent)))
+                .andExpect(status().isNotFound());
+
+        mvc.perform(get("/report-cards")
+                        .queryParam("academicYearId", "ay-2026")
+                        .header("Authorization", bearer(accountant)))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/report-cards/overview")
+                        .queryParam("academicYearId", "ay-2026")
+                        .header("Authorization", bearer(accountant)))
                 .andExpect(status().isForbidden());
     }
 

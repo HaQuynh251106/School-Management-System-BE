@@ -170,12 +170,21 @@ public class NotificationController {
 
     private void assertAdminAnnouncement(CreateAnnouncementRequest request) {
         String category = request.category() == null ? "GENERAL" : request.category().toUpperCase();
-        if (!Set.of("GENERAL", "HOLIDAY", "EVENT", "PARENT_MEETING").contains(category)) {
-            throw ApiException.forbidden("Quản trị viên chỉ gửi thông báo chung, nghỉ lễ, sự kiện và họp phụ huynh");
+        if (!Set.of("GENERAL", "HOLIDAY_EVENT", "ADMINISTRATIVE", "MEETING", "EMERGENCY",
+                "HOLIDAY", "EVENT", "PARENT_MEETING").contains(category)) {
+            throw ApiException.forbidden("Admin chỉ gửi thông báo chung, nghỉ lễ/sự kiện, hành chính, họp chung và khẩn cấp");
         }
         String audience = normalizeAudience(request.audience());
         if (audience.startsWith("CLASS")) {
             throw ApiException.forbidden("Thông báo theo lớp thuộc trách nhiệm của giáo viên phụ trách");
+        }
+        boolean hasStart = request.holidayStartDate() != null;
+        boolean hasEnd = request.holidayEndDate() != null;
+        if (hasStart != hasEnd) {
+            throw ApiException.badRequest("Cần chọn đồng thời ngày bắt đầu và kết thúc nghỉ");
+        }
+        if ((hasStart || hasEnd) && !Set.of("HOLIDAY_EVENT", "HOLIDAY").contains(category)) {
+            throw ApiException.forbidden("Chỉ nhóm Nghỉ lễ & sự kiện mới được tạo lịch nghỉ");
         }
     }
 

@@ -19,7 +19,7 @@ public class Announcement {
     private Instant createdAt;
     private String createdBy;
     private String audience;    // ALL | PARENT | STUDENT | TEACHER | CLASS:<classId>
-    private String category;    // GENERAL | HOLIDAY | GRADE | EVENT | STUDENT_STATUS | ATTENDANCE | PARENT_MEETING
+    private String category;    // Admin: GENERAL | HOLIDAY_EVENT | ADMINISTRATIVE | MEETING | EMERGENCY; teacher/system categories remain separate.
     private String priority;    // NORMAL | IMPORTANT | URGENT
     private String status;      // SENT
     private int recipientCount;

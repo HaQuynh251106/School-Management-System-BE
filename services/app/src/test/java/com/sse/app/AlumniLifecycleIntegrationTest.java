@@ -7,6 +7,7 @@ import com.sse.app.academic.structure.StructureService;
 import com.sse.app.identity.AlumniService;
 import com.sse.app.identity.IdentityDtos.CreateUserRequest;
 import com.sse.app.identity.UserService;
+import com.sse.app.common.ApiException;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -17,6 +18,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @SpringBootTest(properties = {
         "spring.datasource.url=jdbc:h2:mem:alumni-lifecycle;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE",
@@ -73,9 +75,33 @@ class AlumniLifecycleIntegrationTest {
             assertThat(record.cohortId()).isEqualTo(cohortId);
         });
 
+        var alumniClasses = alumni.classes(cohortId, year.getId());
+        assertThat(alumniClasses).singleElement().satisfies(item -> {
+            assertThat(item.classId()).isEqualTo(schoolClass.getId());
+            assertThat(item.classCode()).isEqualTo("12A1-TEST");
+            assertThat(item.studentCount()).isEqualTo(1);
+        });
+        assertThat(alumni.currentClasses()).extracting("classId").contains(schoolClass.getId());
+        assertThat(alumni.archivedClasses(null, null)).isEmpty();
+        assertThat(alumni.page(null, cohortId, year.getId(), schoolClass.getId(), 0, 20).totalElements())
+                .isEqualTo(1);
+
         assertThat(users.list("STUDENT", null, null)).noneMatch(item -> item.id().equals(student.id()));
         assertThat(intakePlacement.candidates(year.getId(), "K10"))
                 .noneMatch(item -> item.id().equals(student.id()));
         assertThat(users.getById(student.id()).getId()).isEqualTo(student.id());
+    }
+
+    @Test
+    void closedAcademicYearCannotBeUsedForNewIntakePlacement() {
+        var year = structure.createYear(new CreateAcademicYearRequest(
+                "ay-closed-intake-test", "2032-2033", "Năm học 2032-2033",
+                LocalDate.of(2032, 8, 15), LocalDate.of(2033, 5, 31), "PLANNED"));
+        jdbc.update("update academic_years set status='CLOSED' where id=?", year.getId());
+
+        assertThatThrownBy(() -> intakePlacement.candidates(year.getId(), "K10"))
+                .isInstanceOf(ApiException.class)
+                .hasMessageContaining("đã đóng")
+                .hasMessageContaining("chỉ được phép tra cứu lịch sử");
     }
 }

@@ -14,7 +14,9 @@ import com.sse.app.academic.assignment.AssignmentService;
 import com.sse.app.academic.timetable.TeachingAssignmentService;
 import com.sse.app.identity.UserDto;
 import com.sse.app.security.CurrentUser;
+import com.sse.app.common.ApiException;
 import org.springframework.stereotype.Service;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.*;
 
@@ -31,11 +33,12 @@ public class ReportService {
     private final AssignmentService assignments;
     private final TeachingAssignmentService teachingAssignments;
     private final GradeCalculationService gradeCalculations;
+    private final JdbcTemplate jdbc;
 
     public ReportService(GradeService grades, AttendanceService attendance, FinanceService finance,
                          UserService users, StructureService structure, YearEndService yearEnd,
                          AssignmentService assignments, TeachingAssignmentService teachingAssignments,
-                         GradeCalculationService gradeCalculations) {
+                         GradeCalculationService gradeCalculations, JdbcTemplate jdbc) {
         this.grades = grades;
         this.attendance = attendance;
         this.finance = finance;
@@ -45,6 +48,7 @@ public class ReportService {
         this.assignments = assignments;
         this.teachingAssignments = teachingAssignments;
         this.gradeCalculations = gradeCalculations;
+        this.jdbc = jdbc;
     }
 
     public Map<String, Object> overview() {
@@ -59,20 +63,38 @@ public class ReportService {
     }
 
     public List<Map<String, Object>> gradeDistribution(String semesterId, String classId, String subjectId) {
+        return gradeDistribution(null, semesterId, classId, subjectId);
+    }
+
+    public List<Map<String, Object>> gradeDistribution(String academicYearId, String semesterId,
+                                                        String classId, String subjectId) {
+        ReportScope scope = validateScope(academicYearId, semesterId, classId);
         int[] bands = new int[4]; // <5, 5-6.4, 6.5-7.9, 8-10
-        Set<String> classStudentIds = classId == null || classId.isBlank() ? null : users.list("STUDENT", null, classId)
-                .stream().map(UserDto::id).collect(java.util.stream.Collectors.toSet());
-        for (Grade g : grades.allGrades()) {
-            if (semesterId != null && !semesterId.equals(g.getSemesterId())) continue;
-            if (subjectId != null && !subjectId.isBlank() && !subjectId.equals(g.getSubjectId())) continue;
-            if (classStudentIds != null && !classStudentIds.contains(g.getStudentId())) continue;
-            Double s = g.getScore();
-            if (s == null) continue;
-            if (s < 5) bands[0]++;
-            else if (s < 6.5) bands[1]++;
-            else if (s < 8) bands[2]++;
-            else bands[3]++;
+        StringBuilder sql = new StringBuilder("""
+                select case when g.score < 5 then 0 when g.score < 6.5 then 1
+                            when g.score < 8 then 2 else 3 end score_band,
+                       count(*) total
+                from grades g where g.score is not null
+                """);
+        List<Object> args = new ArrayList<>();
+        if (!scope.semesterIds().isEmpty()) {
+            sql.append(" and g.semester_id in (")
+                    .append(String.join(",", Collections.nCopies(scope.semesterIds().size(), "?"))).append(')');
+            args.addAll(scope.semesterIds());
         }
+        if (subjectId != null && !subjectId.isBlank()) {
+            sql.append(" and g.subject_id=?");
+            args.add(subjectId);
+        }
+        if (classId != null && !classId.isBlank()) {
+            sql.append(" and exists (select 1 from class_enrollments ce where ce.student_id=g.student_id")
+                    .append(" and ce.class_id=? and ce.status<>'ROLLED_BACK')");
+            args.add(classId);
+        }
+        sql.append(" group by score_band");
+        jdbc.query(sql.toString(), rs -> {
+            while (rs.next()) bands[rs.getInt("score_band")] = rs.getInt("total");
+        }, args.toArray());
         String[] labels = {"0–4.9", "5–6.4", "6.5–7.9", "8–10"};
         List<Map<String, Object>> out = new ArrayList<>();
         for (int i = 0; i < 4; i++) {
@@ -85,19 +107,28 @@ public class ReportService {
     }
 
     public Map<String, Object> attendanceSummary(String classId, java.time.LocalDate startDate, java.time.LocalDate endDate) {
-        long present = 0, late = 0, excused = 0, unexcused = 0;
-        for (AttendanceRecord r : attendance.allRecords()) {
-            if (classId != null && !classId.isBlank() && !classId.equals(r.getClassId())) continue;
-            if (startDate != null && r.getDate().isBefore(startDate)) continue;
-            if (endDate != null && r.getDate().isAfter(endDate)) continue;
-            switch (r.getStatus() == null ? "" : r.getStatus()) {
-                case "PRESENT" -> present++;
-                case "LATE" -> late++;
-                case "ABSENT_EXCUSED" -> excused++;
-                case "ABSENT_UNEXCUSED" -> unexcused++;
-                default -> { }
-            }
-        }
+        return attendanceSummary(null, classId, startDate, endDate);
+    }
+
+    public Map<String, Object> attendanceSummary(String academicYearId, String classId,
+                                                  java.time.LocalDate startDate, java.time.LocalDate endDate) {
+        ReportScope scope = validateScope(academicYearId, null, classId);
+        java.time.LocalDate effectiveStart = startDate != null ? startDate : scope.startDate();
+        java.time.LocalDate effectiveEnd = endDate != null ? endDate : scope.endDate();
+        StringBuilder sql = new StringBuilder("select status,count(*) total from attendance_records where 1=1");
+        List<Object> args = new ArrayList<>();
+        if (classId != null && !classId.isBlank()) { sql.append(" and class_id=?"); args.add(classId); }
+        if (effectiveStart != null) { sql.append(" and date>=?"); args.add(effectiveStart); }
+        if (effectiveEnd != null) { sql.append(" and date<=?"); args.add(effectiveEnd); }
+        sql.append(" group by status");
+        Map<String, Long> counts = new HashMap<>();
+        jdbc.query(sql.toString(), rs -> {
+            while (rs.next()) counts.put(rs.getString("status"), rs.getLong("total"));
+        }, args.toArray());
+        long present = counts.getOrDefault("PRESENT", 0L);
+        long late = counts.getOrDefault("LATE", 0L);
+        long excused = counts.getOrDefault("ABSENT_EXCUSED", 0L);
+        long unexcused = counts.getOrDefault("ABSENT_UNEXCUSED", 0L);
         long total = present + late + excused + unexcused;
         double rate = total == 0 ? 0 : Math.round((present + late * 0.5) / total * 1000) / 10.0;
         Map<String, Object> m = new LinkedHashMap<>();
@@ -132,16 +163,21 @@ public class ReportService {
 
     public String exportCsv(String type, String semesterId, String classId, String subjectId,
                             java.time.LocalDate startDate, java.time.LocalDate endDate, String periodId) {
+        return exportCsv(type, null, semesterId, classId, subjectId, startDate, endDate, periodId);
+    }
+
+    public String exportCsv(String type, String academicYearId, String semesterId, String classId, String subjectId,
+                            java.time.LocalDate startDate, java.time.LocalDate endDate, String periodId) {
         StringBuilder csv = new StringBuilder("\uFEFF");
         switch (type == null ? "overview" : type.toLowerCase()) {
             case "grades" -> {
                 csv.append("Khoảng điểm,Số kết quả\n");
-                gradeDistribution(semesterId, classId, subjectId).forEach(row -> csv.append(cell(row.get("band"))).append(',')
+                gradeDistribution(academicYearId, semesterId, classId, subjectId).forEach(row -> csv.append(cell(row.get("band"))).append(',')
                         .append(cell(row.get("count"))).append('\n'));
             }
             case "attendance" -> {
                 csv.append("Trạng thái,Số lượt\n");
-                Map<String, Object> data = attendanceSummary(classId, startDate, endDate);
+                Map<String, Object> data = attendanceSummary(academicYearId, classId, startDate, endDate);
                 csv.append("Có mặt,").append(data.get("present")).append('\n')
                         .append("Đi muộn,").append(data.get("late")).append('\n')
                         .append("Vắng có phép,").append(data.get("absentExcused")).append('\n')
@@ -159,6 +195,43 @@ public class ReportService {
         }
         return csv.toString();
     }
+
+    private ReportScope validateScope(String academicYearId, String semesterId, String classId) {
+        String yearId = clean(academicYearId);
+        String semId = clean(semesterId);
+        String targetClassId = clean(classId);
+        java.time.LocalDate start = null;
+        java.time.LocalDate end = null;
+        Set<String> semesterIds = new LinkedHashSet<>();
+        if (yearId != null) {
+            var year = structure.getYear(yearId);
+            start = year.getStartDate();
+            end = year.getEndDate();
+            structure.listSemesters(yearId).forEach(item -> semesterIds.add(item.getId()));
+        }
+        if (semId != null) {
+            var semester = structure.getSemester(semId);
+            if (yearId != null && !yearId.equals(semester.getAcademicYearId())) {
+                throw ApiException.badRequest("Học kỳ không thuộc năm học đã chọn");
+            }
+            semesterIds.clear();
+            semesterIds.add(semId);
+        }
+        if (targetClassId != null) {
+            var schoolClass = structure.getClass(targetClassId);
+            if (yearId != null && !yearId.equals(schoolClass.getAcademicYearId())) {
+                throw ApiException.badRequest("Lớp không thuộc năm học đã chọn");
+            }
+        }
+        return new ReportScope(semesterIds, start, end);
+    }
+
+    private String clean(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private record ReportScope(Set<String> semesterIds, java.time.LocalDate startDate,
+                               java.time.LocalDate endDate) {}
 
     public Map<String, Object> personalOverview(CurrentUser actor, String childId) {
         Set<String> studentIds = scopedStudentIds(actor, childId);

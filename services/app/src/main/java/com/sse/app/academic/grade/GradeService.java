@@ -33,11 +33,13 @@ public class GradeService {
     private final TeachingAssignmentService teachingAssignments;
     private final UserService users;
     private final NotificationService notifications;
+    private final GradebookCompletionService completions;
 
     public GradeService(GradeRepository grades, GradeChangeLogRepository logs,
                         ExamCategoryRepository categories, StructureService structure,
                         TeachingAssignmentService teachingAssignments,
-                        UserService users, NotificationService notifications) {
+                        UserService users, NotificationService notifications,
+                        GradebookCompletionService completions) {
         this.grades = grades;
         this.logs = logs;
         this.categories = categories;
@@ -45,6 +47,7 @@ public class GradeService {
         this.teachingAssignments = teachingAssignments;
         this.users = users;
         this.notifications = notifications;
+        this.completions = completions;
     }
 
     public Grade get(String id) {
@@ -108,6 +111,8 @@ public class GradeService {
         ExamCategory category = requireCategory(categoryCode, assessmentIndex);
         User targetStudent = users.getById(req.studentId());
         String subjectId = resolveSubjectId(actorId, actorRole, targetStudent.getClassId(), req.semesterId(), req.subjectId());
+        completions.assertSemesterWritableOrOfficialRevision(req.semesterId(), targetStudent.getClassId(), subjectId);
+        completions.assertWritable(req.semesterId(), targetStudent.getClassId(), subjectId);
         String subjectName = validateTarget(actorId, actorRole, req.studentId(), targetStudent.getClassId(), subjectId, req.semesterId());
         validateScore(req.score(), req.studentId());
 
@@ -132,6 +137,9 @@ public class GradeService {
     @Transactional
     public Grade update(String id, UpdateGradeRequest req, String actorId, String actorRole) {
         Grade grade = get(id);
+        User targetStudent = users.getById(grade.getStudentId());
+        completions.assertSemesterWritableOrOfficialRevision(grade.getSemesterId(), targetStudent.getClassId(), grade.getSubjectId());
+        completions.assertWritable(grade.getSemesterId(), targetStudent.getClassId(), grade.getSubjectId());
         validateTarget(actorId, actorRole, grade.getStudentId(), null, grade.getSubjectId(), grade.getSemesterId());
         validateScore(req.score(), grade.getStudentId());
         assertVersion(grade, req.expectedVersion());
@@ -171,8 +179,9 @@ public class GradeService {
         String categoryCode = normalizeCategory(req.category());
         int assessmentIndex = normalizeAssessmentIndex(req.assessmentIndex());
         ExamCategory examCategory = requireCategory(categoryCode, assessmentIndex);
-        structure.assertSemesterWritable(req.semesterId());
         String subjectId = resolveSubjectId(changedBy, actorRole, req.classId(), req.semesterId(), req.subjectId());
+        completions.assertSemesterWritableOrOfficialRevision(req.semesterId(), req.classId(), subjectId);
+        completions.assertWritable(req.semesterId(), req.classId(), subjectId);
         String subjectName = structure.requireSubjectName(subjectId);
 
         Set<String> studentIds = new HashSet<>();

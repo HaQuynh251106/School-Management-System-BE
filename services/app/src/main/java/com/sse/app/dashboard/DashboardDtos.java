@@ -72,22 +72,62 @@ public final class DashboardDtos {
             List<WorkItem> workItems
     ) {}
 
+    public record TeacherLesson(
+            String slotId,
+            int periodNo,
+            String startTime,
+            String endTime,
+            String classId,
+            String classCode,
+            String subjectId,
+            String subjectName,
+            String roomCode,
+            String status,
+            boolean attendanceRecorded
+    ) {}
+
+    public record AttentionStudent(
+            String studentId,
+            String studentCode,
+            String studentName,
+            String classId,
+            String classCode,
+            int attendanceAlerts,
+            int missingAssignments,
+            Double subjectAverage,
+            String severity,
+            String reason
+    ) {}
+
+    public record TeacherOverview(
+            boolean homeroomTeacher,
+            List<String> homeroomClassCodes,
+            List<TeacherLesson> todayLessons,
+            List<AttentionStudent> attentionStudents
+    ) {}
+
     public record Response(
             List<Metric> metrics,
             List<Chart> charts,
             AdminOverview adminOverview,
-            RoleOverview roleOverview
+            RoleOverview roleOverview,
+            TeacherOverview teacherOverview
     ) {
         public Response(List<Metric> metrics, List<Chart> charts) {
-            this(metrics, charts, null, null);
+            this(metrics, charts, null, null, null);
         }
 
         public Response(List<Metric> metrics, List<Chart> charts, AdminOverview adminOverview) {
-            this(metrics, charts, adminOverview, null);
+            this(metrics, charts, adminOverview, null, null);
         }
 
         public Response(List<Metric> metrics, List<Chart> charts, RoleOverview roleOverview) {
-            this(metrics, charts, null, roleOverview);
+            this(metrics, charts, null, roleOverview, null);
+        }
+
+        public Response(List<Metric> metrics, List<Chart> charts, RoleOverview roleOverview,
+                        TeacherOverview teacherOverview) {
+            this(metrics, charts, null, roleOverview, teacherOverview);
         }
     }
 }

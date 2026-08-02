@@ -1823,7 +1823,11 @@ public class ExamService {
     }
 
     private void validatePeriod(SavePeriodRequest r, String ignoredId) {
-        structure.getYear(r.academicYearId()); Semester sem = structure.getSemester(r.semesterId());
+        AcademicYear year = structure.getYear(r.academicYearId());
+        Semester sem = structure.getSemester(r.semesterId());
+        if ("CLOSED".equals(year.getStatus()) || "CLOSED".equals(sem.getStatus())) {
+            throw ApiException.conflict("Năm học hoặc học kỳ đã đóng chỉ được phép tra cứu lịch sử, không thể tạo hay chỉnh sửa kỳ thi");
+        }
         if (!r.academicYearId().equals(sem.getAcademicYearId())) throw ApiException.badRequest("Học kỳ không thuộc năm học");
         if (r.endDate().isBefore(r.startDate())) throw ApiException.badRequest("Ngày kết thúc phải sau ngày bắt đầu");
         periods.findByCode(r.code().trim().toUpperCase()).filter(p -> !p.getId().equals(ignoredId))
@@ -1837,6 +1841,10 @@ public class ExamService {
         if (requestedClasses.size() != r.classIds().size()) throw ApiException.badRequest("Danh sách lớp bị trùng");
         for (String classId : requestedClasses) {
             SchoolClass schoolClass = structure.getClass(classId);
+            if (!period.getAcademicYearId().equals(schoolClass.getAcademicYearId())) {
+                throw ApiException.badRequest("Lớp " + schoolClass.getCode()
+                        + " không thuộc năm học của kỳ thi");
+            }
             if (period.getGradeLevel() != null && !period.getGradeLevel().equals(schoolClass.getGradeLevel()))
                 throw ApiException.badRequest("Lớp " + schoolClass.getCode() + " không thuộc khối áp dụng của kỳ thi");
         }

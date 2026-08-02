@@ -185,6 +185,7 @@ public class IntakeClassPlacementService {
 
     @Transactional
     public UndoResponse undoLast(UndoRequest request, String actorId) {
+        requireScope(request.academicYearId(), request.gradeLevel());
         RunRow run = jdbc.query("select id,created_class_ids from class_placement_runs where academic_year_id=? and grade_level=? and status='APPLIED' order by created_at desc limit 1",
                 (rs, rowNum) -> new RunRow(rs.getString("id"), rs.getString("created_class_ids")),
                 request.academicYearId(), request.gradeLevel()).stream().findFirst()
@@ -291,7 +292,11 @@ public class IntakeClassPlacementService {
     }
 
     private void requireScope(String academicYearId, String gradeLevel) {
-        if (!years.existsById(academicYearId)) throw ApiException.notFound("Năm học");
+        AcademicYear year = years.findById(academicYearId).orElseThrow(() -> ApiException.notFound("Năm học"));
+        if ("CLOSED".equals(year.getStatus())) {
+            throw ApiException.conflict("Năm học " + year.getCode()
+                    + " đã đóng và chỉ được phép tra cứu lịch sử. Vui lòng chọn năm học đang hoạt động hoặc sắp diễn ra.");
+        }
         if (gradeLevel == null || gradeLevel.isBlank()) throw ApiException.badRequest("Vui lòng chọn khối cần phân lớp");
     }
 

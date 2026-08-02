@@ -149,6 +149,9 @@ class ExamSeatingPlanIntegrationTest {
         ExamRoom lockedRoom = examRooms.stream().filter(room -> "PROCTOR-A".equals(room.getRoomCode())).findFirst().orElseThrow();
         ExamRoom openRoom = examRooms.stream().filter(room -> "PROCTOR-B".equals(room.getRoomCode())).findFirst().orElseThrow();
         exams.saveRoom("es-proctor", new SaveRoomRequest(lockedRoom.getId(), "PROCTOR-A", 30, "u-teacher-1", null));
+        ApiException duplicateProctor = assertThrows(ApiException.class, () -> exams.saveRoom("es-proctor",
+                new SaveRoomRequest(openRoom.getId(), "PROCTOR-B", 30, "u-teacher-1", null)));
+        assertEquals(409, duplicateProctor.getStatus().value());
         assertTrue(exams.examDayPolicy("es-proctor").regularClassesSuspended());
         ExamRoomAvailability unavailable = exams.roomAvailability("es-proctor").stream()
                 .filter(room -> "PROCTOR-C".equals(room.roomCode())).findFirst().orElseThrow();

@@ -363,10 +363,13 @@ public class NotificationService {
     public Announcement createAnnouncement(CreateAnnouncementRequest r, String createdBy) {
         String audience = normalizeAudience(r.audience());
         String category = r.category() == null ? "GENERAL" : r.category().toUpperCase();
-        String priority = r.priority() == null ? "NORMAL" : r.priority().toUpperCase();
+        String priority = "EMERGENCY".equals(category)
+                ? "URGENT" : r.priority() == null ? "NORMAL" : r.priority().toUpperCase();
         LocalDate holidayStartDate = null;
         LocalDate holidayEndDate = null;
-        if ("HOLIDAY".equals(category)) {
+        boolean isHoliday = ("HOLIDAY_EVENT".equals(category) || "HOLIDAY".equals(category))
+                && (r.holidayStartDate() != null || r.holidayEndDate() != null);
+        if (isHoliday) {
             if (!"ALL".equals(audience)) {
                 throw ApiException.badRequest("Thông báo nghỉ lễ phải gửi tới toàn trường");
             }
@@ -395,13 +398,17 @@ public class NotificationService {
 
     public Optional<Announcement> schoolHolidayOn(LocalDate date) {
         if (date == null) return Optional.empty();
-        return announcements
+        Optional<Announcement> current = announcements
+                .findFirstByCategoryAndAudienceAndHolidayStartDateLessThanEqualAndHolidayEndDateGreaterThanEqualOrderByCreatedAtDesc(
+                        "HOLIDAY_EVENT", "ALL", date, date);
+        return current.isPresent() ? current : announcements
                 .findFirstByCategoryAndAudienceAndHolidayStartDateLessThanEqualAndHolidayEndDateGreaterThanEqualOrderByCreatedAtDesc(
                         "HOLIDAY", "ALL", date, date);
     }
 
     public List<Announcement> adminAnnouncements() {
-        Set<String> adminCategories = Set.of("GENERAL", "HOLIDAY", "EVENT", "PARENT_MEETING");
+        Set<String> adminCategories = Set.of("GENERAL", "HOLIDAY_EVENT", "ADMINISTRATIVE", "MEETING", "EMERGENCY",
+                "HOLIDAY", "EVENT", "PARENT_MEETING");
         return announcements.findAllByOrderByCreatedAtDesc().stream()
                 .filter(item -> adminCategories.contains(item.getCategory() == null ? "GENERAL" : item.getCategory()))
                 .toList();

@@ -64,6 +64,11 @@ public class YearRolloverService {
         if (classes.isEmpty()) blockers.add("Năm học chưa có lớp");
         if (summaries.isEmpty()) blockers.add("Năm học chưa có học sinh để tổng kết");
         if (incomplete > 0) blockers.add("Còn " + incomplete + " học sinh thiếu điểm hoặc hạnh kiểm");
+        int finalizedReportCards = yearEnd.lockedOrPublishedReportCardCount(academicYearId);
+        if (!summaries.isEmpty() && finalizedReportCards < summaries.size()) {
+            blockers.add("Cần khóa hoặc phát hành đủ " + summaries.size()
+                    + " học bạ; hiện đã hoàn thành " + finalizedReportCards);
+        }
 
         return new RolloverPreview(year.getId(), year.getCode(), year.getStatus(), semesters.size(), classes.size(),
                 summaries.size(), ready, incomplete, promoted, retained, graduated,

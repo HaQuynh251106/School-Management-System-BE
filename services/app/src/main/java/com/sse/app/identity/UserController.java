@@ -1,6 +1,7 @@
 package com.sse.app.identity;
 
 import com.sse.app.identity.IdentityDtos.*;
+import com.sse.app.audit.AuditService;
 import com.sse.app.common.ApiException;
 import com.sse.app.common.PageResponse;
 import com.sse.app.security.CurrentUserHolder;
@@ -22,11 +23,14 @@ public class UserController {
     private final UserService users;
     private final UserImportService imports;
     private final LoginHistoryService loginHistory;
+    private final AuditService audit;
 
-    public UserController(UserService users, UserImportService imports, LoginHistoryService loginHistory) {
+    public UserController(UserService users, UserImportService imports, LoginHistoryService loginHistory,
+                          AuditService audit) {
         this.users = users;
         this.imports = imports;
         this.loginHistory = loginHistory;
+        this.audit = audit;
     }
 
     @GetMapping
@@ -34,10 +38,17 @@ public class UserController {
                               @RequestParam(required = false) String q,
                               @RequestParam(required = false) String classId) {
         CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF", "TEACHER");
+        // This legacy endpoint is only used by compact selectors. Return the
+        // privacy-safe, bounded projection; full management data is available
+        // through the paginated /users/page endpoint.
+        // The parent-by-class exception remains a small, explicitly scoped
+        // administrative relationship view and therefore includes child IDs.
         var current = CurrentUserHolder.require();
-        return current.canManageAcademics()
-                ? users.list(role, q, classId)
-                : users.listSummaries(role, q, classId);
+        if (current.canManageAcademics() && "PARENT".equalsIgnoreCase(role)
+                && classId != null && !classId.isBlank()) {
+            return users.list(role, q, classId);
+        }
+        return users.listSummaries(role, q, classId);
     }
 
     @GetMapping("/page")
@@ -72,6 +83,7 @@ public class UserController {
     @PostMapping
     public UserDto create(@Valid @RequestBody CreateUserRequest req) {
         CurrentUserHolder.requireRole("ADMIN");
+        assertAdminAccountFields(req.role(), req.classId(), req.className(), req.mainSubject());
         return users.create(req);
     }
 
@@ -114,13 +126,24 @@ public class UserController {
     @PostMapping("/{id}/children")
     public UserDto linkChild(@PathVariable String id, @Valid @RequestBody LinkChildRequest req) {
         CurrentUserHolder.requireRole("ADMIN");
-        return users.linkChild(id, req.studentId(), Boolean.TRUE.equals(req.primaryContact()));
+        requireConfirmedException(req.confirmException(), req.reason());
+        var actor = CurrentUserHolder.require();
+        UserDto result = users.linkChild(id, req.studentId(), Boolean.TRUE.equals(req.primaryContact()));
+        audit.record(actor.id(), actor.username(), actor.role(), "LINK_EXCEPTION", "identity",
+                "parent_student", id + ":" + req.studentId(), req.reason().trim());
+        return result;
     }
 
     @DeleteMapping("/{id}/children/{studentId}")
-    public void unlinkChild(@PathVariable String id, @PathVariable String studentId) {
+    public void unlinkChild(@PathVariable String id, @PathVariable String studentId,
+                            @RequestParam(defaultValue = "false") boolean confirmException,
+                            @RequestParam String reason) {
         CurrentUserHolder.requireRole("ADMIN");
+        requireConfirmedException(confirmException, reason);
         users.unlinkChild(id, studentId);
+        var actor = CurrentUserHolder.require();
+        audit.record(actor.id(), actor.username(), actor.role(), "UNLINK_EXCEPTION", "identity",
+                "parent_student", id + ":" + studentId, reason.trim());
     }
 
     @GetMapping("/{id}/login-history")
@@ -133,7 +156,16 @@ public class UserController {
     @PutMapping("/{id}")
     public UserDto update(@PathVariable String id, @RequestBody UpdateUserRequest req) {
         CurrentUserHolder.requireRole("ADMIN");
+        UserDto current = users.dtoById(id);
+        assertAdminAccountFields(current.role(), req.classId(), req.className(), req.mainSubject());
         return users.update(id, req);
+    }
+
+    @PutMapping("/{id}/specialization")
+    public UserDto updateTeacherSpecialization(@PathVariable String id,
+                                                @Valid @RequestBody UpdateTeacherSpecializationRequest req) {
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
+        return users.updateTeacherSpecialization(id, req.mainSubject());
     }
 
     @PostMapping("/{id}/lock")
@@ -154,5 +186,27 @@ public class UserController {
         CurrentUserHolder.requireRole("ADMIN");
         String pwd = users.adminResetPassword(id, req == null ? null : req.newPassword());
         return Map.of("ok", true, "password", pwd);
+    }
+
+    private void assertAdminAccountFields(String role, String classId, String className, String mainSubject) {
+        if ("STUDENT".equals(role) && (hasValue(classId) || hasValue(className))) {
+            throw ApiException.forbidden("Admin chỉ tạo tài khoản học sinh ở trạng thái Chờ phân lớp; Giáo vụ chịu trách nhiệm phân lớp");
+        }
+        if ("TEACHER".equals(role) && hasValue(mainSubject)) {
+            throw ApiException.forbidden("Chuyên môn giáo viên do Giáo vụ chuẩn hóa");
+        }
+    }
+
+    private void requireConfirmedException(Boolean confirmed, String reason) {
+        if (!Boolean.TRUE.equals(confirmed)) {
+            throw ApiException.forbidden("Liên kết thủ công chỉ dành cho ngoại lệ đã được xác nhận");
+        }
+        if (reason == null || reason.trim().length() < 10) {
+            throw ApiException.badRequest("Cần ghi lý do xử lý ngoại lệ tối thiểu 10 ký tự");
+        }
+    }
+
+    private boolean hasValue(String value) {
+        return value != null && !value.isBlank();
     }
 }

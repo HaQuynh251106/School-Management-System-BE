@@ -44,7 +44,7 @@ public class AttendanceController {
             if (slotId == null || slotId.isBlank()) {
                 throw ApiException.badRequest("Giáo viên cần chọn tiết học để xem sổ điểm danh");
             }
-            attendance.assertCanManageSlot(me, slotId);
+            attendance.assertCanManageSlot(me, slotId, date);
         }
         return attendance.list(studentId, classId, slotId, date);
     }
@@ -68,7 +68,7 @@ public class AttendanceController {
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
         CurrentUserHolder.requireRole("TEACHER", "ADMIN");
         CurrentUser me = CurrentUserHolder.require();
-        attendance.assertCanManageSlot(me, slotId);
+        attendance.assertCanManageSlot(me, slotId, date);
         return attendance.sessionStatus(slotId, date);
     }
 

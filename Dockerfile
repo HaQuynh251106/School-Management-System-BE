@@ -22,6 +22,8 @@ RUN groupadd --system sse \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /workspace/services/app/target/sse-app.jar app.jar
+RUN mkdir -p /app/logs \
+    && chown -R sse:sse /app
 USER sse
 EXPOSE 4000
 ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "/app/app.jar"]

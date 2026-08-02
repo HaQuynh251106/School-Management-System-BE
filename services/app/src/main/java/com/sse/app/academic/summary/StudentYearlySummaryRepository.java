@@ -7,5 +7,6 @@ import java.util.Optional;
 
 interface StudentYearlySummaryRepository extends JpaRepository<StudentYearlySummary, String> {
     List<StudentYearlySummary> findByAcademicYearIdOrderByStudentName(String academicYearId);
+    List<StudentYearlySummary> findByAcademicYearIdAndClassIdOrderByStudentName(String academicYearId, String classId);
     Optional<StudentYearlySummary> findByAcademicYearIdAndStudentId(String academicYearId, String studentId);
 }

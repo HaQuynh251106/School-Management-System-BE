@@ -589,8 +589,9 @@ class SecurityIntegrationTest {
     }
 
     @Test
-    void adminCanCreateAndUpdateACompleteStudentProfile() throws Exception {
+    void adminCreatesStudentPendingPlacementAndCannotChangeAcademicFields() throws Exception {
         String admin = login("admin", "admin@123");
+        String academicStaff = login("giaovu", "Giaovu123@@");
 
         mvc.perform(post("/users")
                         .header("Authorization", "Bearer " + admin)
@@ -605,8 +606,6 @@ class SecurityIntegrationTest {
                                   "email":"minhanh@sse.edu.vn",
                                   "phone":"0912345678",
                                   "studentCode":"HS2025099",
-                                  "classId":"c-10a1",
-                                  "className":"10A1",
                                   "dateOfBirth":"2010-11-20",
                                   "gender":"FEMALE",
                                   "placeOfBirth":"Hà Nội",
@@ -620,9 +619,21 @@ class SecurityIntegrationTest {
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.studentCode").value("HS2025099"))
+                .andExpect(jsonPath("$.classId").value(nullValue()))
+                .andExpect(jsonPath("$.studentStatus").value("PENDING_PLACEMENT"))
                 .andExpect(jsonPath("$.dateOfBirth").value("2010-11-20"))
                 .andExpect(jsonPath("$.address").value("20 Nguyễn Trãi, Hà Nội"))
                 .andExpect(jsonPath("$.guardianName").value("Nguyễn Văn Minh"));
+
+        mvc.perform(post("/users")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"username":"hs.duplicate.code","password":"Student@123",
+                                 "fullName":"Học sinh trùng mã","role":"STUDENT",
+                                 "studentCode":"HS2025099"}
+                                """))
+                .andExpect(status().isConflict());
 
         mvc.perform(put("/users/u-student-admin-profile")
                         .header("Authorization", "Bearer " + admin)
@@ -634,11 +645,36 @@ class SecurityIntegrationTest {
                 .andExpect(jsonPath("$.guardianName").value("Nguyễn Thị Hà"))
                 .andExpect(jsonPath("$.guardianPhone").value("0901122334"));
 
+        mvc.perform(put("/users/u-student-admin-profile")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"classId\":\"c-10a1\",\"className\":\"10A1\"}"))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(put("/users/u-teacher-1")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"mainSubject\":\"Toán\"}"))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(post("/users")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"teacher.with.subject\",\"password\":\"Teacher123@@\",\"fullName\":\"Giáo viên sai luồng\",\"role\":\"TEACHER\",\"mainSubject\":\"Toán\"}"))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(put("/users/u-teacher-1/specialization")
+                        .header("Authorization", "Bearer " + academicStaff)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"mainSubject\":\"Toán\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.mainSubject").value("Toán"));
+
         mvc.perform(get("/users/u-student-admin-profile")
                         .header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.fullName").value("Nguyễn Minh Anh"))
-                .andExpect(jsonPath("$.classId").value("c-10a1"))
+                .andExpect(jsonPath("$.classId").value(nullValue()))
                 .andExpect(jsonPath("$.guardianName").value("Nguyễn Thị Hà"));
     }
 
@@ -1351,11 +1387,18 @@ class SecurityIntegrationTest {
     }
 
     @Test
-    void adminCanAssignAnActiveTeacherAsHomeroomTeacher() throws Exception {
+    void academicStaffCanAssignAnActiveTeacherAsHomeroomTeacher() throws Exception {
         String admin = login("admin", "admin@123");
+        String academicStaff = login("giaovu", "Giaovu123@@");
 
         mvc.perform(put("/classes/c-10a1/homeroom-teacher")
                         .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"teacherId\":\"u-teacher-1\"}"))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(put("/classes/c-10a1/homeroom-teacher")
+                        .header("Authorization", "Bearer " + academicStaff)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"teacherId":"u-teacher-1"}
@@ -1364,10 +1407,10 @@ class SecurityIntegrationTest {
                 .andExpect(jsonPath("$.homeroomTeacherId").value("u-teacher-1"))
                 .andExpect(jsonPath("$.homeroomTeacherName").value("Nguyễn Đức Minh"))
                 .andExpect(jsonPath("$.homeroomAssignedAt").isNotEmpty())
-                .andExpect(jsonPath("$.homeroomAssignedBy").value("u-admin-1"));
+                .andExpect(jsonPath("$.homeroomAssignedBy").value("u-academic-staff-1"));
 
         mvc.perform(put("/classes/c-10a2/homeroom-teacher")
-                        .header("Authorization", "Bearer " + admin)
+                        .header("Authorization", "Bearer " + academicStaff)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"teacherId":"u-teacher-1"}
@@ -1411,8 +1454,15 @@ class SecurityIntegrationTest {
         mvc.perform(post("/users/" + parentId + "/children")
                         .header("Authorization", "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"studentId\":\"u-student-1\",\"primaryContact\":false}"))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(post("/users/" + parentId + "/children")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"studentId":"u-student-1","primaryContact":false}
+                                {"studentId":"u-student-1","primaryContact":false,
+                                 "confirmException":true,"reason":"Đối soát hồ sơ giấy bị thiếu mã liên kết"}
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value("u-student-1"));
@@ -1421,6 +1471,192 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].id").value("u-student-1"));
+
+        mvc.perform(get("/audit-logs")
+                        .queryParam("action", "LINK_EXCEPTION")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].detail").value("Đối soát hồ sơ giấy bị thiếu mã liên kết"));
+    }
+
+    @Test
+    void teacherCanKeepLessonDiaryAndAcademicStaffApprovesReschedule() throws Exception {
+        String teacher = login("gv.hoa", "teacher@123");
+        String academicStaff = login("giaovu", "Giaovu123@@");
+
+        mvc.perform(get("/me/teaching-operations")
+                        .queryParam("from", "2026-08-24")
+                        .queryParam("to", "2026-09-30")
+                        .header("Authorization", "Bearer " + teacher))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lessons").isArray())
+                .andExpect(jsonPath("$.changes").isArray());
+
+        mvc.perform(put("/me/lesson-diaries/{slotId}/{date}", "tt-1", "2026-08-24")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"topic":"Ôn tập hàm số","lessonContent":"Hoàn thành nội dung theo kế hoạch",
+                                 "homework":"Bài 1-4","classNote":"Lớp học nghiêm túc",
+                                 "attendanceSummary":"Đã đối soát sổ điểm danh","status":"SUBMITTED"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SUBMITTED"))
+                .andExpect(jsonPath("$.actualTeacherId").value("u-teacher-1"));
+
+        mvc.perform(get("/me/lesson-diaries/{slotId}/{date}", "tt-1", "2026-08-24")
+                        .header("Authorization", "Bearer " + teacher))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.topic").value("Ôn tập hàm số"));
+
+        JsonNode request = body(mvc.perform(post("/me/timetable-change-requests")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"slotId":"tt-1","occurrenceDate":"2026-09-21","requestType":"RESCHEDULE",
+                                 "proposedDate":"2026-09-27","proposedPeriodNo":1,
+                                 "proposedStartTime":"07:00","proposedEndTime":"07:45",
+                                 "proposedRoomCode":"A101","reason":"Tham gia tập huấn chuyên môn"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PENDING"))
+                .andReturn().getResponse().getContentAsString());
+
+        String requestId = request.path("id").asText();
+        mvc.perform(post("/academic/timetable-change-requests/{id}/decision", requestId)
+                        .header("Authorization", "Bearer " + academicStaff)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"approved\":true,\"note\":\"Đã kiểm tra lịch lớp và phòng\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPROVED"));
+
+        mvc.perform(get("/me/teaching-operations")
+                        .queryParam("from", "2026-09-27")
+                        .queryParam("to", "2026-09-27")
+                        .header("Authorization", "Bearer " + teacher))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lessons[0].date").value("2026-09-27"))
+                .andExpect(jsonPath("$.lessons[0].assignmentState").value("RESCHEDULE"));
+    }
+
+    @Test
+    void studentSupportHistorySeparatesSubjectTeacherAndHomeroomResponsibilities() throws Exception {
+        String homeroom = login("gv.hoa", "teacher@123");
+        String subjectTeacher = login("gv.minh", "teacher@123");
+
+        JsonNode homeroomItem = body(mvc.perform(post("/me/student-support")
+                        .header("Authorization", "Bearer " + homeroom)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"studentId":"u-student-1","classId":"c-10a1","category":"BEHAVIOR",
+                                 "severity":"MEDIUM","title":"Cần hỗ trợ duy trì tập trung",
+                                 "description":"Ghi nhận nhiều lần mất tập trung trong giờ học",
+                                 "actionTaken":"Đã trao đổi riêng với học sinh","followUpDate":"2026-09-01",
+                                 "status":"MONITORING"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.familyContactAllowed").value(true))
+                .andReturn().getResponse().getContentAsString());
+
+        String homeroomItemId = homeroomItem.path("id").asText();
+        mvc.perform(post("/me/student-support/{id}/contact-family", homeroomItemId)
+                        .header("Authorization", "Bearer " + homeroom)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"message\":\"GVCN đề nghị gia đình cùng theo dõi thời gian tự học trong tuần này.\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.recipients").value(2));
+
+        mvc.perform(post("/me/student-support")
+                        .header("Authorization", "Bearer " + subjectTeacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"studentId":"u-student-1","classId":"c-10a1","category":"ATTENDANCE",
+                                 "severity":"LOW","title":"Theo dõi chuyên cần","description":"Ghi nhận",
+                                 "status":"OPEN"}
+                                """))
+                .andExpect(status().isForbidden());
+
+        JsonNode subjectItem = body(mvc.perform(post("/me/student-support")
+                        .header("Authorization", "Bearer " + subjectTeacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"studentId":"u-student-1","classId":"c-10a1","category":"ACADEMIC",
+                                 "severity":"HIGH","title":"Cần củng cố kiến thức Vật lý",
+                                 "description":"Chưa hoàn thành hai bài luyện tập gần nhất",
+                                 "actionTaken":"Đã giao bộ câu hỏi bổ trợ","status":"OPEN"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.familyContactAllowed").value(false))
+                .andReturn().getResponse().getContentAsString());
+
+        String subjectItemId = subjectItem.path("id").asText();
+        mvc.perform(get("/me/student-support")
+                        .queryParam("classId", "c-10a1")
+                        .header("Authorization", "Bearer " + subjectTeacher))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[*].id").value(org.hamcrest.Matchers.everyItem(org.hamcrest.Matchers.is(subjectItemId))));
+
+        mvc.perform(get("/me/student-support")
+                        .queryParam("classId", "c-10a1")
+                        .header("Authorization", "Bearer " + homeroom))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[?(@.id == '" + subjectItemId + "')]").isNotEmpty())
+                .andExpect(jsonPath("$.summary.FAMILY_CONTACTED", greaterThanOrEqualTo(1)));
+
+        mvc.perform(post("/me/student-support/{id}/contact-family", subjectItemId)
+                        .header("Authorization", "Bearer " + subjectTeacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"message\":\"Trao đổi thử\"}"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void teacherWorkspaceExposesOnlyTheTeacherActualResponsibilities() throws Exception {
+        String teacher = login("gv.hoa", "teacher@123");
+        mvc.perform(get("/me/teacher-workspace")
+                        .header("Authorization", "Bearer " + teacher))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.homeroomTeacher").value(true))
+                .andExpect(jsonPath("$.homeroomClasses[0].code").value("10A1"))
+                .andExpect(jsonPath("$.teachingClassCount", greaterThanOrEqualTo(1)))
+                .andExpect(jsonPath("$.examResponsibilities").isBoolean())
+                .andExpect(jsonPath("$.loadRegistrationVisible").isBoolean())
+                .andExpect(jsonPath("$.loadRegistrationOpen").isBoolean())
+                .andExpect(jsonPath("$.loadRegistrationEditable").isBoolean());
+
+        mvc.perform(get("/classes").header("Authorization", "Bearer " + teacher))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.id == 'c-10a2')]").isEmpty());
+        mvc.perform(get("/classes/c-10a2").header("Authorization", "Bearer " + teacher))
+                .andExpect(status().isForbidden());
+
+        String admin = login("admin", "admin@123");
+        mvc.perform(get("/me/teacher-workspace")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void adminNotificationPolicyAllowsOnlyAdministrativeGroups() throws Exception {
+        String admin = login("admin", "admin@123");
+        for (String category : List.of("GENERAL", "HOLIDAY_EVENT", "ADMINISTRATIVE", "MEETING", "EMERGENCY")) {
+            mvc.perform(post("/announcements")
+                            .header("Authorization", "Bearer " + admin)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"audience\":\"ALL\",\"category\":\"" + category
+                                    + "\",\"priority\":\"NORMAL\",\"title\":\"Kiểm thử " + category
+                                    + "\",\"body\":\"Nội dung thông báo hợp lệ của nhà trường.\"}"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.category").value(category));
+        }
+        for (String category : List.of("GRADE", "LEARNING", "ATTENDANCE", "STUDENT_STATUS", "FEE", "INVOICE", "DEBT")) {
+            mvc.perform(post("/announcements")
+                            .header("Authorization", "Bearer " + admin)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"audience\":\"ALL\",\"category\":\"" + category
+                                    + "\",\"priority\":\"NORMAL\",\"title\":\"Sai phạm vi\",\"body\":\"Không thuộc trách nhiệm của Admin.\"}"))
+                    .andExpect(status().isForbidden());
+        }
     }
 
     @Test
@@ -1430,15 +1666,14 @@ class SecurityIntegrationTest {
         try (XSSFWorkbook excel = new XSSFWorkbook(); ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
             var sheet = excel.createSheet("Nguoi dung");
             var headerRow = sheet.createRow(0);
-            String[] headers = {"Tên đăng nhập", "Họ tên", "Vai trò", "Mật khẩu", "Mã lớp", "Ngày sinh"};
+            String[] headers = {"Tên đăng nhập", "Họ tên", "Vai trò", "Mật khẩu", "Tên đăng nhập liên kết"};
             for (int i = 0; i < headers.length; i++) headerRow.createCell(i).setCellValue(headers[i]);
             var data = sheet.createRow(1);
-            data.createCell(0).setCellValue("hs.flowchart");
-            data.createCell(1).setCellValue("Học sinh Flowchart");
-            data.createCell(2).setCellValue("Học sinh");
-            data.createCell(3).setCellValue("Student@123");
-            data.createCell(4).setCellValue("10A1");
-            data.createCell(5).setCellValue("10/10/2010");
+            data.createCell(0).setCellValue("ph.flowchart.import");
+            data.createCell(1).setCellValue("Phụ huynh Flowchart Import");
+            data.createCell(2).setCellValue("Phụ huynh");
+            data.createCell(3).setCellValue("Parent@1234");
+            data.createCell(4).setCellValue("hs.nguyenminhan");
             excel.write(bytes);
             workbook = bytes.toByteArray();
         }
@@ -1451,6 +1686,18 @@ class SecurityIntegrationTest {
                 .andExpect(jsonPath("$.totalRows").value(1))
                 .andExpect(jsonPath("$.importedRows").value(1))
                 .andExpect(jsonPath("$.failedRows").value(0));
+
+        JsonNode importedParents = body(mvc.perform(get("/users")
+                        .queryParam("role", "PARENT")
+                        .queryParam("q", "ph.flowchart.import")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+        String importedParentId = importedParents.get(0).path("id").asText();
+        mvc.perform(get("/users/" + importedParentId + "/children")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value("u-student-1"));
     }
 
     @Test
@@ -1882,7 +2129,8 @@ class SecurityIntegrationTest {
         mvc.perform(put("/users/u-student-2").header("Authorization", "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"classId\":\"c-10a1\",\"className\":\"10A1\"}"))
-                .andExpect(status().isOk());
+                .andExpect(status().isForbidden());
+        jdbc.update("update users set class_id = ?, class_name = ? where id = ?", "c-10a1", "10A1", "u-student-2");
         mvc.perform(post("/chat/messages").header("Authorization", "Bearer " + student)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"toUserId\":\"u-student-2\",\"body\":\"Chào bạn cùng lớp\"}"))
@@ -1891,10 +2139,7 @@ class SecurityIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"toUserId\":\"u-student-1\",\"body\":\"Chào bạn\"}"))
                 .andExpect(status().isOk());
-        mvc.perform(put("/users/u-student-2").header("Authorization", "Bearer " + admin)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"classId\":\"c-8a1\",\"className\":\"8A1\"}"))
-                .andExpect(status().isOk());
+        jdbc.update("update users set class_id = ?, class_name = ? where id = ?", "c-8a1", "8A1", "u-student-2");
 
         mvc.perform(post("/chat/messages").header("Authorization", "Bearer " + parent)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -1934,6 +2179,7 @@ class SecurityIntegrationTest {
     @Test
     void teachingAssignmentControlsTimetableCapacityAndTeacherConflicts() throws Exception {
         String admin = login("admin", "admin@123");
+        String academicStaff = login("giaovu", "Giaovu123@@");
         String teacher = login("gv.hoa", "teacher@123");
 
         String batchPayload = """
@@ -1943,6 +2189,12 @@ class SecurityIntegrationTest {
                 """;
         mvc.perform(post("/teaching-assignments/batch")
                         .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(batchPayload))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(post("/teaching-assignments/batch")
+                        .header("Authorization", "Bearer " + academicStaff)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(batchPayload))
                 .andExpect(status().isOk())
@@ -1958,7 +2210,7 @@ class SecurityIntegrationTest {
                 .andExpect(status().isForbidden());
 
         mvc.perform(post("/teaching-assignments/batch")
-                        .header("Authorization", "Bearer " + admin)
+                        .header("Authorization", "Bearer " + academicStaff)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(batchPayload))
                 .andExpect(status().isConflict())
@@ -1978,7 +2230,7 @@ class SecurityIntegrationTest {
                  "semesterId":"sm-2026-2","weeklyPeriods":1}
                 """;
         JsonNode assignment = body(mvc.perform(post("/teaching-assignments")
-                        .header("Authorization", "Bearer " + admin)
+                        .header("Authorization", "Bearer " + academicStaff)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(assignmentPayload))
                 .andExpect(status().isOk())
@@ -2006,7 +2258,7 @@ class SecurityIntegrationTest {
                  "semesterId":"sm-2026-2","weeklyPeriods":2}
                 """;
         mvc.perform(post("/teaching-assignments")
-                        .header("Authorization", "Bearer " + admin)
+                        .header("Authorization", "Bearer " + academicStaff)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(crossSpecialtyAssignment))
                 .andExpect(status().isOk());
@@ -2016,7 +2268,7 @@ class SecurityIntegrationTest {
                  "semesterId":"sm-2026-2","weeklyPeriods":1}
                 """;
         mvc.perform(post("/teaching-assignments")
-                        .header("Authorization", "Bearer " + admin)
+                        .header("Authorization", "Bearer " + academicStaff)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(conflictingAssignment))
                 .andExpect(status().isOk());
@@ -2113,6 +2365,10 @@ class SecurityIntegrationTest {
 
         mvc.perform(delete("/teaching-assignments/{id}", assignment.path("id").asText())
                         .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(delete("/teaching-assignments/{id}", assignment.path("id").asText())
+                        .header("Authorization", "Bearer " + academicStaff))
                 .andExpect(status().isConflict());
 
         String missingAssignmentSlot = """
@@ -2147,13 +2403,12 @@ class SecurityIntegrationTest {
                         .queryParam("academicYearId", "ay-2026")
                         .queryParam("studentId", "u-student-1")
                         .header("Authorization", "Bearer " + student))
-                .andExpect(status().isOk())
-                .andExpect(header().string("Content-Type", org.hamcrest.Matchers.containsString("application/pdf")));
+                .andExpect(status().isNotFound());
         mvc.perform(get("/exam-reports/report-card")
                         .queryParam("academicYearId", "ay-2026")
                         .queryParam("studentId", "u-student-1")
                         .header("Authorization", "Bearer " + parent))
-                .andExpect(status().isOk());
+                .andExpect(status().isNotFound());
         mvc.perform(get("/exam-reports/report-card")
                         .queryParam("academicYearId", "ay-2026")
                         .queryParam("studentId", "u-student-1")
@@ -2353,14 +2608,12 @@ class SecurityIntegrationTest {
             header.createCell(1).setCellValue("Họ tên");
             header.createCell(2).setCellValue("Vai trò");
             header.createCell(3).setCellValue("Mật khẩu");
-            header.createCell(4).setCellValue("Mã lớp");
 
             var valid = sheet.createRow(1);
             valid.createCell(0).setCellValue("safe.import.student");
             valid.createCell(1).setCellValue("Học sinh Import An Toàn");
             valid.createCell(2).setCellValue("Học sinh");
             valid.createCell(3).setCellValue("Safe@123456");
-            valid.createCell(4).setCellValue("10A1");
 
             var invalid = sheet.createRow(2);
             invalid.createCell(0).setCellValue("admin");

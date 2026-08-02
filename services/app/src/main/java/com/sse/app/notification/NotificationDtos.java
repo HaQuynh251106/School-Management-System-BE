@@ -16,7 +16,7 @@ public final class NotificationDtos {
             @NotBlank @Size(max = 4000) String body,
             @Pattern(regexp = "ALL|PARENT|STUDENT|TEACHER|CLASS:[A-Za-z0-9._-]+|CLASS_(STUDENTS|PARENTS|ALL):[A-Za-z0-9._-]+",
                     message = "Phạm vi nhận thông báo không hợp lệ") String audience,
-            @Pattern(regexp = "GENERAL|HOLIDAY|GRADE|EVENT|STUDENT_STATUS|ATTENDANCE|PARENT_MEETING",
+            @Pattern(regexp = "GENERAL|HOLIDAY_EVENT|ADMINISTRATIVE|MEETING|EMERGENCY|HOLIDAY|EVENT|PARENT_MEETING|GRADE|LEARNING|STUDENT_STATUS|ATTENDANCE|FEE|INVOICE|DEBT",
                     message = "Loại thông báo không hợp lệ") String category,
             @Pattern(regexp = "NORMAL|IMPORTANT|URGENT", message = "Mức độ thông báo không hợp lệ") String priority,
             LocalDate holidayStartDate,

@@ -10,6 +10,7 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.LinkedHashMap;
@@ -95,6 +96,12 @@ public class GlobalExceptionHandler {
             HttpServletRequest request
     ) {
         return response(HttpStatus.NOT_FOUND, "ROUTE_NOT_FOUND", "Đường dẫn không tồn tại", request, Map.of());
+    }
+
+    /** Client closed the connection (commonly a health probe during restart). */
+    @ExceptionHandler(AsyncRequestNotUsableException.class)
+    public void handleClientDisconnect(AsyncRequestNotUsableException ex, HttpServletRequest request) {
+        log.debug("Client disconnected before response completed path={}", request.getRequestURI());
     }
 
     @ExceptionHandler(Exception.class)

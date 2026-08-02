@@ -6,6 +6,21 @@ import java.time.LocalDate;
 public final class AlumniDtos {
     private AlumniDtos() {}
 
+    public record AlumniClassSummary(
+            String classId,
+            String classCode,
+            String className,
+            String cohortId,
+            String cohortCode,
+            String cohortName,
+            String graduationAcademicYearId,
+            String graduationAcademicYearCode,
+            Long studentCount,
+            Double averageScore,
+            Long goodConductCount,
+            Long activeAccountCount
+    ) {}
+
     public record AlumniRecord(
             String id,
             String studentCode,

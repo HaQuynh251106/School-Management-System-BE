@@ -26,18 +26,21 @@ public class WorkloadPlanningService {
     private final TeachingAssignmentService teachingAssignments;
     private final StructureService structure;
     private final UserService users;
+    private final TeacherWorkspaceService teacherWorkspace;
 
     public WorkloadPlanningService(CurriculumRequirementRepository requirements,
                                    TeacherLoadRegistrationRepository registrations,
                                    TeachingAssignmentRepository assignments,
                                    TeachingAssignmentService teachingAssignments,
-                                   StructureService structure, UserService users) {
+                                   StructureService structure, UserService users,
+                                   TeacherWorkspaceService teacherWorkspace) {
         this.requirements = requirements;
         this.registrations = registrations;
         this.assignments = assignments;
         this.teachingAssignments = teachingAssignments;
         this.structure = structure;
         this.users = users;
+        this.teacherWorkspace = teacherWorkspace;
     }
 
     public List<CurriculumRequirement> listRequirements(String semesterId) {
@@ -91,6 +94,7 @@ public class WorkloadPlanningService {
     @Transactional
     public TeacherLoadResponse saveMine(String teacherId, SaveTeacherLoadRequest request) {
         structure.assertSemesterWritable(request.semesterId());
+        assertTeacherRegistrationOpen(request.semesterId());
         User teacher = requireActiveTeacher(teacherId);
         Instant now = Instant.now();
         TeacherLoadRegistration item = registrations
@@ -117,6 +121,7 @@ public class WorkloadPlanningService {
     @Transactional
     public TeacherLoadResponse submitMine(String teacherId, String semesterId) {
         structure.assertSemesterWritable(semesterId);
+        assertTeacherRegistrationOpen(semesterId);
         TeacherLoadRegistration item = registrations.findByTeacherIdAndSemesterId(teacherId, semesterId)
                 .orElseThrow(() -> ApiException.badRequest("Hãy lưu đăng ký tải dạy trước khi gửi duyệt"));
         if (!Set.of("DRAFT", "REJECTED").contains(item.getStatus())) {
@@ -239,6 +244,16 @@ public class WorkloadPlanningService {
                 list(item.getUnavailableSlots()), list(item.getPreferredGradeLevels()),
                 item.getNote(), item.getReviewNote(), item.getStatus(), item.getSubmittedAt(),
                 item.getReviewedAt(), item.getReviewedBy(), item.getCreatedAt(), item.getUpdatedAt());
+    }
+
+    private void assertTeacherRegistrationOpen(String semesterId) {
+        var window = teacherWorkspace.loadRegistrationWindow(semesterId);
+        if (!window.open()) {
+            String period = window.opensOn() == null || window.closesOn() == null
+                    ? "chưa được cấu hình"
+                    : "từ " + window.opensOn() + " đến " + window.closesOn();
+            throw ApiException.conflict("Cổng đăng ký tải dạy đang đóng. Thời gian đăng ký " + period + ".");
+        }
     }
 
     private User requireActiveTeacher(String id) {

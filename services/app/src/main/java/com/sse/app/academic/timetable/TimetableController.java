@@ -107,9 +107,11 @@ public class TimetableController {
     @GetMapping("/me/timetable")
     public List<TimetableSlot> myTimetable() {
         CurrentUser me = CurrentUserHolder.require();
-        if (me.isTeacher()) return timetable.list(null, me.id(), null, null);
+        String activeSemesterId = activeSemesterId();
+        if (activeSemesterId == null) return List.of();
+        if (me.isTeacher()) return timetable.list(null, me.id(), activeSemesterId, null);
         User u = users.getById(me.id());
-        if (u.getClassId() != null) return timetable.list(u.getClassId(), null, null, null);
+        if (u.getClassId() != null) return timetable.list(u.getClassId(), null, activeSemesterId, null);
         return List.of();
     }
 
@@ -126,7 +128,19 @@ public class TimetableController {
         java.util.LinkedHashSet<String> ids = new java.util.LinkedHashSet<>();
         teachingAssignments.assignmentsOfTeacher(me.id()).forEach(item -> ids.add(item.getClassId()));
         structure.classesOfHomeroom(me.id()).forEach(schoolClass -> ids.add(schoolClass.getId()));
-        return ids.stream().map(structure::getClass).toList();
+        java.util.Set<String> activeYearIds = structure.listYears().stream()
+                .filter(year -> "ACTIVE".equals(year.getStatus()))
+                .map(year -> year.getId()).collect(java.util.stream.Collectors.toSet());
+        return ids.stream().map(structure::getClass)
+                .filter(schoolClass -> activeYearIds.contains(schoolClass.getAcademicYearId())).toList();
+    }
+
+    private String activeSemesterId() {
+        return structure.listYears().stream().filter(year -> "ACTIVE".equals(year.getStatus()))
+                .flatMap(year -> structure.listSemesters(year.getId()).stream())
+                .filter(semester -> "ACTIVE".equals(semester.getStatus()))
+                .sorted(java.util.Comparator.comparingInt(semester -> semester.getSequence()))
+                .map(semester -> semester.getId()).findFirst().orElse(null);
     }
 
     private void assertCanView(CurrentUser current, String classId, String teacherId) {

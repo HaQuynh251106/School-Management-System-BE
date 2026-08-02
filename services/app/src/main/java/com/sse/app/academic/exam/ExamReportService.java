@@ -6,6 +6,9 @@ import com.sse.app.academic.grade.*;
 import com.sse.app.academic.structure.*;
 import com.sse.app.common.ApiException;
 import com.sse.app.identity.*;
+import com.sse.app.academic.summary.ReportCardDtos.ReportCardView;
+import com.sse.app.academic.summary.ReportCardWorkflowService;
+import com.sse.app.security.CurrentUser;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -27,6 +30,7 @@ public class ExamReportService {
     private final GradeCalculationService gradeCalculations;
     private final StructureService structure;
     private final UserService users;
+    private final ReportCardWorkflowService reportCards;
 
     public byte[] scoreSlip(String periodId, String studentId) {
         ExamPeriod period = exams.requirePeriod(periodId); User student = users.getById(studentId);
@@ -48,28 +52,41 @@ public class ExamReportService {
         });
     }
 
-    public byte[] reportCard(String academicYearId, String studentId) {
-        User student = users.getById(studentId); AcademicYear year = structure.getYear(academicYearId);
-        List<Semester> semesters = structure.listSemesters(academicYearId);
+    public byte[] reportCard(String academicYearId, String studentId, CurrentUser actor) {
+        ReportCardView card = reportCards.view(academicYearId, studentId, actor);
         return pdf(false, document -> {
-            title(document, "HỌC BẠ ĐIỆN TỬ", "Năm học " + year.getName());
-            info(document, List.of("Học sinh: " + student.getFullName(), "Mã học sinh: " + value(student.getStudentCode()),
-                    "Lớp: " + value(student.getClassName()), "Ngày sinh: " + value(student.getDateOfBirth())));
-            for (Semester semester : semesters) {
-                heading(document, semester.getName());
-                Map<String, List<Grade>> bySubject = grades.list(studentId, null, semester.getId(), null, null).stream()
-                        .collect(Collectors.groupingBy(Grade::getSubjectName, TreeMap::new, Collectors.toList()));
-                PdfPTable table = table(new float[]{1, 6, 2, 3}, "STT", "Môn học", "Trung bình", "Xếp loại");
-                int index = 1;
-                for (var entry : bySubject.entrySet()) {
-                    Double average = gradeCalculations.subjectAverage(entry.getValue());
-                    row(table, String.valueOf(index++), entry.getKey(), score(average), classify(average));
-                }
-                document.add(table);
+            title(document, "HỌC BẠ ĐIỆN TỬ", "Năm học " + card.academicYearCode());
+            info(document, List.of("Học sinh: " + card.studentName(), "Mã học sinh: " + value(card.studentCode()),
+                    "Lớp: " + value(card.classCode()), "Giáo viên chủ nhiệm: " + value(card.homeroomTeacherName())));
+            PdfPTable table = table(new float[]{1, 5, 2, 2, 2, 3}, "STT", "Môn học", "HKI", "HKII", "Cả năm", "Xếp loại");
+            int index = 1;
+            for (var subject : card.subjects()) {
+                row(table, String.valueOf(index++), subject.subjectName(), score(subject.semesterOneAverage()),
+                        score(subject.semesterTwoAverage()), score(subject.annualAverage()), classify(subject.annualAverage()));
             }
-            Paragraph confirmation = new Paragraph("Mã xác nhận học bạ: " + academicYearId + "-" + studentId, font(9, Font.ITALIC));
+            document.add(table);
+            heading(document, "Tổng kết và rèn luyện");
+            info(document, List.of("Trung bình HKI: " + score(card.semesterOneAverage()),
+                    "Trung bình HKII: " + score(card.semesterTwoAverage()),
+                    "Trung bình cả năm: " + score(card.annualAverage()),
+                    "Hạnh kiểm: " + conductLabel(card.conductGrade()),
+                    "Kết quả: " + promotionLabel(card.promotionStatus()),
+                    "Nhận xét GVCN: " + value(card.homeroomComment()),
+                    "Chuyên cần: Có mặt " + card.attendance().present() + " · Vắng có phép " + card.attendance().excusedAbsence()
+                            + " · Vắng không phép " + card.attendance().unexcusedAbsence() + " · Đi muộn " + card.attendance().late()));
+            Paragraph confirmation = new Paragraph("Mã xác nhận học bạ: " + card.verificationCode(), font(9, Font.ITALIC));
             confirmation.setSpacingBefore(14); document.add(confirmation); genericSignature(document);
         });
+    }
+
+    private String conductLabel(String value) {
+        if (value == null) return "-";
+        return switch (value) { case "GOOD" -> "Tốt"; case "FAIR" -> "Khá"; case "AVERAGE" -> "Trung bình"; case "WEAK" -> "Yếu"; default -> value; };
+    }
+
+    private String promotionLabel(String value) {
+        if (value == null) return "Chưa xác định";
+        return switch (value) { case "PROMOTED" -> "Được lên lớp"; case "GRADUATED" -> "Tốt nghiệp"; case "RETAINED" -> "Lưu ban"; case "READY" -> "Đủ điều kiện tổng kết"; default -> value; };
     }
 
     public byte[] exportPdf(String periodId, String scope, String classId, String gradeLevel) {

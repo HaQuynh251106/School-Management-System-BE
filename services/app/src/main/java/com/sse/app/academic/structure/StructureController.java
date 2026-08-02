@@ -68,7 +68,7 @@ public class StructureController {
     // ----- Học kỳ -----
     @GetMapping("/cohorts")
     public List<Cohort> cohorts(@RequestParam(required = false) String status) {
-        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF", "TEACHER");
         return structure.listCohorts(status);
     }
 
@@ -120,16 +120,31 @@ public class StructureController {
     @GetMapping("/classes")
     public List<SchoolClass> classes(@RequestParam(required = false) String academicYearId,
                                      @RequestParam(required = false) String gradeLevel) {
-        CurrentUserHolder.require();
+        var current = CurrentUserHolder.require();
         List<SchoolClass> result = structure.listClasses(academicYearId, gradeLevel);
+        if (current.isTeacher()) {
+            if (academicYearId == null || academicYearId.isBlank()) {
+                var activeYearIds = structure.listYears().stream()
+                        .filter(year -> "ACTIVE".equals(year.getStatus()))
+                        .map(AcademicYear::getId).collect(java.util.stream.Collectors.toSet());
+                result = result.stream().filter(item -> activeYearIds.contains(item.getAcademicYearId())).toList();
+            }
+            result = result.stream().filter(item -> current.id().equals(item.getHomeroomTeacherId())
+                    || timetable.teacherTeachesClass(current.id(), item.getId())).toList();
+        }
         result.forEach(item -> item.setStudentCount(users.studentCountOfClass(item.getId())));
         return result;
     }
 
     @GetMapping("/classes/{id}")
     public SchoolClass classById(@PathVariable String id) {
-        CurrentUserHolder.require();
-        return structure.getClass(id);
+        var current = CurrentUserHolder.require();
+        SchoolClass schoolClass = structure.getClass(id);
+        if (current.isTeacher() && !current.id().equals(schoolClass.getHomeroomTeacherId())
+                && !timetable.teacherTeachesClass(current.id(), id)) {
+            throw ApiException.forbidden("Giáo viên chỉ được xem lớp đang giảng dạy hoặc chủ nhiệm");
+        }
+        return schoolClass;
     }
 
     @GetMapping("/classes/{id}/students")
@@ -203,7 +218,7 @@ public class StructureController {
     @PutMapping("/classes/{id}/homeroom-teacher")
     public SchoolClass assignHomeroomTeacher(@PathVariable String id,
                                               @Valid @RequestBody AssignHomeroomTeacherRequest r) {
-        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         User teacher = requireActiveTeacher(r.teacherId());
         return structure.assignHomeroomTeacher(id, teacher.getId(), teacher.getFullName(),
                 CurrentUserHolder.require().id());
@@ -211,7 +226,7 @@ public class StructureController {
 
     @DeleteMapping("/classes/{id}/homeroom-teacher")
     public SchoolClass clearHomeroomTeacher(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         return structure.clearHomeroomTeacher(id);
     }
 

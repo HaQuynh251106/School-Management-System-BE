@@ -30,19 +30,21 @@ public class ReportController {
     }
 
     @GetMapping("/grade-distribution")
-    public List<Map<String, Object>> gradeDistribution(@RequestParam(required = false) String semesterId,
+    public List<Map<String, Object>> gradeDistribution(@RequestParam(required = false) String academicYearId,
+                                                        @RequestParam(required = false) String semesterId,
                                                         @RequestParam(required = false) String classId,
                                                         @RequestParam(required = false) String subjectId) {
         CurrentUserHolder.requireRole("ADMIN");
-        return reports.gradeDistribution(semesterId, classId, subjectId);
+        return reports.gradeDistribution(academicYearId, semesterId, classId, subjectId);
     }
 
     @GetMapping("/attendance-summary")
-    public Map<String, Object> attendanceSummary(@RequestParam(required = false) String classId,
+    public Map<String, Object> attendanceSummary(@RequestParam(required = false) String academicYearId,
+                                                  @RequestParam(required = false) String classId,
                                                   @RequestParam(required = false) java.time.LocalDate startDate,
                                                   @RequestParam(required = false) java.time.LocalDate endDate) {
         CurrentUserHolder.requireRole("ADMIN");
-        return reports.attendanceSummary(classId, startDate, endDate);
+        return reports.attendanceSummary(academicYearId, classId, startDate, endDate);
     }
 
     @GetMapping("/revenue")
@@ -60,6 +62,7 @@ public class ReportController {
 
     @GetMapping(value = "/export", produces = "text/csv; charset=UTF-8")
     public ResponseEntity<byte[]> export(@RequestParam(defaultValue = "overview") String type,
+                                         @RequestParam(required = false) String academicYearId,
                                          @RequestParam(required = false) String semesterId,
                                          @RequestParam(required = false) String classId,
                                          @RequestParam(required = false) String subjectId,
@@ -68,7 +71,7 @@ public class ReportController {
                                          @RequestParam(required = false) String periodId) {
         CurrentUserHolder.requireRole("ADMIN");
         var current = CurrentUserHolder.require();
-        byte[] body = reports.exportCsv(type, semesterId, classId, subjectId, startDate, endDate, periodId)
+        byte[] body = reports.exportCsv(type, academicYearId, semesterId, classId, subjectId, startDate, endDate, periodId)
                 .getBytes(java.nio.charset.StandardCharsets.UTF_8);
         audit.record(current.id(), current.username(), current.role(), "EXPORT", "report",
                 "report", type, "Xuất báo cáo CSV");

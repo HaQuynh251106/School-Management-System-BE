@@ -82,7 +82,14 @@ public final class IdentityDtos {
 
     public record AdminResetPasswordRequest(@Size(min = 10, max = 128) String newPassword) {}
 
-    public record LinkChildRequest(@NotBlank String studentId, Boolean primaryContact) {}
+    public record LinkChildRequest(
+            @NotBlank String studentId,
+            Boolean primaryContact,
+            Boolean confirmException,
+            @Size(min = 10, max = 500) String reason) {}
+
+    public record UpdateTeacherSpecializationRequest(
+            @NotBlank @Size(max = 255) String mainSubject) {}
 
     public record ImportRowError(int row, String username, String error) {}
     public record ImportResult(int totalRows, int importedRows, int failedRows, List<ImportRowError> errors) {}

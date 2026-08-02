@@ -54,7 +54,7 @@ public class User {
     private String classId;
     private String className;
     private String cohortId;
-    /** ENROLLED | GRADUATED | TRANSFERRED | WITHDRAWN; separate from account status. */
+    /** PENDING_PLACEMENT | ENROLLED | GRADUATED | TRANSFERRED | WITHDRAWN; separate from account status. */
     private String studentStatus;
     private Instant graduatedAt;
     private String graduationAcademicYearId;

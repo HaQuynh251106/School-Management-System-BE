@@ -1,7 +1,5 @@
 package com.sse.app.identity;
 
-import com.sse.app.academic.structure.SchoolClass;
-import com.sse.app.academic.structure.StructureService;
 import com.sse.app.common.ApiException;
 import com.sse.app.identity.IdentityDtos.CreateUserRequest;
 import com.sse.app.identity.IdentityDtos.ImportPreview;
@@ -40,13 +38,11 @@ public class UserImportService {
     private static final long PREVIEW_TTL_SECONDS = 15 * 60;
 
     private final UserService users;
-    private final StructureService structure;
     private final byte[] signingKey;
 
-    public UserImportService(UserService users, StructureService structure,
+    public UserImportService(UserService users,
                              @Value("${sse.jwt.secret}") String signingSecret) {
         this.users = users;
-        this.structure = structure;
         this.signingKey = signingSecret.getBytes(StandardCharsets.UTF_8);
     }
 
@@ -116,7 +112,7 @@ public class UserImportService {
              ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             Sheet sheet = workbook.createSheet("Nguoi dung");
             String[] headers = {"Tên đăng nhập", "Họ tên", "Vai trò", "Mật khẩu", "Email", "Số điện thoại",
-                    "Mã lớp", "Mã học sinh", "Mã giáo viên", "Môn chính", "Ngày sinh", "Giới tính",
+                    "Mã học sinh", "Mã giáo viên", "Ngày sinh", "Giới tính",
                     "Địa chỉ", "Ngày nhập học", "Người giám hộ", "SĐT người giám hộ", "Tên đăng nhập liên kết"};
             Row header = sheet.createRow(0);
             CellStyle style = workbook.createCellStyle();
@@ -131,7 +127,7 @@ public class UserImportService {
             }
             Row example = sheet.createRow(1);
             String[] values = {"hs.nguyenvana", "Nguyễn Văn A", "Học sinh", "Sse@123456", "a@example.edu.vn",
-                    "0900000000", "10A1", "", "", "", "01/01/2010", "MALE", "TP. Hồ Chí Minh",
+                    "0900000000", "", "", "01/01/2010", "MALE", "TP. Hồ Chí Minh",
                     "05/09/2025", "Nguyễn Văn B", "0911111111", ""};
             for (int i = 0; i < values.length; i++) example.createCell(i).setCellValue(values[i]);
             workbook.write(output);
@@ -155,11 +151,15 @@ public class UserImportService {
             require(headers, "role", "Vai trò");
             require(headers, "password", "Mật khẩu");
 
+            Set<String> emailsInFile = new HashSet<>();
+            Set<String> studentCodesInFile = new HashSet<>();
+            Set<String> teacherCodesInFile = new HashSet<>();
             for (int i = sheet.getFirstRowNum() + 1; i <= sheet.getLastRowNum(); i++) {
                 Row row = sheet.getRow(i);
                 if (row == null || rowIsEmpty(row, formatter)) continue;
                 if (rows.size() >= MAX_ROWS) throw ApiException.badRequest("Tệp vượt quá " + MAX_ROWS + " dòng dữ liệu");
-                rows.add(parseRow(row, i + 1, headers, formatter, usernamesInFile));
+                rows.add(parseRow(row, i + 1, headers, formatter, usernamesInFile,
+                        emailsInFile, studentCodesInFile, teacherCodesInFile));
             }
         } catch (ApiException e) {
             throw e;
@@ -172,7 +172,8 @@ public class UserImportService {
     }
 
     private ParsedRow parseRow(Row row, int rowNumber, Map<String, Integer> h, DataFormatter f,
-                               Set<String> usernamesInFile) {
+                               Set<String> usernamesInFile, Set<String> emailsInFile,
+                               Set<String> studentCodesInFile, Set<String> teacherCodesInFile) {
         String username = cell(row, h, "username", f);
         String fullName = cell(row, h, "fullname", f);
         String roleText = cell(row, h, "role", f);
@@ -190,12 +191,12 @@ public class UserImportService {
                 throw ApiException.conflict("Tên đăng nhập đã tồn tại trong hệ thống");
             }
 
-            SchoolClass schoolClass = null;
-            if ("STUDENT".equals(role)) {
-                classCode = required(classCode, "Mã lớp");
-                String requestedClassCode = classCode;
-                schoolClass = structure.classByCode(requestedClassCode)
-                        .orElseThrow(() -> ApiException.badRequest("Không tìm thấy lớp " + requestedClassCode));
+            if (!classCode.isBlank()) {
+                throw ApiException.forbidden("Import tài khoản không phân lớp học sinh; Giáo vụ thực hiện tại chức năng Phân lớp đầu cấp");
+            }
+            String mainSubject = cell(row, h, "mainsubject", f);
+            if (!mainSubject.isBlank()) {
+                throw ApiException.forbidden("Import tài khoản không chuẩn hóa chuyên môn giáo viên; Giáo vụ thực hiện trong phân công giảng dạy");
             }
 
             String password = required(cell(row, h, "password", f), "Mật khẩu tạm");
@@ -204,6 +205,12 @@ public class UserImportService {
             if (email != null && !email.matches("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")) {
                 throw ApiException.badRequest("Email không hợp lệ");
             }
+            String studentCode = emptyToNull(cell(row, h, "studentcode", f));
+            String teacherCode = emptyToNull(cell(row, h, "teachercode", f));
+            assertUniqueInFile(emailsInFile, email, "Email bị trùng trong tệp");
+            assertUniqueInFile(studentCodesInFile, studentCode, "Mã học sinh bị trùng trong tệp");
+            assertUniqueInFile(teacherCodesInFile, teacherCode, "Mã giáo viên bị trùng trong tệp");
+            users.assertUniqueIdentifiersForImport(email, studentCode, teacherCode);
 
             User linked = linkedUsername.isBlank() ? null : users.findByUsername(linkedUsername)
                     .orElseThrow(() -> ApiException.badRequest("Không tìm thấy tài khoản liên kết " + linkedUsername));
@@ -217,11 +224,11 @@ public class UserImportService {
             CreateUserRequest request = new CreateUserRequest(
                     null, username, password, fullName, role,
                     email, emptyToNull(cell(row, h, "phone", f)), null,
-                    emptyToNull(cell(row, h, "teachercode", f)),
-                    emptyToNull(cell(row, h, "mainsubject", f)),
-                    emptyToNull(cell(row, h, "studentcode", f)),
-                    schoolClass == null ? null : schoolClass.getId(),
-                    schoolClass == null ? null : schoolClass.getCode(),
+                    teacherCode,
+                    null,
+                    studentCode,
+                    null,
+                    null,
                     parseDate(cell(row, h, "dateofbirth", f)),
                     emptyToNull(cell(row, h, "gender", f)),
                     emptyToNull(cell(row, h, "placeofbirth", f)),
@@ -234,7 +241,7 @@ public class UserImportService {
             );
             ImportPreviewRow preview = new ImportPreviewRow(
                     rowNumber, username, fullName, role,
-                    schoolClass == null ? classCode : schoolClass.getCode(),
+                    "STUDENT".equals(role) ? "Chờ phân lớp" : "",
                     linkedUsername, true, null
             );
             return new ParsedRow(preview, request, linked);
@@ -243,6 +250,12 @@ public class UserImportService {
                     rowNumber, username, fullName, roleText, classCode, linkedUsername, false, cleanMessage(e)
             );
             return new ParsedRow(preview, null, null);
+        }
+    }
+
+    private void assertUniqueInFile(Set<String> seen, String value, String message) {
+        if (value != null && !seen.add(value.trim().toLowerCase(Locale.ROOT))) {
+            throw ApiException.badRequest(message);
         }
     }
 

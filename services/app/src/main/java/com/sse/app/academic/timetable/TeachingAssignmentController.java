@@ -4,6 +4,7 @@ import com.sse.app.academic.timetable.TeachingAssignmentDtos.SaveTeachingAssignm
 import com.sse.app.academic.timetable.TeachingAssignmentDtos.BatchSaveTeachingAssignmentRequest;
 import com.sse.app.academic.timetable.TeachingAssignmentDtos.TeachingAssignmentResponse;
 import com.sse.app.academic.timetable.TeachingAssignmentDtos.TeacherWorkloadResponse;
+import com.sse.app.academic.structure.StructureService;
 import com.sse.app.common.ApiException;
 import com.sse.app.security.CurrentUser;
 import com.sse.app.security.CurrentUserHolder;
@@ -22,9 +23,11 @@ import java.util.List;
 @RestController
 public class TeachingAssignmentController {
     private final TeachingAssignmentService assignments;
+    private final StructureService structure;
 
-    public TeachingAssignmentController(TeachingAssignmentService assignments) {
+    public TeachingAssignmentController(TeachingAssignmentService assignments, StructureService structure) {
         this.assignments = assignments;
+        this.structure = structure;
     }
 
     @GetMapping("/teaching-assignments")
@@ -55,7 +58,13 @@ public class TeachingAssignmentController {
     public List<TeachingAssignmentResponse> mine(@RequestParam(required = false) String semesterId) {
         CurrentUserHolder.requireRole("TEACHER");
         CurrentUser current = CurrentUserHolder.require();
-        return assignments.list(null, null, current.id(), semesterId, null, null, null, null);
+        List<TeachingAssignmentResponse> result = assignments.list(
+                null, null, current.id(), semesterId, null, null, null, null);
+        if (semesterId == null || semesterId.isBlank()) {
+            result = result.stream().filter(item ->
+                    "ACTIVE".equals(structure.getSemester(item.semesterId()).getStatus())).toList();
+        }
+        return result;
     }
 
     @GetMapping("/teaching-assignments/workloads")
@@ -66,27 +75,27 @@ public class TeachingAssignmentController {
 
     @PostMapping("/teaching-assignments")
     public TeachingAssignmentResponse create(@Valid @RequestBody SaveTeachingAssignmentRequest request) {
-        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         return assignments.create(request, CurrentUserHolder.require().id());
     }
 
     @PostMapping("/teaching-assignments/batch")
     public List<TeachingAssignmentResponse> createBatch(
             @Valid @RequestBody BatchSaveTeachingAssignmentRequest request) {
-        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         return assignments.createBatch(request, CurrentUserHolder.require().id());
     }
 
     @PutMapping("/teaching-assignments/{id}")
     public TeachingAssignmentResponse update(@PathVariable String id,
                                               @Valid @RequestBody SaveTeachingAssignmentRequest request) {
-        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         return assignments.update(id, request);
     }
 
     @DeleteMapping("/teaching-assignments/{id}")
     public void delete(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         assignments.delete(id);
     }
 }

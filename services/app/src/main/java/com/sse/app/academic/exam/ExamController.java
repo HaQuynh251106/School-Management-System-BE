@@ -123,7 +123,7 @@ public class ExamController {
     }
     @GetMapping(value = "/exam-reports/report-card", produces = MediaType.APPLICATION_PDF_VALUE)
     public ResponseEntity<byte[]> reportCard(@RequestParam String academicYearId, @RequestParam String studentId) {
-        assertStudentAccess(studentId); return file(reports.reportCard(academicYearId, studentId), "hoc-ba.pdf", MediaType.APPLICATION_PDF);
+        assertStudentAccess(studentId); return file(reports.reportCard(academicYearId, studentId, CurrentUserHolder.require()), "hoc-ba.pdf", MediaType.APPLICATION_PDF);
     }
     @GetMapping("/exam-reports/export")
     public ResponseEntity<byte[]> export(@RequestParam String examPeriodId, @RequestParam(defaultValue = "YEAR") String scope,

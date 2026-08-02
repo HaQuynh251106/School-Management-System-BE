@@ -13,6 +13,7 @@ import java.sql.SQLException;
 import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -313,18 +314,168 @@ public class DashboardService {
         int leaveRequests = integer("""
                 select count(*) from leave_requests where homeroom_teacher_id=? and status='PENDING_HOMEROOM'
                 """, teacherId);
+        int incompleteGradebooks = activeSemesterId().isBlank() ? 0 : integer("""
+                select count(*) from teaching_assignments ta
+                where ta.teacher_id=? and ta.semester_id=? and ta.status='ACTIVE'
+                  and not exists (select 1 from gradebook_locks gl
+                                  where gl.semester_id=ta.semester_id and gl.class_id=ta.class_id
+                                    and gl.subject_id=ta.subject_id and gl.locked=true)
+                """, teacherId, activeSemesterId());
+        int examDuties = integer("""
+                select count(*) from exam_grading_assignments ega
+                join exam_periods ep on ep.id=ega.exam_period_id
+                where ega.teacher_id=? and ep.status in ('CONFIRMED','COMPLETED')
+                  and ep.end_date >= current_date - 30
+                """, teacherId) + integer("""
+                select count(*) from exam_rooms er join exam_schedules es on es.id=er.schedule_id
+                join exam_periods ep on ep.id=es.exam_period_id
+                where (er.proctor_one_id=? or er.proctor_two_id=?) and ep.status='CONFIRMED'
+                  and ep.end_date >= current_date - 7
+                """, teacherId, teacherId);
         List<DashboardDtos.WorkItem> workItems = new ArrayList<>();
         addWorkItem(workItems, unattendedSlots, "attendance", "Tiết dạy chưa ghi nhận điểm danh",
                 "Mở sổ điểm danh và hoàn tất theo từng tiết.", "tiết", "CRITICAL", "B3");
         addWorkItem(workItems, pendingGrading, "grading", "Bài làm đang chờ chấm",
                 "Ưu tiên bài gần hạn trả kết quả cho học sinh.", "bài", "WARNING", "B5");
         addWorkItem(workItems, leaveRequests, "leave-requests", "Đơn xin nghỉ chờ duyệt",
-                "Xem xác nhận của phụ huynh và phản hồi học sinh.", "đơn", "INFO", "B11");
+                "Xem xác nhận của phụ huynh và phản hồi học sinh.", "đơn", "INFO", "B9");
+        addWorkItem(workItems, incompleteGradebooks, "gradebooks", "Sổ điểm chưa hoàn tất",
+                "Kiểm tra đủ đầu điểm và xác nhận hoàn tất theo lớp, môn.", "sổ điểm", "WARNING", "B4");
+        addWorkItem(workItems, examDuties, "exam-duties", "Nhiệm vụ khảo thí đang mở",
+                "Theo dõi lịch coi thi, chấm thi và thời hạn nhập điểm.", "nhiệm vụ", "INFO", "B12");
         addWorkItem(workItems, (int) unread, "unread", "Thông báo chưa đọc",
                 "Kiểm tra các thông tin điều hành mới nhất.", "thông báo", "INFO", "B7");
         addHealthyWorkItem(workItems, "B2");
         return new DashboardDtos.Response(metrics, charts,
-                roleOverview("TEACHER", teacherCalendarItems(teacherId), workItems));
+                roleOverview("TEACHER", teacherCalendarItems(teacherId), workItems),
+                teacherOverview(teacherId, todayAliases));
+    }
+
+    private DashboardDtos.TeacherOverview teacherOverview(String teacherId, String[] todayAliases) {
+        List<String> homeroomClassCodes = jdbc.queryForList("""
+                select code from classes
+                where homeroom_teacher_id=? and (status is null or status='ACTIVE')
+                order by code
+                """, String.class, teacherId);
+        List<DashboardDtos.TeacherLesson> todayLessons = jdbc.query("""
+                select t.id, t.period_no, t.start_time, t.end_time, t.class_id,
+                       coalesce(c.code, t.class_id) class_code, t.subject_id, t.subject_name,
+                       t.room_code,
+                       case when exists (
+                           select 1 from attendance_records ar
+                           where ar.slot_id=t.id and ar.date=current_date
+                       ) then true else false end attendance_recorded
+                from timetable_slots t
+                left join classes c on c.id=t.class_id
+                where t.teacher_id=? and upper(t.day_of_week) in (?, ?)
+                order by t.start_time, t.period_no, class_code
+                """, (rs, rowNumber) -> {
+            String startTime = safe(rs.getString("start_time"));
+            String endTime = safe(rs.getString("end_time"));
+            return new DashboardDtos.TeacherLesson(
+                    rs.getString("id"), rs.getInt("period_no"), startTime, endTime,
+                    rs.getString("class_id"), rs.getString("class_code"),
+                    rs.getString("subject_id"), rs.getString("subject_name"),
+                    safe(rs.getString("room_code")), lessonStatus(startTime, endTime),
+                    rs.getBoolean("attendance_recorded")
+            );
+        }, teacherId, todayAliases[0], todayAliases[1]);
+
+        String semesterId = activeSemesterId();
+        LocalDate attendanceFrom = LocalDate.now().minusDays(30);
+        List<DashboardDtos.AttentionStudent> attentionStudents = jdbc.query("""
+                select u.id student_id, u.student_code, u.full_name student_name,
+                       c.id class_id, c.code class_code,
+                       (select count(*) from attendance_records ar
+                        where ar.student_id=u.id and ar.date>=?
+                          and ar.status in ('ABSENT_UNEXCUSED','LATE')) attendance_alerts,
+                       (select count(*) from assignments a
+                        where a.teacher_id=? and a.class_id=c.id and a.status='PUBLISHED'
+                          and a.deadline<current_timestamp
+                          and not exists (select 1 from assignment_submissions sub
+                                          where sub.assignment_id=a.id and sub.student_id=u.id
+                                            and sub.submitted_at is not null)) missing_assignments,
+                       (select avg(g.score) from grades g
+                        where g.student_id=u.id and (?='' or g.semester_id=?)
+                          and (c.homeroom_teacher_id=? or exists (
+                              select 1 from teaching_assignments ta
+                              where ta.teacher_id=? and ta.class_id=c.id and ta.subject_id=g.subject_id
+                                and (?='' or ta.semester_id=?)
+                                and (ta.status is null or ta.status='ACTIVE')
+                          ))) subject_average
+                from users u join classes c on c.id=u.class_id
+                where u.role='STUDENT' and u.status='ACTIVE'
+                  and (c.homeroom_teacher_id=? or exists (
+                      select 1 from teaching_assignments ta
+                      where ta.teacher_id=? and ta.class_id=c.id
+                        and (?='' or ta.semester_id=?)
+                        and (ta.status is null or ta.status='ACTIVE')
+                  ))
+                order by c.code, u.full_name
+                """, (rs, rowNumber) -> attentionStudent(rs),
+                attendanceFrom, teacherId,
+                semesterId, semesterId, teacherId, teacherId, semesterId, semesterId,
+                teacherId, teacherId, semesterId, semesterId).stream()
+                .filter(item -> item.attendanceAlerts() > 0 || item.missingAssignments() > 0
+                        || (item.subjectAverage() != null && item.subjectAverage() < 5.0))
+                .sorted(Comparator
+                        .comparing((DashboardDtos.AttentionStudent item) -> severityRank(item.severity()))
+                        .thenComparing(DashboardDtos.AttentionStudent::classCode)
+                        .thenComparing(DashboardDtos.AttentionStudent::studentName))
+                .limit(8)
+                .toList();
+        return new DashboardDtos.TeacherOverview(
+                !homeroomClassCodes.isEmpty(), homeroomClassCodes, todayLessons, attentionStudents
+        );
+    }
+
+    private DashboardDtos.AttentionStudent attentionStudent(ResultSet rs) throws SQLException {
+        int attendanceAlerts = rs.getInt("attendance_alerts");
+        int missingAssignments = rs.getInt("missing_assignments");
+        Double average = nullableDouble(rs, "subject_average");
+        List<String> reasons = new ArrayList<>();
+        if (attendanceAlerts > 0) reasons.add(attendanceAlerts + " lượt vắng không phép/đi muộn trong 30 ngày");
+        if (missingAssignments > 0) reasons.add(missingAssignments + " bài quá hạn chưa nộp");
+        if (average != null && average < 5.0) reasons.add("điểm trung bình " + String.format("%.1f", average));
+        String severity = attendanceAlerts >= 3 || missingAssignments >= 2 || (average != null && average < 4.0)
+                ? "CRITICAL" : "WARNING";
+        return new DashboardDtos.AttentionStudent(
+                rs.getString("student_id"), safe(rs.getString("student_code")), rs.getString("student_name"),
+                rs.getString("class_id"), rs.getString("class_code"), attendanceAlerts, missingAssignments,
+                average, severity, String.join(" · ", reasons)
+        );
+    }
+
+    private int severityRank(String severity) {
+        return "CRITICAL".equals(severity) ? 0 : 1;
+    }
+
+    private String lessonStatus(String startTime, String endTime) {
+        LocalTime now = LocalTime.now();
+        LocalTime start = parseTime(startTime);
+        LocalTime end = parseTime(endTime);
+        if (start == null || end == null) return "UPCOMING";
+        if (now.isBefore(start)) return "UPCOMING";
+        if (now.isAfter(end)) return "COMPLETED";
+        return "IN_PROGRESS";
+    }
+
+    private LocalTime parseTime(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return LocalTime.parse(value.length() >= 5 ? value.substring(0, 5) : value);
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private Double nullableDouble(ResultSet rs, String column) throws SQLException {
+        double value = rs.getDouble(column);
+        return rs.wasNull() ? null : value;
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value;
     }
 
     private DashboardDtos.Response student(String studentId) {
