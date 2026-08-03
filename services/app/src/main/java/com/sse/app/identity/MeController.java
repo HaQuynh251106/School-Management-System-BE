@@ -3,6 +3,7 @@ package com.sse.app.identity;
 import com.sse.app.common.ApiException;
 import com.sse.app.security.CurrentUser;
 import com.sse.app.security.CurrentUserHolder;
+import com.sse.app.audit.AuditService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -17,9 +18,11 @@ import java.util.Map;
 public class MeController {
 
     private final UserService users;
+    private final AuditService audit;
 
-    public MeController(UserService users) {
+    public MeController(UserService users, AuditService audit) {
         this.users = users;
+        this.audit = audit;
     }
 
     @GetMapping("/me")
@@ -37,7 +40,10 @@ public class MeController {
     @PutMapping("/me/password")
     public Map<String, Object> changePassword(
             @Valid @RequestBody IdentityDtos.ChangePasswordRequest request) {
-        users.changePassword(CurrentUserHolder.require().id(), request.currentPassword(), request.newPassword());
+        CurrentUser current = CurrentUserHolder.require();
+        users.changePassword(current.id(), request.currentPassword(), request.newPassword());
+        audit.record(current.id(), current.username(), current.role(), "PASSWORD_CHANGED", "identity",
+                "user", current.id(), "Người dùng chủ động đổi mật khẩu; các phiên cũ đã bị thu hồi");
         return Map.of("ok", true, "reauthenticationRequired", true);
     }
 

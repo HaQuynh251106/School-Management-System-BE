@@ -416,22 +416,38 @@ public class StructureService {
 
     @Transactional
     public ClassEnrollment recordEnrollment(String studentId, String classId) {
+        return recordEnrollment(studentId, classId, Instant.now(clock));
+    }
+
+    @Transactional
+    public ClassEnrollment recordEnrollment(String studentId, String classId, Instant effectiveAt) {
         SchoolClass schoolClass = getClass(classId);
         String yearId = schoolClass.getAcademicYearId();
         ClassEnrollment enrollment = enrollments.findByAcademicYearIdAndClassIdAndStudentId(yearId, classId, studentId)
                 .orElseGet(() -> ClassEnrollment.builder().id(Ids.gen("ce")).studentId(studentId)
                         .classId(classId).academicYearId(yearId).cohortId(schoolClass.getCohortId())
-                        .enrolledAt(Instant.now()).build());
+                        .enrolledAt(effectiveAt).build());
         List<ClassEnrollment> active = enrollments.findByStudentIdAndStatus(studentId, "ACTIVE");
         active.stream().filter(item -> !item.getId().equals(enrollment.getId())).forEach(item -> {
             item.setStatus("TRANSFERRED");
-            item.setEndedAt(Instant.now());
+            item.setEndedAt(effectiveAt);
         });
         enrollments.saveAll(active);
         enrollment.setStatus("ACTIVE");
         enrollment.setCohortId(schoolClass.getCohortId());
         enrollment.setEndedAt(null);
         return enrollments.save(enrollment);
+    }
+
+    @Transactional
+    public void markEnrollmentRolledBack(String studentId, String classId, Instant endedAt) {
+        SchoolClass schoolClass = getClass(classId);
+        enrollments.findByAcademicYearIdAndClassIdAndStudentId(
+                schoolClass.getAcademicYearId(), classId, studentId).ifPresent(item -> {
+            item.setStatus("ROLLED_BACK");
+            item.setEndedAt(endedAt);
+            enrollments.save(item);
+        });
     }
 
     @Transactional

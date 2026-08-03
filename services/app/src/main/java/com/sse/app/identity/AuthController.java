@@ -17,7 +17,9 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** E1 + A1: đăng nhập, refresh token, quên/đặt lại mật khẩu. */
 @RestController
@@ -25,6 +27,8 @@ import java.util.Map;
 public class AuthController {
 
     private static final String REFRESH_COOKIE = "sse_refresh";
+    private static final long RECOVERY_COOLDOWN_MILLIS = Duration.ofSeconds(60).toMillis();
+    private static final int MAX_RECOVERY_RATE_KEYS = 10_000;
 
     private final UserService users;
     private final JwtService jwt;
@@ -35,6 +39,7 @@ public class AuthController {
     private final LoginHistoryService loginHistory;
     private final LoginAttemptService loginAttempts;
     private final boolean secureRefreshCookie;
+    private final Map<String, Long> recoveryRequests = new ConcurrentHashMap<>();
 
     public AuthController(UserService users, JwtService jwt, AuditService audit,
                           RefreshTokenService refreshTokens,
@@ -114,20 +119,56 @@ public class AuthController {
     }
 
     @PostMapping("/forgot-password")
-    public Map<String, Object> forgotPassword(@RequestBody ForgotPasswordRequest req) {
+    public Map<String, Object> forgotPassword(@RequestBody ForgotPasswordRequest req,
+                                              HttpServletRequest request) {
+        if (!acquireRecoverySlot(req, request)) return recoveryResponse();
         UserService.PasswordResetIssue issue = users.requestPasswordReset(req.email(), req.username());
+        Map<String, Object> body = recoveryResponse();
+        if (issue != null) {
+            if ("ACTIVATION_LINK".equals(issue.purpose())) resetMailer.sendActivation(issue.email(), issue.token());
+            else resetMailer.sendReset(issue.email(), issue.token());
+            audit.record(issue.userId(), "SELF_SERVICE", "PUBLIC", "PASSWORD_RECOVERY_REQUESTED",
+                    "identity", "user", issue.userId(), "Đã yêu cầu liên kết " + issue.purpose());
+        }
+        if (exposeResetToken && issue != null) body.put("devResetToken", issue.token());
+        if (exposeResetToken && issue != null) body.put("devPurpose", issue.purpose());
+        return body;
+    }
+
+    private Map<String, Object> recoveryResponse() {
         Map<String, Object> body = new HashMap<>();
         body.put("ok", true);
-        body.put("message", "Nếu email tồn tại, link reset đã được gửi.");
-        // DEV: không có email server nên trả token trực tiếp để test luồng reset.
-        if (issue != null) resetMailer.send(issue.email(), issue.token());
-        if (exposeResetToken && issue != null) body.put("devResetToken", issue.token());
+        body.put("message", "Nếu thông tin hợp lệ, liên kết truy cập sẽ được gửi qua email.");
         return body;
+    }
+
+    private boolean acquireRecoverySlot(ForgotPasswordRequest req, HttpServletRequest request) {
+        long now = System.currentTimeMillis();
+        if (recoveryRequests.size() > MAX_RECOVERY_RATE_KEYS) {
+            recoveryRequests.entrySet().removeIf(entry -> now - entry.getValue() >= RECOVERY_COOLDOWN_MILLIS);
+        }
+        String email = req == null || req.email() == null ? "" : req.email().trim().toLowerCase(Locale.ROOT);
+        String username = req == null || req.username() == null ? "" : req.username().trim().toLowerCase(Locale.ROOT);
+        String key = clientIp(request) + "|" + email + "|" + username;
+        Long previous = recoveryRequests.putIfAbsent(key, now);
+        if (previous == null) return true;
+        if (now - previous < RECOVERY_COOLDOWN_MILLIS) return false;
+        return recoveryRequests.replace(key, previous, now);
     }
 
     @PostMapping("/reset-password")
     public Map<String, Object> resetPassword(@Valid @RequestBody ResetPasswordRequest req) {
-        users.confirmPasswordReset(req.token(), req.newPassword());
+        UserDto user = users.confirmPasswordReset(req.token(), req.newPassword());
+        audit.record(user.id(), user.username(), user.role(), "PASSWORD_RESET_COMPLETED",
+                "identity", "user", user.id(), "Người dùng tự đặt lại mật khẩu");
+        return Map.of("ok", true);
+    }
+
+    @PostMapping("/activate")
+    public Map<String, Object> activate(@Valid @RequestBody ActivateAccountRequest req) {
+        UserDto user = users.confirmActivation(req.token(), req.newPassword());
+        audit.record(user.id(), user.username(), user.role(), "ACCOUNT_ACTIVATED",
+                "identity", "user", user.id(), "Người dùng hoàn tất kích hoạt tài khoản");
         return Map.of("ok", true);
     }
 

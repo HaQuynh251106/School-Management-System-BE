@@ -25,4 +25,13 @@ public class PasswordResetToken {
     private Instant expiresAt;
 
     private Instant usedAt;
+
+    /** RESET_LINK | ACTIVATION_LINK. */
+    @Builder.Default
+    @Column(nullable = false)
+    private String purpose = "RESET_LINK";
+
+    @Builder.Default
+    @Column(nullable = false)
+    private Instant createdAt = Instant.now();
 }

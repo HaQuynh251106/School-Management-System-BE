@@ -1,6 +1,8 @@
 package com.sse.app.identity;
 
 import com.sse.app.common.ApiException;
+import com.sse.app.audit.AuditService;
+import com.sse.app.security.CurrentUserHolder;
 import com.sse.app.identity.IdentityDtos.CreateUserRequest;
 import com.sse.app.identity.IdentityDtos.ImportPreview;
 import com.sse.app.identity.IdentityDtos.ImportPreviewRow;
@@ -39,11 +41,14 @@ public class UserImportService {
 
     private final UserService users;
     private final byte[] signingKey;
+    private final AuditService audit;
 
     public UserImportService(UserService users,
-                             @Value("${sse.jwt.secret}") String signingSecret) {
+                             @Value("${sse.jwt.secret}") String signingSecret,
+                             AuditService audit) {
         this.users = users;
         this.signingKey = signingSecret.getBytes(StandardCharsets.UTF_8);
+        this.audit = audit;
     }
 
     public ImportPreview preview(MultipartFile file) {
@@ -91,18 +96,27 @@ public class UserImportService {
         }
 
         int imported = 0;
+        Map<String, UserDto> createdByUsername = new HashMap<>();
         for (ParsedRow row : parsed.rows()) {
             if (row.request() == null) continue;
             UserDto created = users.create(row.request());
-            users.requirePasswordChange(created.id());
-            if (row.linkedUser() != null) {
-                if ("PARENT".equals(row.request().role())) {
-                    users.linkChild(created.id(), row.linkedUser().getId(), true);
-                } else if ("STUDENT".equals(row.request().role())) {
-                    users.linkChild(row.linkedUser().getId(), created.id(), true);
-                }
-            }
+            createdByUsername.put(created.username().toLowerCase(Locale.ROOT), created);
+            var actor = CurrentUserHolder.require();
+            audit.record(actor.id(), actor.username(), actor.role(), "ACCOUNT_PROVISIONED_BY_IMPORT", "identity",
+                    "user", created.id(), created.username() + " · " + created.role() + " · " + created.activationStatus());
             imported++;
+        }
+        for (ParsedRow row : parsed.rows()) {
+            if (row.request() == null || row.linkedUsername() == null || row.linkedUsername().isBlank()) continue;
+            UserDto source = createdByUsername.get(row.request().username().toLowerCase(Locale.ROOT));
+            if (source == null) continue;
+            for (String linkedUsername : linkedUsernames(row.linkedUsername())) {
+                UserDto linked = createdByUsername.get(linkedUsername.toLowerCase(Locale.ROOT));
+                if (linked == null) linked = users.findByUsername(linkedUsername).map(users::toDto).orElse(null);
+                if (linked == null) continue;
+                if ("PARENT".equals(source.role())) users.linkChild(source.id(), linked.id(), true);
+                else if ("STUDENT".equals(source.role())) users.linkChild(linked.id(), source.id(), true);
+            }
         }
         return new ImportResult(parsed.rows().size(), imported, validationErrors.size(), validationErrors);
     }
@@ -111,7 +125,7 @@ public class UserImportService {
         try (Workbook workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook();
              ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             Sheet sheet = workbook.createSheet("Nguoi dung");
-            String[] headers = {"Tên đăng nhập", "Họ tên", "Vai trò", "Mật khẩu", "Email", "Số điện thoại",
+            String[] headers = {"Tên đăng nhập", "Họ tên", "Vai trò", "Email", "Số điện thoại",
                     "Mã học sinh", "Mã giáo viên", "Ngày sinh", "Giới tính",
                     "Địa chỉ", "Ngày nhập học", "Người giám hộ", "SĐT người giám hộ", "Tên đăng nhập liên kết"};
             Row header = sheet.createRow(0);
@@ -126,7 +140,7 @@ public class UserImportService {
                 sheet.setColumnWidth(i, Math.min(40, Math.max(14, headers[i].length() + 4)) * 256);
             }
             Row example = sheet.createRow(1);
-            String[] values = {"hs.nguyenvana", "Nguyễn Văn A", "Học sinh", "Sse@123456", "a@example.edu.vn",
+            String[] values = {"", "Nguyễn Văn A", "Học sinh", "a@example.edu.vn",
                     "0900000000", "", "", "01/01/2010", "MALE", "TP. Hồ Chí Minh",
                     "05/09/2025", "Nguyễn Văn B", "0911111111", ""};
             for (int i = 0; i < values.length; i++) example.createCell(i).setCellValue(values[i]);
@@ -146,10 +160,8 @@ public class UserImportService {
             Sheet sheet = workbook.getSheetAt(0);
             if (sheet.getPhysicalNumberOfRows() < 2) throw ApiException.badRequest("Tệp không có dòng dữ liệu");
             Map<String, Integer> headers = headers(sheet.getRow(sheet.getFirstRowNum()), formatter);
-            require(headers, "username", "Tên đăng nhập");
             require(headers, "fullname", "Họ tên");
             require(headers, "role", "Vai trò");
-            require(headers, "password", "Mật khẩu");
 
             Set<String> emailsInFile = new HashSet<>();
             Set<String> studentCodesInFile = new HashSet<>();
@@ -167,6 +179,7 @@ public class UserImportService {
             throw ApiException.badRequest("Không thể đọc tệp Excel: " + cleanMessage(e));
         }
         if (rows.isEmpty()) throw ApiException.badRequest("Tệp không có dòng dữ liệu hợp lệ để kiểm tra");
+        rows = validateLinks(rows);
         int valid = (int) rows.stream().filter(row -> row.request() != null).count();
         return new ParsedFile(List.copyOf(rows), valid);
     }
@@ -180,9 +193,11 @@ public class UserImportService {
         String classCode = cell(row, h, "classcode", f);
         String linkedUsername = cell(row, h, "linkedusername", f);
         try {
-            username = required(username, "Tên đăng nhập");
             fullName = required(fullName, "Họ tên");
             String role = normalizeRole(required(roleText, "Vai trò"));
+            username = username == null || username.isBlank()
+                    ? users.availableUsername(role, fullName, usernamesInFile)
+                    : username.trim().toLowerCase(Locale.ROOT);
             String normalizedUsername = username.toLowerCase(Locale.ROOT);
             if (!usernamesInFile.add(normalizedUsername)) {
                 throw ApiException.badRequest("Tên đăng nhập bị trùng trong tệp");
@@ -199,8 +214,6 @@ public class UserImportService {
                 throw ApiException.forbidden("Import tài khoản không chuẩn hóa chuyên môn giáo viên; Giáo vụ thực hiện trong phân công giảng dạy");
             }
 
-            String password = required(cell(row, h, "password", f), "Mật khẩu tạm");
-            if (password.length() < 10) throw ApiException.badRequest("Mật khẩu tạm phải có ít nhất 10 ký tự");
             String email = emptyToNull(cell(row, h, "email", f));
             if (email != null && !email.matches("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")) {
                 throw ApiException.badRequest("Email không hợp lệ");
@@ -212,8 +225,7 @@ public class UserImportService {
             assertUniqueInFile(teacherCodesInFile, teacherCode, "Mã giáo viên bị trùng trong tệp");
             users.assertUniqueIdentifiersForImport(email, studentCode, teacherCode);
 
-            User linked = linkedUsername.isBlank() ? null : users.findByUsername(linkedUsername)
-                    .orElseThrow(() -> ApiException.badRequest("Không tìm thấy tài khoản liên kết " + linkedUsername));
+            User linked = linkedUsername.isBlank() ? null : users.findByUsername(linkedUsername).orElse(null);
             if (linked != null && "PARENT".equals(role) && !"STUDENT".equals(linked.getRole())) {
                 throw ApiException.badRequest("Tài khoản liên kết phải là học sinh");
             }
@@ -222,7 +234,7 @@ public class UserImportService {
             }
 
             CreateUserRequest request = new CreateUserRequest(
-                    null, username, password, fullName, role,
+                    null, username, null, fullName, role,
                     email, emptyToNull(cell(row, h, "phone", f)), null,
                     teacherCode,
                     null,
@@ -244,13 +256,58 @@ public class UserImportService {
                     "STUDENT".equals(role) ? "Chờ phân lớp" : "",
                     linkedUsername, true, null
             );
-            return new ParsedRow(preview, request, linked);
+            return new ParsedRow(preview, request, emptyToNull(linkedUsername));
         } catch (Exception e) {
             ImportPreviewRow preview = new ImportPreviewRow(
                     rowNumber, username, fullName, roleText, classCode, linkedUsername, false, cleanMessage(e)
             );
-            return new ParsedRow(preview, null, null);
+            return new ParsedRow(preview, null, emptyToNull(linkedUsername));
         }
+    }
+
+    private List<ParsedRow> validateLinks(List<ParsedRow> input) {
+        Map<String, ParsedRow> rowsByUsername = new HashMap<>();
+        input.stream().filter(row -> row.request() != null)
+                .forEach(row -> rowsByUsername.put(row.request().username().toLowerCase(Locale.ROOT), row));
+        List<ParsedRow> out = new ArrayList<>();
+        for (ParsedRow row : input) {
+            if (row.request() == null || row.linkedUsername() == null) {
+                out.add(row);
+                continue;
+            }
+            try {
+                if (!Set.of("PARENT", "STUDENT").contains(row.request().role())) {
+                    throw ApiException.badRequest("Chỉ học sinh và phụ huynh được khai báo tài khoản liên kết");
+                }
+                for (String linkedUsername : linkedUsernames(row.linkedUsername())) {
+                    User existing = users.findByUsername(linkedUsername).orElse(null);
+                    String targetRole = existing == null
+                            ? Optional.ofNullable(rowsByUsername.get(linkedUsername.toLowerCase(Locale.ROOT)))
+                                .map(ParsedRow::request).map(CreateUserRequest::role).orElse(null)
+                            : existing.getRole();
+                    if (targetRole == null) throw ApiException.badRequest("Không tìm thấy tài khoản liên kết " + linkedUsername);
+                    if ("PARENT".equals(row.request().role()) && !"STUDENT".equals(targetRole)) {
+                        throw ApiException.badRequest("Tài khoản liên kết của phụ huynh phải là học sinh");
+                    }
+                    if ("STUDENT".equals(row.request().role()) && !"PARENT".equals(targetRole)) {
+                        throw ApiException.badRequest("Tài khoản liên kết của học sinh phải là phụ huynh");
+                    }
+                }
+                out.add(row);
+            } catch (Exception exception) {
+                ImportPreviewRow invalid = new ImportPreviewRow(row.preview().row(), row.preview().username(),
+                        row.preview().fullName(), row.preview().role(), row.preview().classCode(),
+                        row.preview().linkedUsername(), false, cleanMessage(exception));
+                out.add(new ParsedRow(invalid, null, row.linkedUsername()));
+            }
+        }
+        return out;
+    }
+
+    private List<String> linkedUsernames(String value) {
+        if (value == null || value.isBlank()) return List.of();
+        return Arrays.stream(value.split("[,;]"))
+                .map(String::trim).filter(item -> !item.isBlank()).distinct().toList();
     }
 
     private void assertUniqueInFile(Set<String> seen, String value, String message) {
@@ -426,7 +483,7 @@ public class UserImportService {
         return exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
     }
 
-    private record ParsedRow(ImportPreviewRow preview, CreateUserRequest request, User linkedUser) {
+    private record ParsedRow(ImportPreviewRow preview, CreateUserRequest request, String linkedUsername) {
     }
 
     private record ParsedFile(List<ParsedRow> rows, int validRows) {

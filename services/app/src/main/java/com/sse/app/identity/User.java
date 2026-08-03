@@ -45,6 +45,13 @@ public class User {
     @Builder.Default
     private int tokenVersion = 0;
 
+    /** ACTIVE | PENDING_EMAIL | PENDING_MANUAL. Existing accounts are migrated as ACTIVE. */
+    @Builder.Default
+    private String activationStatus = "ACTIVE";
+
+    private Instant activationSentAt;
+    private Instant activationCompletedAt;
+
     // Teacher
     private String teacherCode;
     private String mainSubject;

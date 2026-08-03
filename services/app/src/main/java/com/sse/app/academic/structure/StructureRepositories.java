@@ -1,6 +1,7 @@
 package com.sse.app.academic.structure;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 
 import java.util.List;
 import java.util.Optional;
@@ -48,6 +49,11 @@ interface ClassEnrollmentRepository extends JpaRepository<ClassEnrollment, Strin
     List<ClassEnrollment> findByStudentIdAndStatus(String studentId, String status);
     Optional<ClassEnrollment> findByAcademicYearIdAndClassIdAndStudentId(
             String academicYearId, String classId, String studentId);
+}
+
+interface StudentClassTransferRepository extends JpaRepository<StudentClassTransfer, String>,
+        JpaSpecificationExecutor<StudentClassTransfer> {
+    boolean existsByStudentIdAndStatusAndCreatedAtAfter(String studentId, String status, java.time.Instant createdAt);
 }
 
 interface CohortRepository extends JpaRepository<Cohort, String> {

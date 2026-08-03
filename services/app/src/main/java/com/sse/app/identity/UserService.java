@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
+import java.text.Normalizer;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
@@ -38,11 +39,12 @@ public class UserService {
     private final RefreshTokenRepository refreshTokens;
     private final StructureService structure;
     private final LoginAttemptService loginAttempts;
+    private final PasswordResetMailer mailer;
 
     public UserService(UserRepository users, ParentStudentRepository relations,
                        PasswordResetTokenRepository resetTokens, PasswordEncoder encoder,
                        RefreshTokenRepository refreshTokens, StructureService structure,
-                       LoginAttemptService loginAttempts) {
+                       LoginAttemptService loginAttempts, PasswordResetMailer mailer) {
         this.users = users;
         this.relations = relations;
         this.resetTokens = resetTokens;
@@ -50,6 +52,7 @@ public class UserService {
         this.refreshTokens = refreshTokens;
         this.structure = structure;
         this.loginAttempts = loginAttempts;
+        this.mailer = mailer;
     }
 
     // ---------- Tra cứu ----------
@@ -77,7 +80,8 @@ public class UserService {
                 u.getEnrollmentDate(), u.getGuardianName(), u.getGuardianPhone(),
                 u.getTeacherCode(), u.getMainSubject(), childrenIds,
                 u.getCohortId(), u.getStudentStatus(), u.getGraduatedAt(),
-                u.getGraduationAcademicYearId(), u.getGraduationClassId());
+                u.getGraduationAcademicYearId(), u.getGraduationClassId(),
+                lifecycleStatus(u), u.getActivationSentAt(), u.getActivationCompletedAt());
     }
 
     /** Thông tin an toàn để dùng trong danh sách/lựa chọn, không lộ dữ liệu hồ sơ cá nhân. */
@@ -91,7 +95,8 @@ public class UserService {
                 null, null, null,
                 u.getTeacherCode(), u.getMainSubject(), null,
                 u.getCohortId(), u.getStudentStatus(), u.getGraduatedAt(),
-                u.getGraduationAcademicYearId(), u.getGraduationClassId());
+                u.getGraduationAcademicYearId(), u.getGraduationClassId(),
+                lifecycleStatus(u), u.getActivationSentAt(), u.getActivationCompletedAt());
     }
 
     public UserDto dtoById(String id) {
@@ -105,6 +110,9 @@ public class UserService {
                 .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "Sai tên đăng nhập hoặc mật khẩu"));
         if (!"ACTIVE".equals(u.getStatus())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Tài khoản bị khóa");
+        }
+        if (!"ACTIVE".equals(lifecycleStatus(u))) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Tài khoản chưa được kích hoạt");
         }
         if (!encoder.matches(rawPassword, u.getPasswordHash())) {
             throw new ApiException(HttpStatus.UNAUTHORIZED, "Sai tên đăng nhập hoặc mật khẩu");
@@ -163,12 +171,12 @@ public class UserService {
     }
 
     public PageResponse<UserDto> page(String role, String q, String classId, String gradeLevel,
-                                      String status, int page, int size, String sort) {
+                                      String status, String accessState, int page, int size, String sort) {
         int safePage = Math.max(0, page);
         int safeSize = Math.max(5, Math.min(size, 100));
         Sort ordering = userSort(sort);
-        Specification<User> scope = userSpecification(role, q, classId, gradeLevel, null);
-        Specification<User> filtered = userSpecification(role, q, classId, gradeLevel, status);
+        Specification<User> scope = userSpecification(role, q, classId, gradeLevel, null, null);
+        Specification<User> filtered = userSpecification(role, q, classId, gradeLevel, status, accessState);
         var result = users.findAll(filtered, PageRequest.of(safePage, safeSize, ordering))
                 .map(this::toDto);
         Map<String, Long> summary = new LinkedHashMap<>();
@@ -179,10 +187,10 @@ public class UserService {
     }
 
     public PageResponse<UserDto> summaryPage(String role, String q, String classId, String gradeLevel,
-                                             String status, int page, int size, String sort) {
+                                             String status, String accessState, int page, int size, String sort) {
         int safePage = Math.max(0, page);
         int safeSize = Math.max(5, Math.min(size, 100));
-        var result = users.findAll(userSpecification(role, q, classId, gradeLevel, status),
+        var result = users.findAll(userSpecification(role, q, classId, gradeLevel, status, accessState),
                         PageRequest.of(safePage, safeSize, userSort(sort)))
                 .map(this::toSummaryDto);
         return PageResponse.from(result);
@@ -260,7 +268,7 @@ public class UserService {
     }
 
     private List<User> filteredUsers(String role, String q, String classId, boolean boundedSelector) {
-        Specification<User> specification = userSpecification(role, q, classId, null, null);
+        Specification<User> specification = userSpecification(role, q, classId, null, null, null);
         if (boundedSelector) {
             // Compatibility endpoint for small selectors. Never materialize the
             // full school population; large management screens use /users/page.
@@ -274,7 +282,7 @@ public class UserService {
     }
 
     private Specification<User> userSpecification(String role, String q, String classId,
-                                                  String gradeLevel, String status) {
+                                                  String gradeLevel, String status, String accessState) {
         List<String> gradeClassIds = gradeLevel == null || gradeLevel.isBlank()
                 ? List.of()
                 : structure.listClasses(null, gradeLevel).stream().map(c -> c.getId()).toList();
@@ -286,6 +294,19 @@ public class UserService {
                         cb.notEqual(root.get("studentStatus"), "GRADUATED")));
             }
             if (status != null && !status.isBlank()) predicates.add(cb.equal(root.get("status"), status.toUpperCase(Locale.ROOT)));
+            if (accessState != null && !accessState.isBlank()) {
+                switch (accessState.trim().toUpperCase(Locale.ROOT)) {
+                    case "PENDING_ACTIVATION" -> predicates.add(cb.notEqual(root.get("activationStatus"), "ACTIVE"));
+                    case "REQUIRES_PASSWORD_CHANGE" -> predicates.add(cb.isTrue(root.get("passwordChangeRequired")));
+                    case "MISSING_EMAIL" -> predicates.add(cb.or(cb.isNull(root.get("email")), cb.equal(root.get("email"), "")));
+                    case "LOCKED" -> predicates.add(cb.notEqual(root.get("status"), "ACTIVE"));
+                    case "READY" -> predicates.add(cb.and(
+                            cb.equal(root.get("status"), "ACTIVE"),
+                            cb.equal(root.get("activationStatus"), "ACTIVE"),
+                            cb.isFalse(root.get("passwordChangeRequired"))));
+                    default -> throw ApiException.badRequest("Trạng thái vòng đời tài khoản không hợp lệ");
+                }
+            }
             if (q != null && !q.isBlank()) {
                 String pattern = "%" + q.trim().toLowerCase(Locale.ROOT) + "%";
                 predicates.add(cb.or(
@@ -350,11 +371,20 @@ public class UserService {
 
     @Transactional
     public UserDto create(CreateUserRequest r) {
-        if (users.existsByUsername(r.username())) {
+        String username = r.username() == null || r.username().isBlank()
+                ? availableUsername(r.role(), r.fullName(), Set.of())
+                : r.username().trim().toLowerCase(Locale.ROOT);
+        if (users.existsByUsername(username)) {
             throw ApiException.conflict("Tên đăng nhập đã tồn tại");
         }
         validateUniqueIdentifiers(null, r.email(), r.studentCode(), r.teacherCode());
         String id = (r.id() == null || r.id().isBlank()) ? Ids.gen("u") : r.id();
+        boolean suppliedPassword = r.password() != null && !r.password().isBlank();
+        String initialPassword = suppliedPassword ? r.password() : temporaryPassword();
+        if (suppliedPassword) validatePassword(initialPassword);
+        String normalizedEmail = normalizeEmail(r.email());
+        String activationStatus = suppliedPassword ? "ACTIVE"
+                : normalizedEmail == null ? "PENDING_MANUAL" : "PENDING_EMAIL";
         // Học sinh không nhập mã thủ công — hệ thống tự sinh mã HS.
         String studentCode = r.studentCode();
         if ("STUDENT".equals(r.role()) && (studentCode == null || studentCode.isBlank())) {
@@ -366,15 +396,16 @@ public class UserService {
         String cohortId = "STUDENT".equals(r.role()) ? structure.cohortIdForClass(r.classId()) : null;
         User u = User.builder()
                 .id(id)
-                .username(r.username())
-                .passwordHash(encoder.encode(r.password()))
+                .username(username)
+                .passwordHash(encoder.encode(initialPassword))
                 .fullName(r.fullName())
                 .role(r.role())
-                .email(normalizeEmail(r.email()))
+                .email(normalizedEmail)
                 .phone(r.phone())
                 .avatarUrl(r.avatarUrl())
                 .status("ACTIVE")
                 .passwordChangeRequired(true)
+                .activationStatus(activationStatus)
                 .teacherCode(r.teacherCode())
                 .mainSubject(r.mainSubject())
                 .studentCode(studentCode)
@@ -400,7 +431,39 @@ public class UserService {
         if ("STUDENT".equals(saved.getRole()) && saved.getClassId() != null) {
             structure.recordEnrollment(saved.getId(), saved.getClassId());
         }
+        if ("PENDING_EMAIL".equals(activationStatus)) {
+            PasswordResetIssue issue = issueToken(saved, "ACTIVATION_LINK", 48, ChronoUnit.HOURS);
+            mailer.sendActivation(issue.email(), issue.token());
+        }
         return toDto(saved);
+    }
+
+    /** Deterministic, human-readable username with collision-safe numeric suffix. */
+    public String availableUsername(String role, String fullName, Set<String> reserved) {
+        String prefix = switch (role == null ? "" : role.toUpperCase(Locale.ROOT)) {
+            case "TEACHER" -> "gv";
+            case "STUDENT" -> "hs";
+            case "PARENT" -> "ph";
+            case "ACADEMIC_STAFF" -> "giaovu";
+            case "ACCOUNTANT" -> "ketoan";
+            default -> "user";
+        };
+        String normalized = Normalizer.normalize(Objects.toString(fullName, "nguoidung"), Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .toLowerCase(Locale.ROOT)
+                .replace('đ', 'd')
+                .replaceAll("[^a-z0-9 ]", " ")
+                .trim().replaceAll("\\s+", "");
+        if (normalized.isBlank()) normalized = "nguoidung";
+        String base = prefix + "." + normalized;
+        String candidate = base;
+        int suffix = 2;
+        Set<String> normalizedReserved = new HashSet<>();
+        reserved.forEach(value -> normalizedReserved.add(value.toLowerCase(Locale.ROOT)));
+        while (users.existsByUsername(candidate) || normalizedReserved.contains(candidate)) {
+            candidate = base + suffix++;
+        }
+        return candidate;
     }
 
     @Transactional
@@ -408,6 +471,7 @@ public class UserService {
         User u = getById(id);
         validateUniqueIdentifiers(id, r.email(), r.studentCode(), r.teacherCode());
         String previousClassId = u.getClassId();
+        String previousEmail = u.getEmail();
         if (r.fullName() != null)   u.setFullName(r.fullName());
         if (r.email() != null)      u.setEmail(normalizeEmail(r.email()));
         if (r.phone() != null)      u.setPhone(r.phone());
@@ -438,7 +502,24 @@ public class UserService {
                 && !Objects.equals(previousClassId, saved.getClassId())) {
             structure.recordEnrollment(saved.getId(), saved.getClassId());
         }
+        if (!"ACTIVE".equals(lifecycleStatus(saved)) && previousEmail == null && saved.getEmail() != null) {
+            saved.setActivationStatus("PENDING_EMAIL");
+            PasswordResetIssue issue = issueToken(saved, "ACTIVATION_LINK", 48, ChronoUnit.HOURS);
+            mailer.sendActivation(issue.email(), issue.token());
+        }
         return toDto(saved);
+    }
+
+    public AccountLifecycleSummary lifecycleSummary(String role) {
+        Specification<User> scope = userSpecification(role, null, null, null, null, null);
+        return new AccountLifecycleSummary(
+                users.count(scope),
+                users.count(scope.and((root, query, cb) -> cb.equal(root.get("status"), "ACTIVE"))),
+                users.count(scope.and((root, query, cb) -> cb.notEqual(root.get("status"), "ACTIVE"))),
+                users.count(scope.and((root, query, cb) -> cb.notEqual(root.get("activationStatus"), "ACTIVE"))),
+                users.count(scope.and((root, query, cb) -> cb.isTrue(root.get("passwordChangeRequired")))),
+                users.count(scope.and((root, query, cb) -> cb.or(cb.isNull(root.get("email")), cb.equal(root.get("email"), ""))))
+        );
     }
 
     @Transactional
@@ -487,11 +568,11 @@ public class UserService {
     public String adminResetPassword(String id, String newPassword) {
         User u = getById(id);
         String pwd = (newPassword == null || newPassword.isBlank()) ? temporaryPassword() : newPassword;
-        if (pwd.length() < 10 || pwd.length() > 128) {
-            throw ApiException.badRequest("Mật khẩu tạm phải có từ 10 đến 128 ký tự");
-        }
+        validatePassword(pwd);
         u.setPasswordHash(encoder.encode(pwd));
         u.setPasswordChangeRequired(true);
+        u.setActivationStatus("ACTIVE");
+        u.setActivationCompletedAt(Instant.now());
         u.setTokenVersion(u.getTokenVersion() + 1);
         users.save(u);
         revokeRefreshTokens(u.getId());
@@ -509,15 +590,11 @@ public class UserService {
         if (found.isEmpty() && username != null && !username.isBlank())
             found = users.findByUsername(username);
         if (found.isEmpty()) return null;
-
-        String raw = UUID.randomUUID().toString().replace("-", "");
-        resetTokens.save(PasswordResetToken.builder()
-                .id(Ids.gen("prt"))
-                .userId(found.get().getId())
-                .tokenHash(sha256(raw))
-                .expiresAt(Instant.now().plus(30, ChronoUnit.MINUTES))
-                .build());
-        return new PasswordResetIssue(raw, found.get().getEmail());
+        User user = found.get();
+        if (!"ACTIVE".equals(lifecycleStatus(user))) {
+            return issueToken(user, "ACTIVATION_LINK", 48, ChronoUnit.HOURS);
+        }
+        return issueToken(user, "RESET_LINK", 30, ChronoUnit.MINUTES);
     }
 
     @Transactional
@@ -551,11 +628,12 @@ public class UserService {
         return value == null || value.isBlank() ? null : value.trim();
     }
 
-    public record PasswordResetIssue(String token, String email) {}
+    public record PasswordResetIssue(String token, String email, String purpose, String userId) {}
 
     @Transactional
-    public void confirmPasswordReset(String rawToken, String newPassword) {
-        PasswordResetToken t = resetTokens.findByTokenHash(sha256(rawToken))
+    public UserDto confirmPasswordReset(String rawToken, String newPassword) {
+        validatePassword(newPassword);
+        PasswordResetToken t = resetTokens.findByTokenHashAndPurpose(sha256(rawToken), "RESET_LINK")
                 .orElseThrow(() -> ApiException.badRequest("Token không hợp lệ"));
         if (t.getUsedAt() != null) throw ApiException.badRequest("Token đã được dùng");
         if (t.getExpiresAt().isBefore(Instant.now())) throw ApiException.badRequest("Token đã hết hạn");
@@ -569,10 +647,59 @@ public class UserService {
         loginAttempts.clearForUsername(u.getUsername());
         t.setUsedAt(Instant.now());
         resetTokens.save(t);
+        return toDto(u);
+    }
+
+    @Transactional
+    public UserDto confirmActivation(String rawToken, String newPassword) {
+        validatePassword(newPassword);
+        PasswordResetToken token = resetTokens.findByTokenHashAndPurpose(sha256(rawToken), "ACTIVATION_LINK")
+                .orElseThrow(() -> ApiException.badRequest("Liên kết kích hoạt không hợp lệ"));
+        assertUsableToken(token);
+        User user = getById(token.getUserId());
+        user.setPasswordHash(encoder.encode(newPassword));
+        user.setPasswordChangeRequired(false);
+        user.setActivationStatus("ACTIVE");
+        user.setActivationCompletedAt(Instant.now());
+        user.setTokenVersion(user.getTokenVersion() + 1);
+        users.save(user);
+        revokeRefreshTokens(user.getId());
+        loginAttempts.clearForUsername(user.getUsername());
+        token.setUsedAt(Instant.now());
+        resetTokens.save(token);
+        return toDto(user);
+    }
+
+    @Transactional
+    public boolean resendActivation(String userId) {
+        User user = getById(userId);
+        if ("ACTIVE".equals(lifecycleStatus(user))) {
+            throw ApiException.conflict("Tài khoản đã được kích hoạt");
+        }
+        if (user.getEmail() == null || user.getEmail().isBlank()) {
+            throw ApiException.badRequest("Tài khoản chưa có email để gửi liên kết kích hoạt");
+        }
+        user.setActivationStatus("PENDING_EMAIL");
+        PasswordResetIssue issue = issueToken(user, "ACTIVATION_LINK", 48, ChronoUnit.HOURS);
+        return mailer.sendActivation(issue.email(), issue.token());
+    }
+
+    @Transactional
+    public boolean sendPasswordReset(String userId) {
+        User user = getById(userId);
+        if (!"ACTIVE".equals(lifecycleStatus(user))) {
+            return resendActivation(userId);
+        }
+        if (user.getEmail() == null || user.getEmail().isBlank()) {
+            throw ApiException.badRequest("Tài khoản chưa có email để gửi liên kết đặt lại mật khẩu");
+        }
+        PasswordResetIssue issue = issueToken(user, "RESET_LINK", 30, ChronoUnit.MINUTES);
+        return mailer.sendReset(issue.email(), issue.token());
     }
 
     @Transactional
     public void changePassword(String userId, String currentPassword, String newPassword) {
+        validatePassword(newPassword);
         User user = getById(userId);
         if (!encoder.matches(currentPassword, user.getPasswordHash())) {
             throw ApiException.badRequest("Mật khẩu hiện tại không chính xác");
@@ -582,6 +709,8 @@ public class UserService {
         }
         user.setPasswordHash(encoder.encode(newPassword));
         user.setPasswordChangeRequired(false);
+        user.setActivationStatus("ACTIVE");
+        if (user.getActivationCompletedAt() == null) user.setActivationCompletedAt(Instant.now());
         user.setTokenVersion(user.getTokenVersion() + 1);
         users.save(user);
         revokeRefreshTokens(userId);
@@ -594,14 +723,56 @@ public class UserService {
         user.setPasswordChangeRequired(true);
         user.setTokenVersion(user.getTokenVersion() + 1);
         users.save(user);
+        revokeRefreshTokens(userId);
     }
 
     private String temporaryPassword() {
-        StringBuilder value = new StringBuilder("Sse@");
+        StringBuilder value = new StringBuilder("Sse@7");
         for (int i = 0; i < 12; i++) {
             value.append(TEMP_PASSWORD_ALPHABET[SECURE_RANDOM.nextInt(TEMP_PASSWORD_ALPHABET.length)]);
         }
         return value.toString();
+    }
+
+    private PasswordResetIssue issueToken(User user, String purpose, long amount, ChronoUnit unit) {
+        Instant now = Instant.now();
+        List<PasswordResetToken> previous = resetTokens
+                .findByUserIdAndPurposeAndUsedAtIsNull(user.getId(), purpose);
+        previous.forEach(item -> item.setUsedAt(now));
+        resetTokens.saveAll(previous);
+        String raw = UUID.randomUUID().toString().replace("-", "")
+                + UUID.randomUUID().toString().replace("-", "");
+        resetTokens.save(PasswordResetToken.builder()
+                .id(Ids.gen("prt"))
+                .userId(user.getId())
+                .tokenHash(sha256(raw))
+                .purpose(purpose)
+                .createdAt(now)
+                .expiresAt(now.plus(amount, unit))
+                .build());
+        if ("ACTIVATION_LINK".equals(purpose)) {
+            user.setActivationSentAt(now);
+            users.save(user);
+        }
+        return new PasswordResetIssue(raw, user.getEmail(), purpose, user.getId());
+    }
+
+    private void assertUsableToken(PasswordResetToken token) {
+        if (token.getUsedAt() != null) throw ApiException.badRequest("Liên kết đã được sử dụng");
+        if (token.getExpiresAt().isBefore(Instant.now())) throw ApiException.badRequest("Liên kết đã hết hạn");
+    }
+
+    private void validatePassword(String password) {
+        if (password == null || password.length() < 10 || password.length() > 128
+                || !password.matches(".*[A-Z].*") || !password.matches(".*[a-z].*")
+                || !password.matches(".*[0-9].*") || !password.matches(".*[^A-Za-z0-9].*")) {
+            throw ApiException.badRequest("Mật khẩu phải dài 10-128 ký tự và có chữ hoa, chữ thường, số, ký tự đặc biệt");
+        }
+    }
+
+    private String lifecycleStatus(User user) {
+        return user.getActivationStatus() == null || user.getActivationStatus().isBlank()
+                ? "ACTIVE" : user.getActivationStatus();
     }
 
     private String sha256(String s) {

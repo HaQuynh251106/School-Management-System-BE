@@ -47,23 +47,34 @@ public class DashboardService {
     }
 
     private DashboardDtos.Response academicStaff() {
-        double classes = number("select count(*) from classes");
+        String academicYearId = activeAcademicYearId();
+        double classes = academicYearId.isBlank() ? 0 : number("""
+                select count(*) from classes
+                where academic_year_id=? and (status is null or status='ACTIVE')
+                """, academicYearId);
         int unassignedStudents = integer("""
                 select count(*) from users where role='STUDENT' and status='ACTIVE'
                 and (class_id is null or trim(class_id) = '')
                 """);
-        int classesWithoutHomeroom = integer("""
+        int classesWithoutHomeroom = academicYearId.isBlank() ? 0 : integer("""
                 select count(*) from classes where status='ACTIVE'
+                and academic_year_id=?
                 and (homeroom_teacher_id is null or trim(homeroom_teacher_id) = '')
-                """);
+                """, academicYearId);
         String semesterId = activeSemesterId();
         int slots = semesterId.isBlank() ? 0
                 : integer("select count(*) from timetable_slots where semester_id = ?", semesterId);
         int requiredSlots = semesterId.isBlank() ? 0
                 : integer("select coalesce(sum(weekly_periods),0) from teaching_assignments where semester_id = ? and status='ACTIVE'", semesterId);
         double coverage = requiredSlots == 0 ? 0 : Math.min(100, 100.0 * slots / requiredSlots);
-        double upcomingExams = number("select count(*) from exam_periods where status in ('DRAFT','CONFIRMED') and end_date >= current_date");
-        int draftExams = integer("select count(*) from exam_periods where status='DRAFT' and end_date >= current_date");
+        double upcomingExams = academicYearId.isBlank() ? 0 : number("""
+                select count(*) from exam_periods where academic_year_id=?
+                and status in ('DRAFT','CONFIRMED') and end_date >= current_date
+                """, academicYearId);
+        int draftExams = academicYearId.isBlank() ? 0 : integer("""
+                select count(*) from exam_periods where academic_year_id=?
+                and status='DRAFT' and end_date >= current_date
+                """, academicYearId);
         List<DashboardDtos.Metric> metrics = List.of(
                 metric("classes", "Lớp đang vận hành", classes, "NUMBER",
                         classesWithoutHomeroom == 0 ? "Tất cả lớp đã có chủ nhiệm" : classesWithoutHomeroom + " lớp thiếu chủ nhiệm", classesWithoutHomeroom > 0 ? "orange" : "blue"),
@@ -74,17 +85,22 @@ public class DashboardService {
                 metric("alerts", "Kỳ thi cần theo dõi", upcomingExams, "NUMBER", "Kỳ thi nháp hoặc đã xác nhận", upcomingExams > 0 ? "orange" : "green")
         );
         List<DashboardDtos.Chart> charts = List.of(
-                chart("Quy mô theo khối", "Số học sinh trong từng khối", "COLUMN", " học sinh", rows("""
-                        select coalesce(c.grade_level, 'Chưa xếp lớp') label, count(u.id) metric_value
-                        from users u left join classes c on c.id=u.class_id
-                        where u.role='STUDENT' and u.status='ACTIVE'
-                        group by coalesce(c.grade_level, 'Chưa xếp lớp') order by label
-                        """)),
-                chart("Tiến độ thời khóa biểu", "Số tiết đã xếp theo lớp", "BAR", " tiết", rows("""
-                        select c.code label, count(t.id) metric_value from classes c
-                        left join timetable_slots t on t.class_id=c.id
-                        group by c.id,c.code order by c.code limit 12
-                        """))
+                chart("Quy mô theo khối", "Số học sinh của năm học hiện hành", "COLUMN", " học sinh",
+                        academicYearId.isBlank() ? List.of() : rows("""
+                                select c.grade_level label, count(u.id) metric_value
+                                from classes c left join users u on u.class_id=c.id
+                                  and u.role='STUDENT' and u.status='ACTIVE'
+                                where c.academic_year_id=? and (c.status is null or c.status='ACTIVE')
+                                group by c.grade_level order by c.grade_level
+                                """, academicYearId)),
+                chart("Tiến độ thời khóa biểu", "Số tiết đã xếp theo khối trong học kỳ hiện hành", "BAR", " tiết",
+                        semesterId.isBlank() || academicYearId.isBlank() ? List.of() : rows("""
+                                select c.grade_level label, count(t.id) metric_value
+                                from classes c left join timetable_slots t
+                                  on t.class_id=c.id and t.semester_id=?
+                                where c.academic_year_id=? and (c.status is null or c.status='ACTIVE')
+                                group by c.grade_level order by c.grade_level
+                                """, semesterId, academicYearId))
         );
         List<DashboardDtos.WorkItem> workItems = new ArrayList<>();
         addWorkItem(workItems, unassignedStudents, "unassigned-students", "Học sinh chưa được phân lớp",
@@ -101,13 +117,32 @@ public class DashboardService {
     }
 
     private DashboardDtos.Response accountant() {
-        double total = number("select coalesce(sum(total_amount),0) from invoices");
-        double collected = number("select coalesce(sum(paid_amount),0) from invoices");
+        String academicYearId = activeAcademicYearId();
+        double total = academicYearId.isBlank() ? 0 : number("""
+                select coalesce(sum(i.total_amount),0) from invoices i
+                join fee_periods fp on fp.id=i.fee_period_id where fp.academic_year_id=?
+                """, academicYearId);
+        double collected = academicYearId.isBlank() ? 0 : number("""
+                select coalesce(sum(i.paid_amount),0) from invoices i
+                join fee_periods fp on fp.id=i.fee_period_id where fp.academic_year_id=?
+                """, academicYearId);
         double debt = Math.max(0, total - collected);
-        double overdue = number("select count(*) from invoices where status='OVERDUE'");
-        int unpaidInvoices = integer("select count(*) from invoices where status in ('PENDING','PARTIAL','OVERDUE')");
-        int draftFeePeriods = integer("select count(*) from fee_periods where status='DRAFT'");
-        int pendingPayments = integer("select count(*) from payments where status in ('PENDING','PROCESSING')");
+        double overdue = academicYearId.isBlank() ? 0 : number("""
+                select count(*) from invoices i join fee_periods fp on fp.id=i.fee_period_id
+                where fp.academic_year_id=? and i.status='OVERDUE'
+                """, academicYearId);
+        int unpaidInvoices = academicYearId.isBlank() ? 0 : integer("""
+                select count(*) from invoices i join fee_periods fp on fp.id=i.fee_period_id
+                where fp.academic_year_id=? and i.status in ('PENDING','PARTIAL','OVERDUE')
+                """, academicYearId);
+        int draftFeePeriods = academicYearId.isBlank() ? 0 : integer("""
+                select count(*) from fee_periods where academic_year_id=? and status='DRAFT'
+                """, academicYearId);
+        int pendingPayments = academicYearId.isBlank() ? 0 : integer("""
+                select count(*) from payments p join invoices i on i.id=p.invoice_id
+                join fee_periods fp on fp.id=i.fee_period_id
+                where fp.academic_year_id=? and p.status in ('PENDING','PROCESSING')
+                """, academicYearId);
         List<DashboardDtos.Metric> metrics = List.of(
                 metric("invoices", "Tổng phải thu", total, "CURRENCY", "Giá trị hóa đơn đã phát hành", "blue"),
                 metric("payments", "Đã thu", collected, "CURRENCY", "Tổng tiền đã ghi nhận", "green"),
@@ -115,17 +150,23 @@ public class DashboardService {
                 metric("overdue", "Hóa đơn quá hạn", overdue, "NUMBER", "Cần phối hợp nhắc phụ huynh", overdue > 0 ? "red" : "green")
         );
         List<DashboardDtos.Chart> charts = List.of(
-                chart("Trạng thái hóa đơn", "Số lượng theo trạng thái", "BAR", " hóa đơn", rows("""
-                        select case status when 'PAID' then 'Đã thanh toán' when 'PARTIAL' then 'Một phần'
-                               when 'OVERDUE' then 'Quá hạn' else 'Chưa thanh toán' end label,
-                               count(*) metric_value from invoices group by status order by metric_value desc
-                        """)),
-                chart("Công nợ theo lớp", "Số tiền còn phải thu", "COLUMN", " đ", rows("""
-                        select coalesce(class_code,'Chưa có lớp') label,
-                               coalesce(sum(total_amount-paid_amount),0) metric_value
-                        from invoices group by coalesce(class_code,'Chưa có lớp')
-                        order by metric_value desc limit 10
-                        """))
+                chart("Trạng thái hóa đơn", "Hóa đơn trong năm học hiện hành", "BAR", " hóa đơn",
+                        academicYearId.isBlank() ? List.of() : rows("""
+                                select case i.status when 'PAID' then 'Đã thanh toán' when 'PARTIAL' then 'Một phần'
+                                       when 'OVERDUE' then 'Quá hạn' else 'Chưa thanh toán' end label,
+                                       count(*) metric_value from invoices i
+                                join fee_periods fp on fp.id=i.fee_period_id
+                                where fp.academic_year_id=? group by i.status order by metric_value desc
+                                """, academicYearId)),
+                chart("Công nợ theo lớp", "Các lớp còn phải thu nhiều nhất", "COLUMN", " đ",
+                        academicYearId.isBlank() ? List.of() : rows("""
+                                select coalesce(i.class_code,'Chưa có lớp') label,
+                                       coalesce(sum(i.total_amount-i.paid_amount),0) metric_value
+                                from invoices i join fee_periods fp on fp.id=i.fee_period_id
+                                where fp.academic_year_id=?
+                                group by coalesce(i.class_code,'Chưa có lớp')
+                                order by metric_value desc limit 8
+                                """, academicYearId))
         );
         List<DashboardDtos.WorkItem> workItems = new ArrayList<>();
         addWorkItem(workItems, (int) overdue, "overdue-invoices", "Hóa đơn đã quá hạn",
@@ -142,6 +183,7 @@ public class DashboardService {
     }
 
     private DashboardDtos.Response admin() {
+        String activeAcademicYearId = activeAcademicYearId();
         int activeStudents = integer("select count(*) from users where role = 'STUDENT' and status = 'ACTIVE'");
         int activeTeachers = integer("select count(*) from users where role = 'TEACHER' and status = 'ACTIVE'");
         int activeParents = integer("select count(*) from users where role = 'PARENT' and status = 'ACTIVE'");
@@ -150,11 +192,14 @@ public class DashboardService {
                 and (class_id is null or trim(class_id) = '')
                 """);
         int inactiveAccounts = integer("select count(*) from users where status <> 'ACTIVE'");
-        int classes = integer("select count(*) from classes where status = 'ACTIVE'");
-        int classesWithoutHomeroom = integer("""
+        int classes = activeAcademicYearId.isBlank() ? 0 : integer("""
+                select count(*) from classes where academic_year_id=? and status='ACTIVE'
+                """, activeAcademicYearId);
+        int classesWithoutHomeroom = activeAcademicYearId.isBlank() ? 0 : integer("""
                 select count(*) from classes where status = 'ACTIVE'
+                and academic_year_id=?
                 and (homeroom_teacher_id is null or trim(homeroom_teacher_id) = '')
-                """);
+                """, activeAcademicYearId);
         double attendance = number("""
                 select coalesce(100.0 * sum(case when status = 'PRESENT' then 1 else 0 end) / nullif(count(*), 0), 0)
                 from attendance_records where date = current_date
@@ -191,18 +236,28 @@ public class DashboardService {
                 : integer("select coalesce(sum(weekly_periods), 0) from teaching_assignments where semester_id = ? and status = 'ACTIVE'", activeSemesterId);
         double timetableCoverage = requiredPeriods == 0 ? 0 : Math.min(100, 100.0 * scheduledPeriods / requiredPeriods);
 
-        int upcomingExams = integer("""
+        int upcomingExams = activeAcademicYearId.isBlank() ? 0 : integer("""
                 select count(*) from exam_periods
-                where status in ('DRAFT','CONFIRMED') and end_date >= current_date
-                """);
-        int draftExams = integer("""
+                where academic_year_id=?
+                and status in ('DRAFT','CONFIRMED') and end_date >= current_date
+                """, activeAcademicYearId);
+        int draftExams = activeAcademicYearId.isBlank() ? 0 : integer("""
                 select count(*) from exam_periods
-                where status = 'DRAFT' and end_date >= current_date
-                """);
-        double totalReceivables = number("select coalesce(sum(total_amount), 0) from invoices");
-        double collectedAmount = number("select coalesce(sum(paid_amount), 0) from invoices");
+                where academic_year_id=? and status = 'DRAFT' and end_date >= current_date
+                """, activeAcademicYearId);
+        double totalReceivables = activeAcademicYearId.isBlank() ? 0 : number("""
+                select coalesce(sum(i.total_amount),0) from invoices i
+                join fee_periods fp on fp.id=i.fee_period_id where fp.academic_year_id=?
+                """, activeAcademicYearId);
+        double collectedAmount = activeAcademicYearId.isBlank() ? 0 : number("""
+                select coalesce(sum(i.paid_amount),0) from invoices i
+                join fee_periods fp on fp.id=i.fee_period_id where fp.academic_year_id=?
+                """, activeAcademicYearId);
         double outstandingAmount = Math.max(0, totalReceivables - collectedAmount);
-        int overdueInvoices = integer("select count(*) from invoices where status = 'OVERDUE'");
+        int overdueInvoices = activeAcademicYearId.isBlank() ? 0 : integer("""
+                select count(*) from invoices i join fee_periods fp on fp.id=i.fee_period_id
+                where fp.academic_year_id=? and i.status='OVERDUE'
+                """, activeAcademicYearId);
 
         List<DashboardDtos.WorkItem> workItems = new ArrayList<>();
         addWorkItem(workItems, unassignedStudents, "unassigned-students", "Học sinh chưa được xếp lớp",
@@ -240,12 +295,14 @@ public class DashboardService {
                         openTasks > 0 ? "orange" : "green")
         );
         List<DashboardDtos.Chart> charts = List.of(
-                chart("Học sinh theo khối", "Quy mô học sinh đang học", "COLUMN", " học sinh", rows("""
-                        select coalesce(c.grade_level, 'Chưa xếp lớp') label, count(u.id) metric_value
-                        from users u left join classes c on c.id = u.class_id
-                        where u.role = 'STUDENT' and u.status = 'ACTIVE'
-                        group by coalesce(c.grade_level, 'Chưa xếp lớp') order by label
-                        """)),
+                chart("Học sinh theo khối", "Quy mô trong năm học hiện hành", "COLUMN", " học sinh",
+                        activeAcademicYearId.isBlank() ? List.of() : rows("""
+                                select c.grade_level label, count(u.id) metric_value
+                                from classes c left join users u on u.class_id=c.id
+                                  and u.role='STUDENT' and u.status='ACTIVE'
+                                where c.academic_year_id=? and c.status='ACTIVE'
+                                group by c.grade_level order by c.grade_level
+                                """, activeAcademicYearId)),
                 chart("Trạng thái tài khoản", "Mức độ sẵn sàng truy cập hệ thống", "BAR", " tài khoản", rows("""
                         select case status when 'ACTIVE' then 'Đang hoạt động'
                                when 'LOCKED' then 'Đã khóa' when 'INACTIVE' then 'Ngừng hoạt động'
@@ -265,18 +322,28 @@ public class DashboardService {
     }
 
     private DashboardDtos.Response teacher(String teacherId) {
-        double classes = number("select count(distinct class_id) from teaching_assignments where teacher_id = ?", teacherId);
-        int weeklySlots = integer("select count(*) from timetable_slots where teacher_id = ?", teacherId);
+        String semesterId = activeSemesterId();
+        String academicYearId = activeAcademicYearId();
+        double classes = semesterId.isBlank() ? 0 : number("""
+                select count(distinct class_id) from teaching_assignments
+                where teacher_id=? and semester_id=? and status='ACTIVE'
+                """, teacherId, semesterId);
+        int weeklySlots = semesterId.isBlank() ? 0 : integer("""
+                select count(*) from timetable_slots where teacher_id=? and semester_id=?
+                """, teacherId, semesterId);
         String[] todayAliases = dayAliases(LocalDate.now().getDayOfWeek());
-        int todaySlots = integer("""
+        int todaySlots = semesterId.isBlank() ? 0 : integer("""
                 select count(*) from timetable_slots where teacher_id = ?
+                and semester_id=?
                 and upper(day_of_week) in (?, ?)
-                """, teacherId, todayAliases[0], todayAliases[1]);
-        int pendingGrading = integer("""
+                """, teacherId, semesterId, todayAliases[0], todayAliases[1]);
+        int pendingGrading = academicYearId.isBlank() ? 0 : integer("""
                 select count(*) from assignment_submissions s join assignments a on a.id=s.assignment_id
+                join classes c on c.id=a.class_id
                 where a.teacher_id=? and s.graded_at is null and s.submitted_at is not null
+                and c.academic_year_id=?
                 and s.status in ('SUBMITTED','LATE','RESUBMISSION_ALLOWED')
-                """, teacherId);
+                """, teacherId, academicYearId);
         double unread = unread(teacherId);
 
         List<DashboardDtos.Metric> metrics = List.of(
@@ -285,7 +352,21 @@ public class DashboardService {
                 metric("assignments", "Bài nộp chờ chấm", pendingGrading, "NUMBER", "Bài làm chưa có kết quả", pendingGrading > 0 ? "orange" : "green"),
                 metric("notifications", "Thông báo chưa đọc", unread, "NUMBER", "Thông tin cần xem", unread > 0 ? "orange" : "green")
         );
-        List<DashboardDtos.Chart> charts = List.of(
+        List<DashboardDtos.Chart> charts = new ArrayList<>();
+        List<DashboardDtos.Datum> homeroomGender = academicYearId.isBlank() ? List.of() : rows("""
+                select case upper(coalesce(u.gender,''))
+                         when 'MALE' then 'Nam' when 'M' then 'Nam'
+                         when 'FEMALE' then 'Nữ' when 'F' then 'Nữ'
+                         else 'Chưa cập nhật' end label, count(*) metric_value
+                from classes c join users u on u.class_id=c.id
+                where c.homeroom_teacher_id=? and c.academic_year_id=?
+                  and c.status='ACTIVE' and u.role='STUDENT' and u.status='ACTIVE'
+                group by 1 order by 1
+                """, teacherId, academicYearId);
+        if (!homeroomGender.isEmpty()) {
+            charts.add(chart("Cơ cấu lớp chủ nhiệm", "Tỷ lệ học sinh nam và nữ trong lớp", "PIE", " học sinh", homeroomGender));
+        }
+        charts.add(
                 chart("Nhịp dạy trong tuần", "Số tiết theo từng ngày", "COLUMN", " tiết", rows("""
                         select case day_of_week when 'MON' then 'T2' when 'MONDAY' then 'T2'
                                when 'TUE' then 'T3' when 'TUESDAY' then 'T3'
@@ -294,23 +375,18 @@ public class DashboardService {
                                when 'FRI' then 'T6' when 'FRIDAY' then 'T6'
                                when 'SAT' then 'T7' when 'SATURDAY' then 'T7' else day_of_week end label,
                                count(*) metric_value
-                        from timetable_slots where teacher_id = ? group by day_of_week
+                        from timetable_slots where teacher_id = ? and semester_id=? group by day_of_week
                         order by min(case day_of_week when 'MON' then 1 when 'MONDAY' then 1
                                      when 'TUE' then 2 when 'TUESDAY' then 2 when 'WED' then 3 when 'WEDNESDAY' then 3
                                      when 'THU' then 4 when 'THURSDAY' then 4 when 'FRI' then 5 when 'FRIDAY' then 5
                                      when 'SAT' then 6 when 'SATURDAY' then 6 else 7 end)
-                        """, teacherId)),
-                chart("Bài tập theo lớp", "Số bài tập đã giao", "BAR", " bài", rows("""
-                        select coalesce(c.code, a.class_id) label, count(*) metric_value
-                        from assignments a left join classes c on c.id = a.class_id
-                        where a.teacher_id = ? group by coalesce(c.code, a.class_id) order by metric_value desc limit 8
-                        """, teacherId))
-        );
-        int unattendedSlots = integer("""
+                        """, teacherId, semesterId)));
+        int unattendedSlots = semesterId.isBlank() ? 0 : integer("""
                 select count(*) from timetable_slots t where t.teacher_id = ?
+                and t.semester_id=?
                 and upper(t.day_of_week) in (?, ?)
                 and not exists (select 1 from attendance_records ar where ar.slot_id=t.id and ar.date=current_date)
-                """, teacherId, todayAliases[0], todayAliases[1]);
+                """, teacherId, semesterId, todayAliases[0], todayAliases[1]);
         int leaveRequests = integer("""
                 select count(*) from leave_requests where homeroom_teacher_id=? and status='PENDING_HOMEROOM'
                 """, teacherId);
@@ -352,12 +428,15 @@ public class DashboardService {
     }
 
     private DashboardDtos.TeacherOverview teacherOverview(String teacherId, String[] todayAliases) {
-        List<String> homeroomClassCodes = jdbc.queryForList("""
+        String academicYearId = activeAcademicYearId();
+        String semesterId = activeSemesterId();
+        List<String> homeroomClassCodes = academicYearId.isBlank() ? List.of() : jdbc.queryForList("""
                 select code from classes
-                where homeroom_teacher_id=? and (status is null or status='ACTIVE')
+                where homeroom_teacher_id=? and academic_year_id=?
+                  and (status is null or status='ACTIVE')
                 order by code
-                """, String.class, teacherId);
-        List<DashboardDtos.TeacherLesson> todayLessons = jdbc.query("""
+                """, String.class, teacherId, academicYearId);
+        List<DashboardDtos.TeacherLesson> todayLessons = semesterId.isBlank() ? List.of() : jdbc.query("""
                 select t.id, t.period_no, t.start_time, t.end_time, t.class_id,
                        coalesce(c.code, t.class_id) class_code, t.subject_id, t.subject_name,
                        t.room_code,
@@ -367,7 +446,7 @@ public class DashboardService {
                        ) then true else false end attendance_recorded
                 from timetable_slots t
                 left join classes c on c.id=t.class_id
-                where t.teacher_id=? and upper(t.day_of_week) in (?, ?)
+                where t.teacher_id=? and t.semester_id=? and upper(t.day_of_week) in (?, ?)
                 order by t.start_time, t.period_no, class_code
                 """, (rs, rowNumber) -> {
             String startTime = safe(rs.getString("start_time"));
@@ -379,9 +458,8 @@ public class DashboardService {
                     safe(rs.getString("room_code")), lessonStatus(startTime, endTime),
                     rs.getBoolean("attendance_recorded")
             );
-        }, teacherId, todayAliases[0], todayAliases[1]);
+        }, teacherId, semesterId, todayAliases[0], todayAliases[1]);
 
-        String semesterId = activeSemesterId();
         LocalDate attendanceFrom = LocalDate.now().minusDays(30);
         List<DashboardDtos.AttentionStudent> attentionStudents = jdbc.query("""
                 select u.id student_id, u.student_code, u.full_name student_name,
@@ -405,6 +483,7 @@ public class DashboardService {
                           ))) subject_average
                 from users u join classes c on c.id=u.class_id
                 where u.role='STUDENT' and u.status='ACTIVE'
+                  and (?='' or c.academic_year_id=?)
                   and (c.homeroom_teacher_id=? or exists (
                       select 1 from teaching_assignments ta
                       where ta.teacher_id=? and ta.class_id=c.id
@@ -415,7 +494,7 @@ public class DashboardService {
                 """, (rs, rowNumber) -> attentionStudent(rs),
                 attendanceFrom, teacherId,
                 semesterId, semesterId, teacherId, teacherId, semesterId, semesterId,
-                teacherId, teacherId, semesterId, semesterId).stream()
+                academicYearId, academicYearId, teacherId, teacherId, semesterId, semesterId).stream()
                 .filter(item -> item.attendanceAlerts() > 0 || item.missingAssignments() > 0
                         || (item.subjectAverage() != null && item.subjectAverage() < 5.0))
                 .sorted(Comparator
@@ -625,6 +704,13 @@ public class DashboardService {
                 """);
     }
 
+    private String activeAcademicYearId() {
+        return text("""
+                select id from academic_years
+                order by case when status='ACTIVE' then 0 else 1 end, start_date desc limit 1
+                """);
+    }
+
     private List<DashboardDtos.CalendarItem> academicCalendarItems() {
         LocalDate from = LocalDate.now().withDayOfMonth(1);
         LocalDate to = from.plusMonths(4).minusDays(1);
@@ -656,12 +742,13 @@ public class DashboardService {
     private List<DashboardDtos.CalendarItem> teacherCalendarItems(String teacherId) {
         LocalDate today = LocalDate.now();
         LocalDate to = today.plusDays(35);
+        String semesterId = activeSemesterId();
         List<DashboardDtos.CalendarItem> items = new ArrayList<>();
-        jdbc.query("""
+        if (!semesterId.isBlank()) jdbc.query("""
                 select t.id, t.day_of_week, t.subject_name, c.code class_code,
                        t.start_time, t.end_time, t.room_code
                 from timetable_slots t left join classes c on c.id=t.class_id
-                where t.teacher_id=?
+                where t.teacher_id=? and t.semester_id=?
                 """, rs -> {
             DayOfWeek day = parseDayOfWeek(rs.getString("day_of_week"));
             if (day == null) return;
@@ -678,7 +765,7 @@ public class DashboardService {
                 ));
                 date = date.plusWeeks(1);
             }
-        }, teacherId);
+        }, teacherId, semesterId);
         items.addAll(calendarRows("""
                 select id, cast(deadline as date) event_date, title,
                        coalesce(subject_name, 'Bài tập') detail

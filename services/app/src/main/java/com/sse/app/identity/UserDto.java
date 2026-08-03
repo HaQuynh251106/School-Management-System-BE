@@ -34,5 +34,8 @@ public record UserDto(
         String studentStatus,
         Instant graduatedAt,
         String graduationAcademicYearId,
-        String graduationClassId
+        String graduationClassId,
+        String activationStatus,
+        Instant activationSentAt,
+        Instant activationCompletedAt
 ) {}

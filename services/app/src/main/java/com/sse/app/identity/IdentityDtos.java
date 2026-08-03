@@ -22,6 +22,9 @@ public final class IdentityDtos {
 
     public record ResetPasswordRequest(@NotBlank String token, @NotBlank @Size(min = 10, max = 128) String newPassword) {}
 
+    public record ActivateAccountRequest(@NotBlank String token,
+                                         @NotBlank @Size(min = 10, max = 128) String newPassword) {}
+
     public record ChangePasswordRequest(
             @NotBlank String currentPassword,
             @NotBlank @Size(min = 10, max = 128) String newPassword) {}
@@ -36,8 +39,8 @@ public final class IdentityDtos {
 
     public record CreateUserRequest(
             String id,
-            @NotBlank String username,
-            @NotBlank @Size(min = 10, max = 128) String password,
+            String username,
+            @Size(min = 10, max = 128) String password,
             @NotBlank String fullName,
             @NotBlank @Pattern(regexp = "ADMIN|ACADEMIC_STAFF|ACCOUNTANT|TEACHER|STUDENT|PARENT") String role,
             String email,
@@ -81,6 +84,21 @@ public final class IdentityDtos {
     ) {}
 
     public record AdminResetPasswordRequest(@Size(min = 10, max = 128) String newPassword) {}
+
+    public record BulkAccountActionRequest(
+            @Size(min = 1, max = 500) List<String> userIds,
+            @NotBlank @Pattern(regexp = "RESEND_ACTIVATION|SEND_PASSWORD_RESET|UNLOCK|LOCK|REQUIRE_PASSWORD_CHANGE") String action) {}
+
+    public record BulkAccountActionError(String userId, String error) {}
+    public record BulkAccountActionResult(int requested, int succeeded, int failed,
+                                          List<BulkAccountActionError> errors) {}
+
+    public record AccountLifecycleSummary(long total, long active, long locked,
+                                          long pendingActivation, long requiresPasswordChange,
+                                          long missingEmail) {}
+
+    public record ProvisioningResult(UserDto user, String delivery,
+                                     boolean activationRequired, String temporaryPassword) {}
 
     public record LinkChildRequest(
             @NotBlank String studentId,

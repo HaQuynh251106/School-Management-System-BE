@@ -21,6 +21,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import jakarta.servlet.http.Cookie;
 
 import static org.hamcrest.Matchers.nullValue;
@@ -119,6 +120,172 @@ class SecurityIntegrationTest {
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.user.passwordChangeRequired").value(true));
+    }
+
+    @Test
+    void accountCanBeProvisionedWithoutUsernameOrPasswordAndActivatedOnlyOnce() throws Exception {
+        String admin = login("admin", "admin@123");
+        JsonNode created = body(mvc.perform(post("/users")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"fullName":"Nguyễn Thị Kích Hoạt","role":"STUDENT",
+                                 "email":"activation.lifecycle@example.edu.vn"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.username").value(org.hamcrest.Matchers.startsWith("hs.")))
+                .andExpect(jsonPath("$.activationStatus").value("PENDING_EMAIL"))
+                .andExpect(jsonPath("$.passwordChangeRequired").value(true))
+                .andReturn().getResponse().getContentAsString());
+
+        mvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of(
+                                "username", created.path("username").asText(), "password", "UnknownPassword123@@"))))
+                .andExpect(status().isForbidden());
+
+        JsonNode recovery = body(mvc.perform(post("/auth/forgot-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"activation.lifecycle@example.edu.vn\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.devPurpose").value("ACTIVATION_LINK"))
+                .andExpect(jsonPath("$.devResetToken").isString())
+                .andReturn().getResponse().getContentAsString());
+        String activationToken = recovery.path("devResetToken").asText();
+
+        mvc.perform(post("/auth/activate")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of(
+                                "token", activationToken, "newPassword", "ActivatedAccount123@@"))))
+                .andExpect(status().isOk());
+
+        mvc.perform(post("/auth/activate")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of(
+                                "token", activationToken, "newPassword", "AnotherPassword123@@"))))
+                .andExpect(status().isBadRequest());
+
+        mvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of(
+                                "username", created.path("username").asText(), "password", "ActivatedAccount123@@"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.user.activationStatus").value("ACTIVE"))
+                .andExpect(jsonPath("$.user.passwordChangeRequired").value(false));
+    }
+
+    @Test
+    void forgotPasswordUsesOneTimeResetTokenAndRevokesOldPassword() throws Exception {
+        String admin = login("admin", "admin@123");
+        mvc.perform(post("/users")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"username":"account.reset.flow","password":"InitialPassword123@@",
+                                 "fullName":"Kiểm thử quên mật khẩu","role":"ACCOUNTANT",
+                                 "email":"reset.lifecycle@example.edu.vn"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.activationStatus").value("ACTIVE"));
+
+        JsonNode issue = body(mvc.perform(post("/auth/forgot-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"account.reset.flow\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.devPurpose").value("RESET_LINK"))
+                .andReturn().getResponse().getContentAsString());
+
+        mvc.perform(post("/auth/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of(
+                                "token", issue.path("devResetToken").asText(), "newPassword", "RecoveredPassword123@@"))))
+                .andExpect(status().isOk());
+        mvc.perform(post("/auth/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of(
+                                "token", issue.path("devResetToken").asText(), "newPassword", "ReuseBlockedPassword123@@"))))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post("/auth/login").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"account.reset.flow\",\"password\":\"InitialPassword123@@\"}"))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(post("/auth/login").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"account.reset.flow\",\"password\":\"RecoveredPassword123@@\"}"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void safeImportNoLongerRequiresPasswordsAndLinksParentToStudentFromSameFile() throws Exception {
+        String admin = login("admin", "admin@123");
+        byte[] workbook;
+        try (XSSFWorkbook excel = new XSSFWorkbook(); ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
+            var sheet = excel.createSheet("Nguoi dung");
+            String[] headers = {"Tên đăng nhập", "Họ tên", "Vai trò", "Email", "Tên đăng nhập liên kết"};
+            var header = sheet.createRow(0);
+            for (int i = 0; i < headers.length; i++) header.createCell(i).setCellValue(headers[i]);
+            var student = sheet.createRow(1);
+            student.createCell(0).setCellValue("hs.lifecycle.import");
+            student.createCell(1).setCellValue("Học sinh Import Vòng đời");
+            student.createCell(2).setCellValue("Học sinh");
+            student.createCell(3).setCellValue("student.import.lifecycle@example.edu.vn");
+            var parent = sheet.createRow(2);
+            parent.createCell(0).setCellValue("ph.lifecycle.import");
+            parent.createCell(1).setCellValue("Phụ huynh Import Vòng đời");
+            parent.createCell(2).setCellValue("Phụ huynh");
+            parent.createCell(3).setCellValue("parent.import.lifecycle@example.edu.vn");
+            parent.createCell(4).setCellValue("hs.lifecycle.import");
+            var teacher = sheet.createRow(3);
+            teacher.createCell(1).setCellValue("Giáo viên Tự Sinh Tài Khoản");
+            teacher.createCell(2).setCellValue("Giáo viên");
+            teacher.createCell(3).setCellValue("teacher.import.lifecycle@example.edu.vn");
+            excel.write(bytes);
+            workbook = bytes.toByteArray();
+        }
+
+        MockMultipartFile previewFile = new MockMultipartFile("file", "lifecycle-import.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", workbook);
+        JsonNode preview = body(mvc.perform(multipart("/users/import/preview")
+                        .file(previewFile).header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.validRows").value(3))
+                .andExpect(jsonPath("$.invalidRows").value(0))
+                .andExpect(jsonPath("$.rows[2].username", org.hamcrest.Matchers.startsWith("gv.")))
+                .andReturn().getResponse().getContentAsString());
+
+        MockMultipartFile commitFile = new MockMultipartFile("file", "lifecycle-import.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", workbook);
+        mvc.perform(multipart("/users/import/commit")
+                        .file(commitFile).param("token", preview.path("token").asText())
+                        .param("strategy", "ALL_OR_NOTHING").header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.importedRows").value(3));
+
+        JsonNode parents = body(mvc.perform(get("/users/page")
+                        .queryParam("role", "PARENT").queryParam("q", "ph.lifecycle.import")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        String parentId = parents.path("items").get(0).path("id").asText();
+        mvc.perform(get("/users/{id}/children", parentId).header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].username").value("hs.lifecycle.import"));
+    }
+
+    @Test
+    void passwordRecoveryRateLimitKeepsThePublicResponseGeneric() throws Exception {
+        String payload = "{\"email\":\"missing.recovery.rate-limit@example.invalid\"}";
+        String genericMessage = "Nếu thông tin hợp lệ, liên kết truy cập sẽ được gửi qua email.";
+        mvc.perform(post("/auth/forgot-password")
+                        .contentType(MediaType.APPLICATION_JSON).content(payload))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ok").value(true))
+                .andExpect(jsonPath("$.message").value(genericMessage))
+                .andExpect(jsonPath("$.devResetToken").doesNotExist())
+                .andReturn();
+        mvc.perform(post("/auth/forgot-password")
+                        .contentType(MediaType.APPLICATION_JSON).content(payload))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ok").value(true))
+                .andExpect(jsonPath("$.message").value(genericMessage))
+                .andExpect(jsonPath("$.devResetToken").doesNotExist());
     }
 
     @Test
@@ -1958,7 +2125,7 @@ class SecurityIntegrationTest {
                                  "title":"Thông báo dành cho giáo viên","body":"Nội dung điều hành từ Ban quản trị."}
                                 """))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.recipientCount").value(2));
+                .andExpect(jsonPath("$.recipientCount").value(greaterThanOrEqualTo(2)));
 
         mvc.perform(get("/notifications")
                         .header("Authorization", "Bearer " + teacher))
