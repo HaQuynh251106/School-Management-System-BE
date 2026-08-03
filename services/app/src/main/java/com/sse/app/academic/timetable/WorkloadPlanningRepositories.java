@@ -11,6 +11,10 @@ interface CurriculumRequirementRepository extends JpaRepository<CurriculumRequir
             String semesterId, String gradeLevel, String subjectId);
 }
 
+interface CurriculumRequirementHistoryRepository extends JpaRepository<CurriculumRequirementHistory, String> {
+    List<CurriculumRequirementHistory> findTop100BySemesterIdOrderByCreatedAtDesc(String semesterId);
+}
+
 interface TeacherLoadRegistrationRepository extends JpaRepository<TeacherLoadRegistration, String> {
     List<TeacherLoadRegistration> findBySemesterId(String semesterId);
     Optional<TeacherLoadRegistration> findByTeacherIdAndSemesterId(String teacherId, String semesterId);

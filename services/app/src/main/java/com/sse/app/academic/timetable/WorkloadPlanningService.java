@@ -21,6 +21,7 @@ public class WorkloadPlanningService {
     private static final Set<String> REVIEW_STATUSES = Set.of("APPROVED", "REJECTED", "LOCKED", "DRAFT");
 
     private final CurriculumRequirementRepository requirements;
+    private final CurriculumRequirementHistoryRepository requirementHistory;
     private final TeacherLoadRegistrationRepository registrations;
     private final TeachingAssignmentRepository assignments;
     private final TeachingAssignmentService teachingAssignments;
@@ -29,12 +30,14 @@ public class WorkloadPlanningService {
     private final TeacherWorkspaceService teacherWorkspace;
 
     public WorkloadPlanningService(CurriculumRequirementRepository requirements,
+                                   CurriculumRequirementHistoryRepository requirementHistory,
                                    TeacherLoadRegistrationRepository registrations,
                                    TeachingAssignmentRepository assignments,
                                    TeachingAssignmentService teachingAssignments,
                                    StructureService structure, UserService users,
                                    TeacherWorkspaceService teacherWorkspace) {
         this.requirements = requirements;
+        this.requirementHistory = requirementHistory;
         this.registrations = registrations;
         this.assignments = assignments;
         this.teachingAssignments = teachingAssignments;
@@ -49,8 +52,44 @@ public class WorkloadPlanningService {
                         .thenComparing(CurriculumRequirement::getSubjectName)).toList();
     }
 
+    public CurriculumReadiness curriculumReadiness(String semesterId) {
+        Semester semester = structure.getSemester(semesterId);
+        List<Subject> subjects = structure.listSubjects().stream()
+                .sorted(Comparator.comparing(Subject::getName)).toList();
+        List<CurriculumRequirement> configured = listRequirements(semesterId);
+        List<String> grades = structure.listClasses(semester.getAcademicYearId(), null).stream()
+                .map(SchoolClass::getGradeLevel).map(WorkloadPlanningService::normalizeGrade)
+                .distinct().sorted().toList();
+        List<GradeCurriculumReadiness> gradeResults = grades.stream().map(grade -> {
+            List<CurriculumRequirement> rows = configured.stream()
+                    .filter(item -> grade.equals(item.getGradeLevel())).toList();
+            Set<String> configuredIds = rows.stream().map(CurriculumRequirement::getSubjectId)
+                    .collect(java.util.stream.Collectors.toSet());
+            List<MissingCurriculumSubject> missing = subjects.stream()
+                    .filter(subject -> !configuredIds.contains(subject.getId()))
+                    .map(subject -> new MissingCurriculumSubject(subject.getId(), subject.getName())).toList();
+            int periods = rows.stream().mapToInt(CurriculumRequirement::getWeeklyPeriods).sum();
+            return new GradeCurriculumReadiness(grade, subjects.size(), rows.size(), periods,
+                    missing.isEmpty(), missing);
+        }).toList();
+        int totalPeriods = configured.stream().mapToInt(CurriculumRequirement::getWeeklyPeriods).sum();
+        boolean complete = !gradeResults.isEmpty()
+                && gradeResults.stream().allMatch(GradeCurriculumReadiness::complete);
+        return new CurriculumReadiness(semesterId, subjects.size(), configured.size(), totalPeriods,
+                complete, gradeResults);
+    }
+
+    public List<CurriculumRequirementHistoryResponse> curriculumHistory(String semesterId) {
+        structure.getSemester(semesterId);
+        return requirementHistory.findTop100BySemesterIdOrderByCreatedAtDesc(semesterId).stream()
+                .map(item -> new CurriculumRequirementHistoryResponse(item.getId(), item.getSemesterId(),
+                        item.getGradeLevel(), item.getSubjectId(), item.getSubjectName(), item.getAction(),
+                        item.getPreviousWeeklyPeriods(), item.getNewWeeklyPeriods(), item.getActorId(),
+                        item.getCreatedAt())).toList();
+    }
+
     @Transactional
-    public CurriculumRequirement saveRequirement(SaveCurriculumRequirementRequest request) {
+    public CurriculumRequirement saveRequirement(SaveCurriculumRequirementRequest request, String actorId) {
         structure.assertSemesterWritable(request.semesterId());
         Semester semester = structure.getSemester(request.semesterId());
         String grade = normalizeGrade(request.gradeLevel());
@@ -61,23 +100,63 @@ public class WorkloadPlanningService {
                 .filter(item -> item.getId().equals(request.subjectId())).findFirst()
                 .orElseThrow(() -> ApiException.notFound("Môn học"));
         Instant now = Instant.now();
-        CurriculumRequirement item = requirements
-                .findBySemesterIdAndGradeLevelAndSubjectId(request.semesterId(), grade, request.subjectId())
+        Optional<CurriculumRequirement> existing = requirements
+                .findBySemesterIdAndGradeLevelAndSubjectId(request.semesterId(), grade, request.subjectId());
+        Integer previousPeriods = existing.map(CurriculumRequirement::getWeeklyPeriods).orElse(null);
+        CurriculumRequirement item = existing
                 .orElseGet(() -> CurriculumRequirement.builder().id(Ids.gen("cr"))
                         .semesterId(request.semesterId()).gradeLevel(grade)
                         .subjectId(subject.getId()).subjectName(subject.getName()).createdAt(now).build());
         item.setSubjectName(subject.getName());
         item.setWeeklyPeriods(request.weeklyPeriods());
         item.setUpdatedAt(now);
-        return requirements.save(item);
+        CurriculumRequirement saved = requirements.save(item);
+        recordHistory(saved, previousPeriods == null ? "CREATED" : "UPDATED",
+                previousPeriods, saved.getWeeklyPeriods(), actorId);
+        return saved;
     }
 
     @Transactional
-    public void deleteRequirement(String id) {
+    public List<CurriculumRequirement> copyRequirements(CopyCurriculumRequirementsRequest request, String actorId) {
+        structure.assertSemesterWritable(request.targetSemesterId());
+        structure.getSemester(request.sourceSemesterId());
+        Semester targetSemester = structure.getSemester(request.targetSemesterId());
+        String sourceGrade = normalizeGrade(request.sourceGradeLevel());
+        String targetGrade = normalizeGrade(request.targetGradeLevel());
+        boolean targetGradeExists = structure.listClasses(targetSemester.getAcademicYearId(), null).stream()
+                .anyMatch(item -> targetGrade.equals(normalizeGrade(item.getGradeLevel())));
+        if (!targetGradeExists) throw ApiException.badRequest("Khối " + targetGrade
+                + " chưa có lớp trong năm học của học kỳ đích");
+        List<CurriculumRequirement> sourceRows = listRequirements(request.sourceSemesterId()).stream()
+                .filter(item -> sourceGrade.equals(item.getGradeLevel())).toList();
+        if (sourceRows.isEmpty()) throw ApiException.badRequest("Khối nguồn chưa có định mức để sao chép");
+        for (CurriculumRequirement source : sourceRows) {
+            Optional<CurriculumRequirement> targetExisting = requirements
+                    .findBySemesterIdAndGradeLevelAndSubjectId(request.targetSemesterId(), targetGrade,
+                            source.getSubjectId());
+            if (targetExisting.isPresent() && !Boolean.TRUE.equals(request.overwrite())) continue;
+            Instant now = Instant.now();
+            CurriculumRequirement target = targetExisting.orElseGet(() -> CurriculumRequirement.builder()
+                    .id(Ids.gen("cr")).semesterId(request.targetSemesterId()).gradeLevel(targetGrade)
+                    .subjectId(source.getSubjectId()).subjectName(source.getSubjectName()).createdAt(now).build());
+            Integer previous = targetExisting.map(CurriculumRequirement::getWeeklyPeriods).orElse(null);
+            target.setSubjectName(source.getSubjectName());
+            target.setWeeklyPeriods(source.getWeeklyPeriods());
+            target.setUpdatedAt(now);
+            CurriculumRequirement saved = requirements.save(target);
+            recordHistory(saved, "COPIED", previous, saved.getWeeklyPeriods(), actorId);
+        }
+        return listRequirements(request.targetSemesterId()).stream()
+                .filter(item -> targetGrade.equals(item.getGradeLevel())).toList();
+    }
+
+    @Transactional
+    public void deleteRequirement(String id, String actorId) {
         CurriculumRequirement item = requirements.findById(id)
                 .orElseThrow(() -> ApiException.notFound("Định mức môn học"));
         structure.assertSemesterWritable(item.getSemesterId());
         requirements.delete(item);
+        recordHistory(item, "DELETED", item.getWeeklyPeriods(), null, actorId);
     }
 
     public TeacherLoadResponse mine(String teacherId, String semesterId) {
@@ -158,6 +237,16 @@ public class WorkloadPlanningService {
         Semester semester = structure.getSemester(request.semesterId());
         List<SchoolClass> classes = structure.listClasses(semester.getAcademicYearId(), null);
         List<CurriculumRequirement> required = listRequirements(request.semesterId());
+        CurriculumReadiness readiness = curriculumReadiness(request.semesterId());
+        if (!readiness.complete()) {
+            String details = readiness.grades().stream().filter(item -> !item.complete())
+                    .map(item -> item.gradeLevel() + " thiếu " + item.missingSubjects().stream()
+                            .map(MissingCurriculumSubject::subjectName)
+                            .collect(java.util.stream.Collectors.joining(", ")))
+                    .collect(java.util.stream.Collectors.joining("; "));
+            throw ApiException.badRequest("Chưa thể tạo phương án vì định mức môn học chưa đầy đủ. "
+                    + details + ". Hãy hoàn thiện bước 1 trước khi tiếp tục.");
+        }
         if (required.isEmpty()) throw ApiException.badRequest("Chưa có định mức môn học cho học kỳ đã chọn");
         List<TeacherLoadRegistration> approved = registrations.findBySemesterId(request.semesterId()).stream()
                 .filter(item -> Set.of("APPROVED", "LOCKED").contains(item.getStatus())).toList();
@@ -231,6 +320,15 @@ public class WorkloadPlanningService {
         }
         return new AutoAssignmentPlan(request.semesterId(), items.size(), existingCount,
                 proposedCount, unassignedCount, apply, items, warnings);
+    }
+
+    private void recordHistory(CurriculumRequirement item, String action, Integer previousPeriods,
+                               Integer newPeriods, String actorId) {
+        requirementHistory.save(CurriculumRequirementHistory.builder().id(Ids.gen("crh"))
+                .semesterId(item.getSemesterId()).gradeLevel(item.getGradeLevel())
+                .subjectId(item.getSubjectId()).subjectName(item.getSubjectName()).action(action)
+                .previousWeeklyPeriods(previousPeriods).newWeeklyPeriods(newPeriods)
+                .actorId(actorId).createdAt(Instant.now()).build());
     }
 
     private TeacherLoadResponse response(TeacherLoadRegistration item) {

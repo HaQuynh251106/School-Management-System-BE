@@ -21,16 +21,35 @@ public class WorkloadPlanningController {
         return planning.listRequirements(semesterId);
     }
 
+    @GetMapping("/curriculum-requirements/readiness")
+    public CurriculumReadiness requirementReadiness(@RequestParam String semesterId) {
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        return planning.curriculumReadiness(semesterId);
+    }
+
+    @GetMapping("/curriculum-requirements/history")
+    public List<CurriculumRequirementHistoryResponse> requirementHistory(@RequestParam String semesterId) {
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        return planning.curriculumHistory(semesterId);
+    }
+
     @PutMapping("/curriculum-requirements")
     public CurriculumRequirement saveRequirement(@Valid @RequestBody SaveCurriculumRequirementRequest request) {
         CurrentUserHolder.requireRole("ACADEMIC_STAFF");
-        return planning.saveRequirement(request);
+        return planning.saveRequirement(request, CurrentUserHolder.require().id());
+    }
+
+    @PostMapping("/curriculum-requirements/copy")
+    public List<CurriculumRequirement> copyRequirements(
+            @Valid @RequestBody CopyCurriculumRequirementsRequest request) {
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
+        return planning.copyRequirements(request, CurrentUserHolder.require().id());
     }
 
     @DeleteMapping("/curriculum-requirements/{id}")
     public void deleteRequirement(@PathVariable String id) {
         CurrentUserHolder.requireRole("ACADEMIC_STAFF");
-        planning.deleteRequirement(id);
+        planning.deleteRequirement(id, CurrentUserHolder.require().id());
     }
 
     @GetMapping("/me/teacher-load-registration")

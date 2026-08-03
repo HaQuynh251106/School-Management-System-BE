@@ -56,4 +56,5 @@ services:
 
 volumes:
   postgres-data:
+    name: ${SSE_POSTGRES_VOLUME:-school-management-system-be_postgres-data}
   uploads-data:

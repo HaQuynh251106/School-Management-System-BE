@@ -18,6 +18,28 @@ public final class WorkloadPlanningDtos {
             @NotBlank String subjectId,
             @Min(1) @Max(20) int weeklyPeriods) {}
 
+    public record CopyCurriculumRequirementsRequest(
+            @NotBlank String sourceSemesterId,
+            @NotBlank String sourceGradeLevel,
+            @NotBlank String targetSemesterId,
+            @NotBlank String targetGradeLevel,
+            @NotNull Boolean overwrite) {}
+
+    public record MissingCurriculumSubject(String subjectId, String subjectName) {}
+
+    public record GradeCurriculumReadiness(
+            String gradeLevel, int expectedSubjectCount, int configuredSubjectCount,
+            int totalWeeklyPeriods, boolean complete, List<MissingCurriculumSubject> missingSubjects) {}
+
+    public record CurriculumReadiness(
+            String semesterId, int expectedSubjectCount, int configuredRequirementCount,
+            int totalWeeklyPeriods, boolean complete, List<GradeCurriculumReadiness> grades) {}
+
+    public record CurriculumRequirementHistoryResponse(
+            String id, String semesterId, String gradeLevel, String subjectId, String subjectName,
+            String action, Integer previousWeeklyPeriods, Integer newWeeklyPeriods,
+            String actorId, Instant createdAt) {}
+
     public record SaveTeacherLoadRequest(
             @NotBlank String semesterId,
             @Min(1) @Max(60) int maxWeeklyPeriods,

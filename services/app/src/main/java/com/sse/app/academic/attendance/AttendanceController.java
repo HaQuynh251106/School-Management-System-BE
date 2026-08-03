@@ -45,8 +45,15 @@ public class AttendanceController {
                 throw ApiException.badRequest("Giáo viên cần chọn tiết học để xem sổ điểm danh");
             }
             attendance.assertCanManageSlot(me, slotId, date);
+        } else if (isBlank(studentId) && isBlank(classId) && isBlank(slotId) && date == null) {
+            throw ApiException.badRequest(
+                    "Hãy chọn học sinh, lớp, tiết học hoặc ngày trước khi tải dữ liệu điểm danh");
         }
         return attendance.list(studentId, classId, slotId, date);
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     @PostMapping("/attendance/bulk")

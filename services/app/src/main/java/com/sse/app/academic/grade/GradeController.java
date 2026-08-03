@@ -43,6 +43,9 @@ public class GradeController {
                 throw ApiException.badRequest("Giáo viên phải chọn lớp và học kỳ để xem bảng điểm");
             }
             subjectId = grades.resolveTeacherViewSubject(me.id(), classId, semesterId, subjectId);
+        } else if (isBlank(studentId) && isBlank(classId) && isBlank(subjectId) && isBlank(semesterId)) {
+            throw ApiException.badRequest(
+                    "Hãy chọn học sinh, lớp, môn hoặc học kỳ trước khi tải bảng điểm");
         }
         Set<String> studentIds = null;
         if (classId != null) {
@@ -50,6 +53,10 @@ public class GradeController {
                     .map(UserDto::id).collect(Collectors.toSet());
         }
         return grades.list(studentId, subjectId, semesterId, category, studentIds);
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     @PostMapping("/grades/bulk")
