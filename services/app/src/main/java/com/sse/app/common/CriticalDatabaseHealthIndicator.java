@@ -2,7 +2,7 @@ package com.sse.app.common;
 
 import org.springframework.boot.actuate.health.Health;
 import org.springframework.boot.actuate.health.HealthIndicator;
-import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.JdbcOperations;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -23,9 +23,9 @@ public class CriticalDatabaseHealthIndicator implements HealthIndicator {
             "student_yearly_summaries"
     );
 
-    private final JdbcTemplate jdbc;
+    private final JdbcOperations jdbc;
 
-    public CriticalDatabaseHealthIndicator(JdbcTemplate jdbc) {
+    public CriticalDatabaseHealthIndicator(JdbcOperations jdbc) {
         this.jdbc = jdbc;
     }
 

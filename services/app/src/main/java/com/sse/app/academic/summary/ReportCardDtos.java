@@ -1,5 +1,7 @@
 package com.sse.app.academic.summary;
 
+import com.sse.app.academic.conduct.ConductDtos.EvaluationView;
+
 import jakarta.validation.constraints.NotBlank;
 
 import java.util.List;
@@ -21,7 +23,7 @@ public final class ReportCardDtos {
             String homeroomComment, Double semesterOneAverage, Double semesterTwoAverage,
             Double annualAverage, String conductGrade, String promotionStatus,
             String missingRequirements, int subjectCount, List<SubjectResult> subjects,
-            AttendanceSummary attendance, String verificationCode,
+            AttendanceSummary attendance, EvaluationView conductEvaluation, String verificationCode,
             String submittedAt, String approvedAt, String lockedAt, String publishedAt,
             boolean editableByHomeroom, List<ReportCardAudit> audits) {}
 
@@ -46,7 +48,10 @@ public final class ReportCardDtos {
             long lockedCount, long publishedCount, long incompleteCount,
             double completionPercent, double publishedPercent) {}
 
-    public record HomeroomUpdateRequest(@NotBlank String conductGrade, @NotBlank String homeroomComment) {}
+    public record HomeroomUpdateRequest(
+            @NotBlank String conductGrade,
+            @NotBlank String homeroomComment,
+            String overrideReason) {}
     public record TransitionRequest(String note) {}
     public record ReopenRequest(@NotBlank String reason) {}
 

@@ -66,14 +66,26 @@ public class ExamReportService {
             }
             document.add(table);
             heading(document, "Tổng kết và rèn luyện");
+            var conduct = card.conductEvaluation();
             info(document, List.of("Trung bình HKI: " + score(card.semesterOneAverage()),
                     "Trung bình HKII: " + score(card.semesterTwoAverage()),
                     "Trung bình cả năm: " + score(card.annualAverage()),
                     "Hạnh kiểm: " + conductLabel(card.conductGrade()),
+                    "Đề xuất hệ thống: " + ("READY".equals(conduct.readiness())
+                            ? conductLabel(conduct.suggestedGrade()) + " (" + score(conduct.suggestedScore()) + "/100)"
+                            : "Chưa đủ căn cứ"),
+                    "Bộ tiêu chí: phiên bản " + conduct.ruleSet().versionNo(),
+                    "Lý do GVCN điều chỉnh: " + value(conduct.overrideReason()),
                     "Kết quả: " + promotionLabel(card.promotionStatus()),
                     "Nhận xét GVCN: " + value(card.homeroomComment()),
                     "Chuyên cần: Có mặt " + card.attendance().present() + " · Vắng có phép " + card.attendance().excusedAbsence()
                             + " · Vắng không phép " + card.attendance().unexcusedAbsence() + " · Đi muộn " + card.attendance().late()));
+            PdfPTable conductTable = table(new float[]{4, 2, 2, 5}, "Tiêu chí", "Trọng số", "Điểm", "Giải thích");
+            for (var criterion : conduct.criteria()) {
+                row(conductTable, criterion.label(), score(criterion.weight()) + "%",
+                        score(criterion.rawScore()), criterion.summary());
+            }
+            document.add(conductTable);
             Paragraph confirmation = new Paragraph("Mã xác nhận học bạ: " + card.verificationCode(), font(9, Font.ITALIC));
             confirmation.setSpacingBefore(14); document.add(confirmation); genericSignature(document);
         });

@@ -1,6 +1,8 @@
 package com.sse.app.academic.summary;
 
 import com.sse.app.academic.grade.*;
+import com.sse.app.academic.conduct.ConductDtos.DecisionRequest;
+import com.sse.app.academic.conduct.ConductEvaluationService;
 import com.sse.app.academic.structure.*;
 import com.sse.app.academic.timetable.TeachingAssignmentService;
 import com.sse.app.common.ApiException;
@@ -40,6 +42,7 @@ public class ReportCardWorkflowService {
     private final GradebookCompletionService completions;
     private final UserService users;
     private final NotificationService notifications;
+    private final ConductEvaluationService conduct;
 
     @Transactional
     public List<ReportCardListItem> list(String academicYearId, String classId, String gradeLevel,
@@ -147,7 +150,8 @@ public class ReportCardWorkflowService {
                 schoolClass.getHomeroomTeacherId(), homeroom == null ? null : homeroom.fullName(), card.comment(),
                 summary.getSemesterOneAverage(), summary.getSemesterTwoAverage(), summary.getAverageScore(),
                 summary.getConductGrade(), summary.getPromotionStatus(), cardMissing(summary, schoolClass, card),
-                subjectResults.size(), subjectResults, attendance(academicYearId, studentId), card.verificationCode(),
+                subjectResults.size(), subjectResults, attendance(academicYearId, studentId),
+                conduct.evaluate(academicYearId, null, studentId, actor), card.verificationCode(),
                 instant(card.submittedAt()), instant(card.approvedAt()), instant(card.lockedAt()), instant(card.publishedAt()),
                 actor.isTeacher() && actor.id().equals(schoolClass.getHomeroomTeacherId()) && !LOCKED.equals(card.status())
                         && !PUBLISHED.equals(card.status()), audits(card.id()));
@@ -162,6 +166,8 @@ public class ReportCardWorkflowService {
         assertHomeroom(schoolClass, actor.id());
         CardRow card = ensure(summary, schoolClass);
         if (Set.of(LOCKED, PUBLISHED).contains(card.status())) throw ApiException.conflict("Học bạ đã khóa, không thể chỉnh sửa");
+        conduct.decide(academicYearId, studentId,
+                new DecisionRequest(null, request.conductGrade(), request.overrideReason()), actor);
         if (summary.getFinalizedAt() == null) yearEnd.setConduct(academicYearId, studentId, request.conductGrade(), actor);
         else yearEnd.setConductForReportCardRevision(academicYearId, studentId, request.conductGrade(), actor);
         jdbc.update("update report_cards set homeroom_comment=?,status=?,updated_at=?,version=version+1 where id=?",
@@ -186,6 +192,8 @@ public class ReportCardWorkflowService {
         if (missing != null) throw ApiException.conflict("Chưa thể gửi duyệt: " + missing);
         if (card.comment() == null || card.comment().isBlank()) throw ApiException.conflict("GVCN chưa nhập nhận xét học bạ");
         transition(card, SUBMITTED, "SUBMITTED", request == null ? null : request.note(), actor.id());
+        conduct.syncWorkflow(academicYearId, studentId, SUBMITTED, "SUBMITTED",
+                request == null ? null : request.note(), actor.id());
         return view(academicYearId, studentId, actor);
     }
 
@@ -195,6 +203,8 @@ public class ReportCardWorkflowService {
         CardContext context = context(academicYearId, studentId);
         requireStatus(context.card(), SUBMITTED, "Chỉ học bạ GVCN đã gửi mới được duyệt");
         transition(context.card(), APPROVED, "APPROVED", request == null ? null : request.note(), actor.id());
+        conduct.syncWorkflow(academicYearId, studentId, APPROVED, "APPROVED",
+                request == null ? null : request.note(), actor.id());
         return view(academicYearId, studentId, actor);
     }
 
@@ -205,6 +215,8 @@ public class ReportCardWorkflowService {
         requireStatus(context.card(), APPROVED, "Học bạ phải được duyệt trước khi khóa");
         assertAllGradebooksCompleted(academicYearId, context.schoolClass());
         transition(context.card(), LOCKED, "LOCKED", request == null ? null : request.note(), actor.id());
+        conduct.syncWorkflow(academicYearId, studentId, LOCKED, "LOCKED",
+                request == null ? null : request.note(), actor.id());
         return view(academicYearId, studentId, actor);
     }
 
@@ -217,8 +229,12 @@ public class ReportCardWorkflowService {
             throw ApiException.conflict("Cần hoàn tất tổng kết năm học trước khi phát hành học bạ chính thức");
         }
         transition(context.card(), PUBLISHED, "PUBLISHED", request == null ? null : request.note(), actor.id());
+        conduct.syncWorkflow(academicYearId, studentId, PUBLISHED, "PUBLISHED",
+                request == null ? null : request.note(), actor.id());
         String body = "Học bạ năm học " + structure.getYear(academicYearId).getCode()
-                + " đã được nhà trường phát hành. Bạn có thể xem và tải PDF trên hệ thống.";
+                + " đã được nhà trường phát hành, kết quả rèn luyện: "
+                + conductLabel(context.summary().getConductGrade())
+                + ". Bạn có thể xem minh chứng và tải PDF trên hệ thống.";
         notifications.notifyUser(studentId, "REPORT_CARD_PUBLISHED", "Học bạ đã được phát hành", body,
                 "REPORT_CARD", context.card().id());
         notifications.notifyParentsOfStudent(studentId, "REPORT_CARD_PUBLISHED", "Học bạ của học sinh đã được phát hành",
@@ -239,6 +255,8 @@ public class ReportCardWorkflowService {
                     context.card().verificationCode().replaceFirst("-R\\d+$", "") + "-R" + revisions, context.card().id());
         }
         transition(context.card(), DRAFT, wasPublished ? "OFFICIAL_REVISION_OPENED" : "REOPENED", request.reason(), actor.id());
+        conduct.syncWorkflow(academicYearId, studentId, DRAFT,
+                wasPublished ? "OFFICIAL_REVISION_OPENED" : "REOPENED", request.reason(), actor.id());
         if (wasPublished) {
             String body = "Học bạ năm học " + structure.getYear(academicYearId).getCode()
                     + " đang được nhà trường điều chỉnh với lý do: " + request.reason() + ". Bản mới sẽ được thông báo sau khi phát hành lại.";
@@ -492,6 +510,16 @@ public class ReportCardWorkflowService {
     private void requireStatus(CardRow card, String status, String message) { if (!status.equals(card.status())) throw ApiException.conflict(message); }
     private Semester semester(List<Semester> list, int sequence) { return list.stream().filter(item -> item.getSequence() == sequence || ("HK" + sequence).equalsIgnoreCase(item.getCode())).findFirst().orElse(null); }
     private double round(double value) { return Math.round(value * 100d) / 100d; }
+    private String conductLabel(String value) {
+        if (value == null) return "Chưa đánh giá";
+        return switch (value) {
+            case "GOOD" -> "Tốt";
+            case "FAIR" -> "Khá";
+            case "AVERAGE" -> "Trung bình";
+            case "WEAK" -> "Yếu";
+            default -> value;
+        };
+    }
     private String clean(String value) { return value == null || value.isBlank() ? null : value.trim(); }
     private String safe(String value) { return value == null ? "" : value; }
     private String instant(Instant value) { return value == null ? null : value.toString(); }
