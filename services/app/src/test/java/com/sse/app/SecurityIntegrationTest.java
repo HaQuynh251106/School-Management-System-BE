@@ -13,6 +13,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.mock.web.MockMultipartFile;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
@@ -314,6 +315,59 @@ class SecurityIntegrationTest {
                 .andExpect(jsonPath("$.adminOverview.timetableCoverage").isNumber())
                 .andExpect(jsonPath("$.adminOverview.calendarItems").isArray())
                 .andExpect(jsonPath("$.adminOverview.workItems.length()", greaterThanOrEqualTo(1)));
+    }
+
+    @Test
+    @Transactional
+    void dashboardsExcludeGraduatedStudentsFromEnrollmentAndPlacementWarnings() throws Exception {
+        String admin = login("admin", "admin@123");
+        JsonNode before = body(mvc.perform(get("/dashboard")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+        int activeBefore = before.path("adminOverview").path("activeStudents").asInt();
+        int unassignedBefore = before.path("adminOverview").path("unassignedStudents").asInt();
+
+        String studentId = jdbc.queryForObject("""
+                select u.id from users u join classes c on c.id=u.class_id
+                where u.role='STUDENT' and u.status='ACTIVE' and c.status='ACTIVE'
+                order by u.id limit 1
+                """, String.class);
+        jdbc.update("update users set class_id=null, student_status='GRADUATED' where id=?", studentId);
+
+        JsonNode after = body(mvc.perform(get("/dashboard")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+        assertEquals(activeBefore - 1, after.path("adminOverview").path("activeStudents").asInt());
+        assertEquals(unassignedBefore, after.path("adminOverview").path("unassignedStudents").asInt());
+    }
+
+    @Test
+    void adminCanObserveButCannotMutateDelegatedAcademicOrFinanceWorkflows() throws Exception {
+        String admin = login("admin", "admin@123");
+        String academicStaff = login("giaovu", "Giaovu123@@");
+        String accountant = login("ketoan", "Ketoan123@@");
+
+        mvc.perform(delete("/exam-periods/{id}", "missing")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isForbidden());
+        mvc.perform(delete("/timetableSlots/{id}", "missing")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isForbidden());
+        mvc.perform(delete("/fee-periods/{id}", "missing")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isForbidden());
+        mvc.perform(delete("/assignments/{id}", "missing")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(delete("/exam-periods/{id}", "missing")
+                        .header("Authorization", "Bearer " + academicStaff))
+                .andExpect(status().isNotFound());
+        mvc.perform(delete("/fee-periods/{id}", "missing")
+                        .header("Authorization", "Bearer " + accountant))
+                .andExpect(status().isNotFound());
     }
 
     @Test
@@ -1246,7 +1300,7 @@ class SecurityIntegrationTest {
 
     @Test
     void invoiceGenerationAndSignedPaymentCallbackAreIdempotent() throws Exception {
-        String admin = login("admin", "admin@123");
+        String admin = login("ketoan", "Ketoan123@@");
         mvc.perform(post("/fee-periods/fp-hk1/generate-invoices")
                         .header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk());
@@ -1309,7 +1363,7 @@ class SecurityIntegrationTest {
 
     @Test
     void adminFinanceWorkflowSupportsDraftEditingPartialCashAndReminders() throws Exception {
-        String admin = login("admin", "admin@123");
+        String admin = login("ketoan", "Ketoan123@@");
         JsonNode period = body(mvc.perform(post("/fee-periods")
                         .header("Authorization", "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -1869,7 +1923,7 @@ class SecurityIntegrationTest {
 
     @Test
     void subjectCoefficientAndYearEndPreviewFollowTheFlowchart() throws Exception {
-        String admin = login("admin", "admin@123");
+        String admin = login("giaovu", "Giaovu123@@");
         mvc.perform(put("/subjects/sj-math")
                         .header("Authorization", "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -1938,7 +1992,7 @@ class SecurityIntegrationTest {
 
     @Test
     void academicYearRolloverRequiresReadinessAndSupportsRecurringClassCodes() throws Exception {
-        String admin = login("admin", "admin@123");
+        String admin = login("giaovu", "Giaovu123@@");
         String teacher = login("gv.hoa", "teacher@123");
 
         mvc.perform(get("/academic-years/ay-2026/rollover-preview")
@@ -2031,7 +2085,7 @@ class SecurityIntegrationTest {
 
     @Test
     void roomCanServeMorningAndAfternoonButCannotBeAssignedTwiceInSameShift() throws Exception {
-        String admin = login("admin", "admin@123");
+        String admin = login("giaovu", "Giaovu123@@");
 
         mvc.perform(post("/rooms")
                         .header("Authorization", "Bearer " + admin)
@@ -2415,7 +2469,7 @@ class SecurityIntegrationTest {
                  "startTime":"07:00","endTime":"07:45","semesterId":"sm-2026-2"}
                 """;
         mvc.perform(post("/timetableSlots")
-                        .header("Authorization", "Bearer " + admin)
+                        .header("Authorization", "Bearer " + academicStaff)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(firstSlot))
                 .andExpect(status().isOk());
@@ -2488,7 +2542,7 @@ class SecurityIntegrationTest {
                  "startTime":"07:00","endTime":"07:45","semesterId":"sm-2026-2"}
                 """;
         mvc.perform(post("/timetableSlots")
-                        .header("Authorization", "Bearer " + admin)
+                        .header("Authorization", "Bearer " + academicStaff)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(teacherConflictSlot))
                 .andExpect(status().isConflict())
@@ -2500,7 +2554,7 @@ class SecurityIntegrationTest {
                  "startTime":"13:00","endTime":"13:45","semesterId":"sm-2026-2"}
                 """;
         mvc.perform(post("/timetableSlots")
-                        .header("Authorization", "Bearer " + admin)
+                        .header("Authorization", "Bearer " + academicStaff)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(afternoonSlotWithSamePeriodNumber))
                 .andExpect(status().isOk())
@@ -2513,7 +2567,7 @@ class SecurityIntegrationTest {
                  "startTime":"07:50","endTime":"08:35","semesterId":"sm-2026-2"}
                 """;
         mvc.perform(post("/timetableSlots")
-                        .header("Authorization", "Bearer " + admin)
+                        .header("Authorization", "Bearer " + academicStaff)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(extraSlot))
                 .andExpect(status().isConflict())
@@ -2544,7 +2598,7 @@ class SecurityIntegrationTest {
                  "startTime":"08:45","endTime":"09:30","semesterId":"sm-2026-2"}
                 """;
         mvc.perform(post("/timetableSlots")
-                        .header("Authorization", "Bearer " + admin)
+                        .header("Authorization", "Bearer " + academicStaff)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(missingAssignmentSlot))
                 .andExpect(status().isBadRequest())
@@ -2554,6 +2608,7 @@ class SecurityIntegrationTest {
     @Test
     void examinationAdministrationAndStudentDocumentsRespectRoleScope() throws Exception {
         String admin = login("admin", "admin@123");
+        String academicStaff = login("giaovu", "Giaovu123@@");
         String homeroomTeacher = login("gv.hoa", "teacher@123");
         String subjectTeacher = login("gv.minh", "teacher@123");
         String student = login("hs.an", "student@123");
@@ -2588,7 +2643,7 @@ class SecurityIntegrationTest {
                 .andExpect(status().isForbidden());
 
         JsonNode period = body(mvc.perform(post("/exam-periods")
-                        .header("Authorization", "Bearer " + admin)
+                        .header("Authorization", "Bearer " + academicStaff)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"code":"SEC-EXAM-2026","name":"Kỳ thi kiểm thử phân quyền",
@@ -2599,7 +2654,7 @@ class SecurityIntegrationTest {
                 .andReturn().getResponse().getContentAsString());
         String periodId = period.path("id").asText();
         mvc.perform(delete("/exam-periods/{id}", periodId)
-                        .header("Authorization", "Bearer " + admin))
+                        .header("Authorization", "Bearer " + academicStaff))
                 .andExpect(status().isOk());
     }
 

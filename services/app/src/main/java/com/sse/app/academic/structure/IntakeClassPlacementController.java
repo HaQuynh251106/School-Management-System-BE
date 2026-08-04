@@ -30,13 +30,13 @@ public class IntakeClassPlacementController {
 
     @PostMapping("/apply")
     public ApplyResponse apply(@Valid @RequestBody PreviewRequest request) {
-        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         return placement.apply(request, CurrentUserHolder.require().id());
     }
 
     @PostMapping("/undo-last")
     public UndoResponse undoLast(@Valid @RequestBody UndoRequest request) {
-        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         return placement.undoLast(request, CurrentUserHolder.require().id());
     }
 

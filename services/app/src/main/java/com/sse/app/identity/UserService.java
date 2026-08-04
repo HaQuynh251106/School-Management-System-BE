@@ -371,8 +371,9 @@ public class UserService {
 
     @Transactional
     public UserDto create(CreateUserRequest r) {
+        String fullName = PersonNameIntegrity.required(r.fullName());
         String username = r.username() == null || r.username().isBlank()
-                ? availableUsername(r.role(), r.fullName(), Set.of())
+                ? availableUsername(r.role(), fullName, Set.of())
                 : r.username().trim().toLowerCase(Locale.ROOT);
         if (users.existsByUsername(username)) {
             throw ApiException.conflict("Tên đăng nhập đã tồn tại");
@@ -398,7 +399,7 @@ public class UserService {
                 .id(id)
                 .username(username)
                 .passwordHash(encoder.encode(initialPassword))
-                .fullName(r.fullName())
+                .fullName(fullName)
                 .role(r.role())
                 .email(normalizedEmail)
                 .phone(r.phone())
@@ -422,7 +423,7 @@ public class UserService {
                 .nationality(r.nationality())
                 .address(r.address())
                 .enrollmentDate(r.enrollmentDate())
-                .guardianName(r.guardianName())
+                .guardianName(PersonNameIntegrity.optional(r.guardianName()))
                 .guardianPhone(r.guardianPhone())
                 .createdAt(Instant.now())
                 .build();
@@ -472,7 +473,7 @@ public class UserService {
         validateUniqueIdentifiers(id, r.email(), r.studentCode(), r.teacherCode());
         String previousClassId = u.getClassId();
         String previousEmail = u.getEmail();
-        if (r.fullName() != null)   u.setFullName(r.fullName());
+        if (r.fullName() != null)   u.setFullName(PersonNameIntegrity.required(r.fullName()));
         if (r.email() != null)      u.setEmail(normalizeEmail(r.email()));
         if (r.phone() != null)      u.setPhone(r.phone());
         if (r.avatarUrl() != null)  u.setAvatarUrl(r.avatarUrl());
@@ -488,7 +489,7 @@ public class UserService {
         if (r.nationality() != null)u.setNationality(r.nationality());
         if (r.address() != null)    u.setAddress(r.address());
         if (r.enrollmentDate() != null) u.setEnrollmentDate(r.enrollmentDate());
-        if (r.guardianName() != null) u.setGuardianName(r.guardianName());
+        if (r.guardianName() != null) u.setGuardianName(PersonNameIntegrity.optional(r.guardianName()));
         if (r.guardianPhone() != null) u.setGuardianPhone(r.guardianPhone());
         if ("STUDENT".equals(u.getRole()) && r.classId() != null) {
             u.setCohortId(structure.cohortIdForClass(r.classId()));

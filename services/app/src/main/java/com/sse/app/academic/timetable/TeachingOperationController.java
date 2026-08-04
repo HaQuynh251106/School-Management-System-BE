@@ -70,7 +70,7 @@ public class TeachingOperationController {
 
     @PostMapping("/academic/timetable-change-requests/{id}/decision")
     public ChangeRequestView decide(@PathVariable String id, @Valid @RequestBody ChangeDecision decision) {
-        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         CurrentUser actor = CurrentUserHolder.require();
         return operations.decide(actor, id, decision);
     }

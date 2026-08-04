@@ -728,6 +728,10 @@ public class FinanceService {
 
     public List<Payment> paymentsOf(String invoiceId) { return payments.findByInvoiceId(invoiceId); }
 
+    public List<Payment> allPayments() {
+        return payments.findAll(Sort.by(Sort.Direction.DESC, "createdAt"));
+    }
+
     public Payment getPayment(String paymentId) {
         return payments.findById(paymentId).orElseThrow(() -> ApiException.notFound("Thanh toán"));
     }

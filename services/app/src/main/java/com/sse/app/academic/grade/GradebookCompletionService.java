@@ -78,7 +78,7 @@ public class GradebookCompletionService {
 
     private CompletionView reopenInternal(String semesterId, String classId, String subjectId,
                                           ReopenRequest request, CurrentUser actor, String action) {
-        if (!actor.canManageAcademics()) throw ApiException.forbidden("Chỉ Giáo vụ được mở lại sổ điểm");
+        if (!actor.isAcademicStaff()) throw ApiException.forbidden("Chỉ Giáo vụ được mở lại sổ điểm");
         int updated = jdbc.update("update gradebook_locks set locked=false,reason=?,changed_by=?,changed_at=?,version=version+1 where semester_id=? and class_id=? and subject_id=?",
                 request.reason().trim(), actor.id(), Timestamp.from(Instant.now()), semesterId, classId, subjectId);
         if (updated == 0) throw ApiException.conflict("Sổ điểm chưa được giáo viên xác nhận hoàn tất nên không cần mở lại");

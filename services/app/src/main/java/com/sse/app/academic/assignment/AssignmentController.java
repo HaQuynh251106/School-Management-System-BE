@@ -63,56 +63,56 @@ public class AssignmentController {
     @PostMapping("/assignments")
     public Assignment create(@Valid @RequestBody CreateAssignmentRequest r) {
         CurrentUser me = CurrentUserHolder.require();
-        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        CurrentUserHolder.requireRole("TEACHER");
         return assignments.create(r, me.id(), me.role());
     }
 
     @PostMapping("/assignments/{id}/publish")
     public Assignment publish(@PathVariable String id) {
         CurrentUser me = CurrentUserHolder.require();
-        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        CurrentUserHolder.requireRole("TEACHER");
         return assignments.publish(id, me.id(), me.role());
     }
 
     @PutMapping("/assignments/{id}")
     public Assignment update(@PathVariable String id, @Valid @RequestBody UpdateAssignmentRequest request) {
         CurrentUser me = CurrentUserHolder.require();
-        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        CurrentUserHolder.requireRole("TEACHER");
         return assignments.update(id, request, me.id(), me.role());
     }
 
     @DeleteMapping("/assignments/{id}")
     public void delete(@PathVariable String id) {
         CurrentUser me = CurrentUserHolder.require();
-        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        CurrentUserHolder.requireRole("TEACHER");
         assignments.delete(id, me.id(), me.role());
     }
 
     @PostMapping("/assignments/{id}/extend")
     public Assignment extend(@PathVariable String id, @Valid @RequestBody ExtendDeadlineRequest request) {
         CurrentUser me = CurrentUserHolder.require();
-        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        CurrentUserHolder.requireRole("TEACHER");
         return assignments.extend(id, request.deadline(), me.id(), me.role());
     }
 
     @PostMapping("/assignments/{id}/close")
     public Assignment close(@PathVariable String id) {
         CurrentUser me = CurrentUserHolder.require();
-        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        CurrentUserHolder.requireRole("TEACHER");
         return assignments.setOpen(id, false, me.id(), me.role());
     }
 
     @PostMapping("/assignments/{id}/reopen")
     public Assignment reopen(@PathVariable String id) {
         CurrentUser me = CurrentUserHolder.require();
-        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        CurrentUserHolder.requireRole("TEACHER");
         return assignments.setOpen(id, true, me.id(), me.role());
     }
 
     @GetMapping("/assignments/{id}/submissions")
     public List<AssignmentSubmission> submissions(@PathVariable String id) {
         CurrentUser me = CurrentUserHolder.require();
-        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        CurrentUserHolder.requireRole("TEACHER");
         return assignments.submissionsOf(id, me.id(), me.role());
     }
 
@@ -126,14 +126,14 @@ public class AssignmentController {
     @PostMapping("/submissions/{id}/grade")
     public AssignmentSubmission grade(@PathVariable String id, @Valid @RequestBody GradeSubmissionRequest r) {
         CurrentUser me = CurrentUserHolder.require();
-        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        CurrentUserHolder.requireRole("TEACHER");
         return assignments.grade(id, r, me.id(), me.role());
     }
 
     @PostMapping("/submissions/{id}/allow-resubmit")
     public AssignmentSubmission allowResubmit(@PathVariable String id) {
         CurrentUser me = CurrentUserHolder.require();
-        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        CurrentUserHolder.requireRole("TEACHER");
         return assignments.allowResubmit(id, me.id(), me.role());
     }
 

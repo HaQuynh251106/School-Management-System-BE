@@ -488,7 +488,7 @@ public class ReportCardWorkflowService {
         throw ApiException.forbidden("Không có quyền xem học bạ học sinh này");
     }
     private void assertHomeroom(SchoolClass schoolClass, String teacherId) { if (!teacherId.equals(schoolClass.getHomeroomTeacherId())) throw ApiException.forbidden("Chỉ GVCN của lớp được hoàn thiện học bạ"); }
-    private void assertAcademicStaff(CurrentUser actor) { if (!actor.canManageAcademics()) throw ApiException.forbidden("Chỉ Giáo vụ được xử lý duyệt và phát hành học bạ"); }
+    private void assertAcademicStaff(CurrentUser actor) { if (!actor.isAcademicStaff()) throw ApiException.forbidden("Chỉ Giáo vụ được xử lý duyệt và phát hành học bạ"); }
     private void requireStatus(CardRow card, String status, String message) { if (!status.equals(card.status())) throw ApiException.conflict(message); }
     private Semester semester(List<Semester> list, int sequence) { return list.stream().filter(item -> item.getSequence() == sequence || ("HK" + sequence).equalsIgnoreCase(item.getCode())).findFirst().orElse(null); }
     private double round(double value) { return Math.round(value * 100d) / 100d; }

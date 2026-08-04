@@ -193,7 +193,7 @@ public class UserImportService {
         String classCode = cell(row, h, "classcode", f);
         String linkedUsername = cell(row, h, "linkedusername", f);
         try {
-            fullName = required(fullName, "Họ tên");
+            fullName = PersonNameIntegrity.required(required(fullName, "Họ tên"));
             String role = normalizeRole(required(roleText, "Vai trò"));
             username = username == null || username.isBlank()
                     ? users.availableUsername(role, fullName, usernamesInFile)
@@ -248,7 +248,7 @@ public class UserImportService {
                     emptyToNull(cell(row, h, "nationality", f)),
                     emptyToNull(cell(row, h, "address", f)),
                     parseDate(cell(row, h, "enrollmentdate", f)),
-                    emptyToNull(cell(row, h, "guardianname", f)),
+                    PersonNameIntegrity.optional(cell(row, h, "guardianname", f)),
                     emptyToNull(cell(row, h, "guardianphone", f))
             );
             ImportPreviewRow preview = new ImportPreviewRow(

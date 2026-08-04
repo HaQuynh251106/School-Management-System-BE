@@ -62,7 +62,7 @@ public class GradeController {
     @PostMapping("/grades/bulk")
     public List<Grade> bulk(@Valid @RequestBody BulkGradeRequest req) {
         CurrentUser me = CurrentUserHolder.require();
-        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        CurrentUserHolder.requireRole("TEACHER");
         return grades.bulkUpsert(req, me.id(), me.role());
     }
 
@@ -78,14 +78,14 @@ public class GradeController {
     @ResponseStatus(HttpStatus.CREATED)
     public Grade create(@Valid @RequestBody CreateGradeRequest req) {
         CurrentUser me = CurrentUserHolder.require();
-        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        CurrentUserHolder.requireRole("TEACHER");
         return grades.create(req, me.id(), me.role());
     }
 
     @PutMapping("/grades/{id}")
     public Grade update(@PathVariable String id, @Valid @RequestBody UpdateGradeRequest req) {
         CurrentUser me = CurrentUserHolder.require();
-        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        CurrentUserHolder.requireRole("TEACHER");
         return grades.update(id, req, me.id(), me.role());
     }
 
@@ -103,19 +103,19 @@ public class GradeController {
 
     @PostMapping("/exam-categories")
     public ExamCategory createCategory(@Valid @RequestBody CreateExamCategoryRequest r) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         return grades.createCategory(r);
     }
 
     @PutMapping("/exam-categories/{id}")
     public ExamCategory updateCategory(@PathVariable String id, @Valid @RequestBody CreateExamCategoryRequest r) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         return grades.updateCategory(id, r);
     }
 
     @DeleteMapping("/exam-categories/{id}")
     public void deleteCategory(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         grades.deleteCategory(id);
     }
 }

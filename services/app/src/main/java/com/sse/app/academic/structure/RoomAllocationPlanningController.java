@@ -19,7 +19,7 @@ public class RoomAllocationPlanningController {
 
     @PostMapping("/preview")
     public AllocationPlan preview(@Valid @RequestBody PreviewRequest request) {
-        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         var actor = CurrentUserHolder.require();
         return planning.preview(request, actor.id());
     }
@@ -38,14 +38,14 @@ public class RoomAllocationPlanningController {
 
     @PostMapping("/{id}/apply")
     public AllocationPlan apply(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         var actor = CurrentUserHolder.require();
         return planning.apply(id, actor.id());
     }
 
     @PostMapping("/{id}/undo")
     public AllocationPlan undo(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         var actor = CurrentUserHolder.require();
         return planning.undo(id, actor.id());
     }

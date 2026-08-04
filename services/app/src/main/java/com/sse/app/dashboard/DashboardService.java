@@ -52,10 +52,7 @@ public class DashboardService {
                 select count(*) from classes
                 where academic_year_id=? and (status is null or status='ACTIVE')
                 """, academicYearId);
-        int unassignedStudents = integer("""
-                select count(*) from users where role='STUDENT' and status='ACTIVE'
-                and (class_id is null or trim(class_id) = '')
-                """);
+        int unassignedStudents = currentUnassignedStudents();
         int classesWithoutHomeroom = academicYearId.isBlank() ? 0 : integer("""
                 select count(*) from classes where status='ACTIVE'
                 and academic_year_id=?
@@ -184,13 +181,10 @@ public class DashboardService {
 
     private DashboardDtos.Response admin() {
         String activeAcademicYearId = activeAcademicYearId();
-        int activeStudents = integer("select count(*) from users where role = 'STUDENT' and status = 'ACTIVE'");
+        int activeStudents = currentEnrolledStudents(activeAcademicYearId);
         int activeTeachers = integer("select count(*) from users where role = 'TEACHER' and status = 'ACTIVE'");
         int activeParents = integer("select count(*) from users where role = 'PARENT' and status = 'ACTIVE'");
-        int unassignedStudents = integer("""
-                select count(*) from users where role = 'STUDENT' and status = 'ACTIVE'
-                and (class_id is null or trim(class_id) = '')
-                """);
+        int unassignedStudents = currentUnassignedStudents();
         int inactiveAccounts = integer("select count(*) from users where status <> 'ACTIVE'");
         int classes = activeAcademicYearId.isBlank() ? 0 : integer("""
                 select count(*) from classes where academic_year_id=? and status='ACTIVE'
@@ -708,6 +702,37 @@ public class DashboardService {
         return text("""
                 select id from academic_years
                 order by case when status='ACTIVE' then 0 else 1 end, start_date desc limit 1
+                """);
+    }
+
+    /** Students who are actually enrolled in a class of the current operational year. */
+    private int currentEnrolledStudents(String academicYearId) {
+        if (academicYearId == null || academicYearId.isBlank()) return 0;
+        return integer("""
+                select count(distinct u.id)
+                from users u join classes c on c.id=u.class_id
+                where u.role='STUDENT' and u.status='ACTIVE'
+                  and coalesce(u.student_status,'ENROLLED') not in ('GRADUATED','WITHDRAWN')
+                  and c.academic_year_id=? and (c.status is null or c.status='ACTIVE')
+                """, academicYearId);
+    }
+
+    /**
+     * Only intake records that can still be placed are actionable. Graduates and
+     * students of completed cohorts must never become an academic-staff warning.
+     */
+    private int currentUnassignedStudents() {
+        return integer("""
+                select count(*) from users u
+                where u.role='STUDENT' and u.status='ACTIVE'
+                  and (u.class_id is null or trim(u.class_id)='')
+                  and coalesce(u.student_status,'PENDING_PLACEMENT') not in ('GRADUATED','WITHDRAWN')
+                  and (
+                    u.student_status='PENDING_PLACEMENT'
+                    or (u.cohort_id is not null and exists (
+                      select 1 from cohorts co where co.id=u.cohort_id and co.status='ACTIVE'
+                    ))
+                  )
                 """);
     }
 

@@ -24,13 +24,13 @@ public class SubjectRoomRequirementController {
 
     @PostMapping
     public View save(@Valid @RequestBody SaveRequest request) {
-        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         return service.save(request);
     }
 
     @DeleteMapping("/{id}")
     public void delete(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         service.delete(id);
     }
 }

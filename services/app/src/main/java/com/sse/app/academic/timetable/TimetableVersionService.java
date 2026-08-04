@@ -147,21 +147,13 @@ public class TimetableVersionService {
     }
 
     private Validation validate(String planId) {
-        int conflicts = count("""
-                select count(*) from (
-                  select class_id,day_of_week,start_time,end_time from timetable_plan_slots where plan_id=?
-                  group by class_id,day_of_week,start_time,end_time having count(*)>1
-                  union all
-                  select teacher_id,day_of_week,start_time,end_time from timetable_plan_slots where plan_id=?
-                  group by teacher_id,day_of_week,start_time,end_time having count(*)>1
-                  union all
-                  select room_code,day_of_week,start_time,end_time from timetable_plan_slots
-                  where plan_id=? and room_code is not null and room_code<>''
-                  group by room_code,day_of_week,start_time,end_time having count(*)>1
-                ) conflicts
-                """, planId, planId, planId);
-        return new Validation(conflicts == 0,
-                conflicts == 0 ? null : "Phiên bản còn " + conflicts + " xung đột lớp, giáo viên hoặc phòng");
+        TimetableVersion plan = require(planId);
+        TimetableRulePolicy.Validation validation = TimetableRulePolicy.validate(slots(planId).stream()
+                .map(item -> new TimetableRulePolicy.SlotView(item.id(), item.classId(), item.subjectId(),
+                        item.teacherId(), item.roomCode(), item.dayOfWeek(), item.periodNo(),
+                        item.startTime(), item.endTime(), plan.semesterId()))
+                .toList());
+        return new Validation(validation.valid(), validation.summary());
     }
 
     private TimetableVersion require(String id) {

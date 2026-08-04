@@ -53,7 +53,7 @@ public class YearEndController {
 
     @PostMapping("/{id}/finalize")
     public List<StudentYearlySummary> finalizeYear(@PathVariable String id) {
-        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         var current = CurrentUserHolder.require();
         return yearEnd.finalizeYear(id, current.id());
     }
@@ -67,7 +67,7 @@ public class YearEndController {
     @PostMapping("/{id}/rollover")
     public YearEndDtos.RolloverResult rollover(@PathVariable String id,
                                                 @Valid @RequestBody YearEndDtos.RolloverRequest request) {
-        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         return rollover.rollover(id, request, CurrentUserHolder.require().id());
     }
 }

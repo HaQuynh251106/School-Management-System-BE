@@ -58,12 +58,21 @@ public class AutomaticTimetableService {
                 .filter(item -> Set.of("APPROVED", "LOCKED").contains(item.getStatus()))
                 .forEach(item -> loads.put(item.getTeacherId(), item));
 
-        List<TeachingAssignment> work = assignments.findAll().stream()
-                .filter(item -> request.semesterId().equals(item.getSemesterId()))
+        List<TeachingAssignment> semesterAssignments = assignments.findAll().stream()
+                .filter(item -> request.semesterId().equals(item.getSemesterId())).toList();
+        Map<String, Integer> teacherDemand = new HashMap<>();
+        semesterAssignments.forEach(item -> teacherDemand.merge(
+                item.getTeacherId(), item.getWeeklyPeriods(), Integer::sum));
+        List<TeachingAssignment> work = semesterAssignments.stream()
+                // Schedule the teachers with the least spare availability first.
+                // This prevents high-load subjects (for example 24 Mathematics
+                // periods/week) from being left until every class is almost full.
                 .sorted(Comparator.comparingInt((TeachingAssignment item) ->
-                                availableCandidateCount(item, loads.get(item.getTeacherId()), occupied))
-                        .thenComparing(TeachingAssignment::getClassCode)
-                        .thenComparing(TeachingAssignment::getSubjectName)).toList();
+                                availableCandidateCount(item, loads.get(item.getTeacherId()), occupied)
+                                        - teacherDemand.getOrDefault(item.getTeacherId(), 0))
+                        .thenComparing(Comparator.comparingInt(TeachingAssignment::getWeeklyPeriods).reversed())
+                        .thenComparing(TeachingAssignment::getSubjectName)
+                        .thenComparing(TeachingAssignment::getClassCode)).toList();
         if (work.isEmpty()) throw ApiException.badRequest("Chưa có phân công bộ môn trong học kỳ đã chọn");
 
         List<AutoTimetableItem> result = new ArrayList<>();
@@ -211,7 +220,14 @@ public class AutomaticTimetableService {
 
     private void fillBestEffort(List<ScheduleNeed> needs, List<TimetableSlot> occupied,
                                 String semesterId) {
-        needs.sort(Comparator.comparingInt((ScheduleNeed need) -> candidateOptions(need, occupied).size())
+        Map<String, Integer> teacherDemand = new HashMap<>();
+        needs.forEach(need -> teacherDemand.merge(need.assignment.getTeacherId(),
+                need.assignment.getWeeklyPeriods(), Integer::sum));
+        needs.sort(Comparator.comparingInt((ScheduleNeed need) ->
+                        candidateOptions(need, occupied).size()
+                                - teacherDemand.getOrDefault(need.assignment.getTeacherId(), 0))
+                .thenComparing(Comparator.comparingInt(
+                        (ScheduleNeed need) -> need.assignment.getWeeklyPeriods()).reversed())
                 .thenComparing(need -> need.assignment.getClassCode())
                 .thenComparing(need -> need.assignment.getSubjectName()));
         for (ScheduleNeed need : needs) while (need.remaining > 0) {
@@ -244,7 +260,11 @@ public class AutomaticTimetableService {
     }
 
     private int slotIndex(Candidate candidate) {
-        return DAYS.indexOf(candidate.day()) * 10 + candidate.period();
+        // Prefer spreading lessons across the week before adding another period
+        // to the same day. Besides producing a healthier timetable, this ordering
+        // keeps the canonical-combination pruning below without forcing every
+        // subject into consecutive periods on the earliest available day.
+        return (candidate.period() - 1) * DAYS.size() + DAYS.indexOf(candidate.day());
     }
 
     private static TimetableSlot simulated(TeachingAssignment assignment, SchoolClass schoolClass,
@@ -301,7 +321,7 @@ public class AutomaticTimetableService {
     private boolean noConflict(TeachingAssignment assignment, SchoolClass schoolClass,
                                Candidate candidate, List<TimetableSlot> occupied) {
         int sameSubjectDay = subjectDayLoad(assignment, candidate.day(), occupied);
-        if (sameSubjectDay >= 2) return false;
+        if (sameSubjectDay >= TimetableRulePolicy.MAX_SUBJECT_PERIODS_PER_CLASS_DAY) return false;
         for (TimetableSlot slot : occupied) {
             if (!candidate.day().equals(slot.getDayOfWeek())) continue;
             if (!overlaps(candidate, slot)) continue;

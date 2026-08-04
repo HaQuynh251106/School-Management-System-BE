@@ -113,36 +113,8 @@ public class TimetableService {
     }
 
     private void checkConflicts(CreateSlotRequest request, String ignoredSlotId) {
-        for (TimetableSlot existing : slots.findByDayOfWeek(request.dayOfWeek().toUpperCase())) {
-            if (existing.getId().equals(ignoredSlotId)) continue;
-            if (differentSemester(request.semesterId(), existing.getSemesterId())) continue;
-            if (!overlaps(request, existing)) continue;
-            if (request.classId().equals(existing.getClassId())) {
-                throw ApiException.conflict("Lớp đã có tiết khác trùng khung giờ "
-                        + request.startTime() + "–" + request.endTime() + " vào " + vietnameseDay(request.dayOfWeek()));
-            }
-            if (request.teacherId().equals(existing.getTeacherId())) {
-                String classCode = structure.getClass(existing.getClassId()).getCode();
-                throw ApiException.conflict("Giáo viên đã kín lịch do trùng khung giờ: đang dạy "
-                        + existing.getSubjectName() + " tại lớp " + classCode + " ("
-                        + existing.getStartTime() + "–" + existing.getEndTime() + ")");
-            }
-            if (request.roomCode() != null && !request.roomCode().isBlank()
-                    && request.roomCode().equals(existing.getRoomCode())) {
-                throw ApiException.conflict("Phòng " + request.roomCode() + " đang được sử dụng trong khung giờ này");
-            }
-        }
-    }
-
-    private boolean overlaps(CreateSlotRequest request, TimetableSlot existing) {
-        LocalTime requestedStart = parseTime(request.startTime());
-        LocalTime requestedEnd = parseTime(request.endTime());
-        LocalTime existingStart = parseTime(existing.getStartTime());
-        LocalTime existingEnd = parseTime(existing.getEndTime());
-        if (requestedStart == null || requestedEnd == null || existingStart == null || existingEnd == null) {
-            return request.periodNo().equals(existing.getPeriodNo());
-        }
-        return requestedStart.isBefore(existingEnd) && existingStart.isBefore(requestedEnd);
+        TimetableRulePolicy.assertCanAdd(view(request), slots.findBySemesterId(request.semesterId()).stream()
+                .map(this::view).toList(), ignoredSlotId);
     }
 
     private LocalTime parseTime(String value) {
@@ -152,10 +124,6 @@ public class TimetableService {
         } catch (DateTimeParseException ignored) {
             return null;
         }
-    }
-
-    private boolean differentSemester(String left, String right) {
-        return left != null && right != null && !left.equals(right);
     }
 
     public void delete(String id) {
@@ -176,6 +144,8 @@ public class TimetableService {
 
     /** Chèn dữ liệu mẫu và tự tạo phân công tương ứng. */
     public void seedSlots(List<TimetableSlot> list) {
+        TimetableRulePolicy.Validation validation = TimetableRulePolicy.validate(list.stream().map(this::view).toList());
+        if (!validation.valid()) throw ApiException.conflict(validation.summary());
         slots.saveAll(list);
         teachingAssignments.seedFromSlots(list);
     }
@@ -193,25 +163,24 @@ public class TimetableService {
         };
     }
 
-    private String vietnameseDay(String day) {
-        return switch (day == null ? "" : day.toUpperCase()) {
-            case "MON" -> "thứ Hai";
-            case "TUE" -> "thứ Ba";
-            case "WED" -> "thứ Tư";
-            case "THU" -> "thứ Năm";
-            case "FRI" -> "thứ Sáu";
-            case "SAT" -> "thứ Bảy";
-            case "SUN" -> "Chủ nhật";
-            default -> day;
-        };
-    }
-
     private void attachClassCode(TimetableSlot slot) {
         if (slot.getClassId() != null) {
             var schoolClass = structure.getClass(slot.getClassId());
             slot.setClassCode(schoolClass.getCode());
             slot.setStudyShift(schoolClass.getStudyShift());
         }
+    }
+
+    private TimetableRulePolicy.SlotView view(CreateSlotRequest request) {
+        return new TimetableRulePolicy.SlotView(request.id(), request.classId(), request.subjectId(),
+                request.teacherId(), request.roomCode(), request.dayOfWeek(), request.periodNo(),
+                request.startTime(), request.endTime(), request.semesterId());
+    }
+
+    private TimetableRulePolicy.SlotView view(TimetableSlot slot) {
+        return new TimetableRulePolicy.SlotView(slot.getId(), slot.getClassId(), slot.getSubjectId(),
+                slot.getTeacherId(), slot.getRoomCode(), slot.getDayOfWeek(), slot.getPeriodNo(),
+                slot.getStartTime(), slot.getEndTime(), slot.getSemesterId());
     }
 
     private record SlotContext(String classCode, String studyShift, String subjectName, User teacher) {}

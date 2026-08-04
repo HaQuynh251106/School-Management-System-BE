@@ -58,7 +58,7 @@ public class AttendanceController {
 
     @PostMapping("/attendance/bulk")
     public List<AttendanceRecord> bulk(@Valid @RequestBody BulkAttendanceRequest req) {
-        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        CurrentUserHolder.requireRole("TEACHER");
         return attendance.bulkMark(req, CurrentUserHolder.require());
     }
 
