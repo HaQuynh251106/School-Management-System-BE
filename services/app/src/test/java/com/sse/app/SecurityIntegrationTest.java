@@ -1345,13 +1345,23 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + parent))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.gatewayStatus").value("AWAITING_CONFIRMATION"));
+        mvc.perform(get("/payments/" + paymentId + "/status")
+                        .header("Authorization", "Bearer " + parent))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.payment.status").value("PENDING"))
+                .andExpect(jsonPath("$.gatewayStatus").value("AWAITING_CONFIRMATION"));
         mvc.perform(post("/payments/" + paymentId + "/confirm-vietqr")
                         .header("Authorization", "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"bankTransactionRef\":\"BANK-TEST-001\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.payment.status").value("SUCCESS"))
-                .andExpect(jsonPath("$.invoice.status").value("PAID"));
+                .andExpect(jsonPath("$.invoice.status").value("PAID"))
+                .andExpect(jsonPath("$.emailDelivery.status").exists());
+        mvc.perform(get("/payments/vietqr/receipts")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.payment.id == '" + paymentId + "')]").exists());
         mvc.perform(post("/payments/" + paymentId + "/confirm-vietqr")
                         .header("Authorization", "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)

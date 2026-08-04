@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * Tạo Quick Link VietQR theo đặc tả công khai của VietQR.
@@ -42,6 +43,17 @@ public class VietQrGateway {
                 + "&addInfo=" + query(transferContent)
                 + "&accountName=" + query(accountName);
         return new VietQrPayment(imageUrl, bankId, accountNo, accountName, transferContent);
+    }
+
+    public Map<String, Object> configurationStatus() {
+        String accountSuffix = accountNo.length() <= 4 ? accountNo
+                : accountNo.substring(accountNo.length() - 4);
+        return Map.of(
+                "configured", !bankId.isBlank() && accountNo.matches("[0-9]{6,19}") && !accountName.isBlank(),
+                "bankId", bankId,
+                "accountSuffix", accountSuffix,
+                "accountName", accountName,
+                "template", template);
     }
 
     private void requireConfigured() {

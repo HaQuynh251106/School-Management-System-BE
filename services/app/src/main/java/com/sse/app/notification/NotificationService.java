@@ -322,6 +322,35 @@ public class NotificationService {
         return deliveryLogs.findTop200ByOrderByCreatedAtDesc();
     }
 
+    /**
+     * Trả về trạng thái giao nhận mới nhất của một thông báo nghiệp vụ theo kênh.
+     * Không trả nội dung email hoặc thông tin bí mật SMTP.
+     */
+    public Map<String, Object> deliveryStatus(String refType, String refId, String channel) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("channel", channel);
+        Optional<Notification> notification = notifications
+                .findFirstByRefTypeAndRefIdOrderByCreatedAtDesc(refType, refId);
+        if (notification.isEmpty()) {
+            result.put("status", "NOT_SENT");
+            result.put("attempts", 0);
+            return result;
+        }
+        Optional<NotificationDeliveryLog> delivery = deliveryLogs
+                .findFirstByNotificationIdAndChannelOrderByCreatedAtDesc(notification.get().getId(), channel);
+        if (delivery.isEmpty()) {
+            result.put("status", "NOT_SENT");
+            result.put("attempts", 0);
+            return result;
+        }
+        NotificationDeliveryLog log = delivery.get();
+        result.put("status", log.getStatus());
+        result.put("attempts", log.getAttempts());
+        result.put("detail", log.getDetail());
+        result.put("updatedAt", log.getUpdatedAt() == null ? log.getCreatedAt() : log.getUpdatedAt());
+        return result;
+    }
+
     public List<UserDevice> devices(String userId) {
         return devices.findByUserIdAndActiveTrue(userId);
     }

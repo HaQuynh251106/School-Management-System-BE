@@ -60,7 +60,7 @@ sse:
   password-reset:
     expose-token: false
   payments:
-    # vietqr = tạo QR chuyển khoản thật; hóa đơn chỉ hoàn tất sau khi Admin đối soát.
+    # vietqr = tạo QR chuyển khoản thật; hóa đơn chỉ hoàn tất sau khi Kế toán đối soát.
     mode: ${SSE_PAYMENT_MODE:disabled}
     vietqr:
       bank-id: ${SSE_VIETQR_BANK_ID:}

@@ -29,6 +29,12 @@ public class FinanceController {
     }
 
     // ----- Đợt thu (Kế toán; ADMIN giữ quyền giám sát) -----
+    @GetMapping("/finance/integrations")
+    public Map<String, Object> integrationStatus() {
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
+        return finance.integrationStatus();
+    }
+
     @GetMapping("/fee-periods")
     public List<FeePeriod> periods() {
         CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT", "TEACHER");
@@ -248,6 +254,24 @@ public class FinanceController {
         return finance.pendingVietQrPayments();
     }
 
+    @GetMapping("/payments/vietqr/receipts")
+    public List<Map<String, Object>> vietQrReceiptDeliveries() {
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
+        return finance.vietQrReceiptDeliveries();
+    }
+
+    @GetMapping("/payments/{paymentId}/status")
+    public Map<String, Object> vietQrPaymentStatus(@PathVariable String paymentId) {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT", "PARENT");
+        Payment payment = finance.getPayment(paymentId);
+        Invoice invoice = finance.getInvoice(payment.getInvoiceId());
+        if (me.isParent() && !me.id().equals(invoice.getParentId())) {
+            users.assertParentOf(me.id(), invoice.getStudentId());
+        }
+        return finance.vietQrPaymentStatus(paymentId);
+    }
+
     @PostMapping("/payments/{paymentId}/confirm-vietqr")
     public Map<String, Object> confirmVietQr(@PathVariable String paymentId,
                                              @RequestBody(required = false) VietQrConfirmationRequest request) {
@@ -259,6 +283,12 @@ public class FinanceController {
     public Map<String, Object> rejectVietQr(@PathVariable String paymentId) {
         CurrentUserHolder.requireRole("ACCOUNTANT");
         return finance.rejectVietQrPayment(paymentId);
+    }
+
+    @PostMapping("/payments/{paymentId}/resend-receipt")
+    public Map<String, Object> resendVietQrReceipt(@PathVariable String paymentId) {
+        CurrentUserHolder.requireRole("ACCOUNTANT");
+        return finance.resendVietQrReceipt(paymentId);
     }
 
     @GetMapping("/payments")

@@ -123,13 +123,23 @@ public class YearEndService {
         if (!academicYearId.equals(schoolClass.getAcademicYearId())) {
             throw ApiException.badRequest("Lớp không thuộc năm học đã chọn");
         }
+        List<UserDto> classStudents = users.list("STUDENT", null, classId);
+        Set<String> currentStudentIds = classStudents.stream().map(UserDto::id).collect(Collectors.toSet());
+        Set<String> existingStudentIds = summaries.findByAcademicYearIdAndClassIdOrderByStudentName(academicYearId, classId)
+                .stream().map(StudentYearlySummary::getStudentId).collect(Collectors.toSet());
         if (!"CLOSED".equals(year.getStatus())) {
             List<Semester> semesters = structure.listSemesters(academicYearId);
-            for (UserDto student : users.list("STUDENT", null, classId)) {
-                evaluateAndSave(academicYearId, semesters, student);
+            // Danh sách lớp dùng snapshot đã lưu. Chỉ tính những học sinh mới/chưa có
+            // snapshot; chi tiết học bạ vẫn được làm mới khi người dùng mở từng hồ sơ.
+            for (UserDto student : classStudents) {
+                if (!existingStudentIds.contains(student.id())) {
+                    evaluateAndSave(academicYearId, semesters, student);
+                }
             }
         }
-        return summaries.findByAcademicYearIdAndClassIdOrderByStudentName(academicYearId, classId);
+        return summaries.findByAcademicYearIdAndClassIdOrderByStudentName(academicYearId, classId).stream()
+                .filter(summary -> currentStudentIds.contains(summary.getStudentId()))
+                .toList();
     }
 
     /**

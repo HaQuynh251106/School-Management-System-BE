@@ -20,5 +20,8 @@ class VietQrGatewayTest {
         assertTrue(payment.qrImageUrl().contains("addInfo=VQRABC123"));
         assertEquals("VQRABC123", payment.transferContent());
         assertEquals("TRUONG HOC SO", payment.accountName());
+        assertEquals(true, gateway.configurationStatus().get("configured"));
+        assertEquals("6789", gateway.configurationStatus().get("accountSuffix"));
+        assertTrue(!gateway.configurationStatus().toString().contains("0123456789"));
     }
 }

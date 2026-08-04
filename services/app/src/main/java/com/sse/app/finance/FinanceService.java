@@ -58,6 +58,16 @@ public class FinanceService {
     }
 
     // ---------- Đợt thu ----------
+    public Map<String, Object> integrationStatus() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("paymentMode", paymentMode);
+        result.put("vietQr", vietQrGateway.configurationStatus());
+        result.put("notifications", notifications.channelCapabilities());
+        result.put("automaticBankConfirmation", false);
+        result.put("reconciliationMode", "ACCOUNTANT_MANUAL");
+        return result;
+    }
+
     public List<FeePeriod> listPeriods() { return periods.findAll(); }
 
     public FeePeriod createPeriod(CreateFeePeriodRequest r) {
@@ -329,7 +339,7 @@ public class FinanceService {
         return m;
     }
 
-    // ---------- Thanh toán VietQR: tạo QR, chờ đối soát rồi Admin xác nhận ----------
+    // ---------- Thanh toán VietQR: tạo QR, chờ đối soát rồi Kế toán xác nhận ----------
     @Transactional
     public Map<String, Object> pay(PayRequest r) {
         return pay(r, "127.0.0.1");
@@ -658,13 +668,33 @@ public class FinanceService {
                 .toList();
     }
 
+    public List<Map<String, Object>> vietQrReceiptDeliveries() {
+        return gatewayTransactions
+                .findByGatewayAndStatusInOrderByCreatedAtDesc("VIETQR", List.of("SUCCESS"))
+                .stream()
+                .map(transaction -> payments.findById(transaction.getPaymentId())
+                        .filter(payment -> "SUCCESS".equals(payment.getStatus()))
+                        .map(payment -> paymentResponse(getInvoice(payment.getInvoiceId()), payment, transaction))
+                        .orElse(null))
+                .filter(Objects::nonNull)
+                .limit(200)
+                .toList();
+    }
+
+    public Map<String, Object> vietQrPaymentStatus(String paymentId) {
+        Payment payment = getVietQrPayment(paymentId);
+        PaymentGatewayTransaction transaction = gatewayTransactions.findByPaymentId(paymentId)
+                .orElseThrow(() -> ApiException.notFound("Giao dịch VietQR"));
+        return paymentResponse(getInvoice(payment.getInvoiceId()), payment, transaction);
+    }
+
     @Transactional
     public Map<String, Object> confirmVietQrPayment(String paymentId, String bankTransactionRef) {
         Payment payment = getVietQrPayment(paymentId);
         PaymentGatewayTransaction transaction = gatewayTransactions.findByPaymentId(paymentId)
                 .orElseThrow(() -> ApiException.notFound("Giao dịch VietQR"));
         Invoice invoice = getInvoice(payment.getInvoiceId());
-        if ("SUCCESS".equals(payment.getStatus())) return callbackResult(invoice, payment, transaction);
+        if ("SUCCESS".equals(payment.getStatus())) return paymentResponse(invoice, payment, transaction);
         if (!Set.of("PENDING", "AWAITING_CONFIRMATION").contains(transaction.getStatus())) {
             throw ApiException.badRequest("Giao dịch VietQR không ở trạng thái có thể xác nhận");
         }
@@ -672,8 +702,9 @@ public class FinanceService {
         payment.setStatus("SUCCESS");
         payment.setPaidAt(Instant.now());
         transaction.setStatus("SUCCESS");
-        transaction.setSignatureValid(true);
-        transaction.setCallbackPayload("ADMIN_CONFIRMED:"
+        // Đối soát thủ công không phải là callback có chữ ký từ cổng thanh toán.
+        transaction.setSignatureValid(false);
+        transaction.setCallbackPayload("ACCOUNTANT_CONFIRMED:"
                 + (bankTransactionRef == null || bankTransactionRef.isBlank()
                 ? payment.getTxnRef() : bankTransactionRef.trim()));
         transaction.setUpdatedAt(Instant.now());
@@ -684,12 +715,9 @@ public class FinanceService {
         gatewayTransactions.save(transaction);
         invoices.save(invoice);
         if (invoice.getParentId() != null) {
-            notifications.notifyUserWithTransactionalEmail(invoice.getParentId(), "INVOICE", "Thanh toán thành công",
-                    String.format("Biên nhận %s%nHọc sinh: %s%nSố tiền: %,d₫%nPhương thức: VietQR%nNội dung chuyển khoản: %s%nTrạng thái: Thành công",
-                            invoice.getCode(), invoice.getStudentName(), payment.getAmount(), payment.getTxnRef()),
-                    "PAYMENT", payment.getId());
+            sendVietQrReceipt(invoice, payment, "Thanh toán thành công");
         }
-        return callbackResult(invoice, payment, transaction);
+        return paymentResponse(invoice, payment, transaction);
     }
 
     @Transactional
@@ -706,6 +734,30 @@ public class FinanceService {
         payments.save(payment);
         gatewayTransactions.save(transaction);
         return callbackResult(getInvoice(payment.getInvoiceId()), payment, transaction);
+    }
+
+    @Transactional
+    public Map<String, Object> resendVietQrReceipt(String paymentId) {
+        Payment payment = getVietQrPayment(paymentId);
+        if (!"SUCCESS".equals(payment.getStatus())) {
+            throw ApiException.badRequest("Chỉ có thể gửi lại biên nhận cho giao dịch đã thanh toán thành công");
+        }
+        Invoice invoice = getInvoice(payment.getInvoiceId());
+        if (invoice.getParentId() == null || invoice.getParentId().isBlank()) {
+            throw ApiException.badRequest("Hóa đơn chưa liên kết phụ huynh để gửi email biên nhận");
+        }
+        Map<String, Object> current = notifications.deliveryStatus("PAYMENT", payment.getId(), "EMAIL");
+        String status = String.valueOf(current.getOrDefault("status", "NOT_SENT"));
+        if (Set.of("PENDING", "PROCESSING", "RETRYING").contains(status)) {
+            throw ApiException.conflict("Email biên nhận đang được hệ thống xử lý, vui lòng chờ");
+        }
+        if ("DELIVERED".equals(status)) {
+            throw ApiException.conflict("Email biên nhận đã được gửi thành công");
+        }
+        sendVietQrReceipt(invoice, payment, "Gửi lại biên nhận thanh toán");
+        PaymentGatewayTransaction transaction = gatewayTransactions.findByPaymentId(paymentId)
+                .orElseThrow(() -> ApiException.notFound("Giao dịch VietQR"));
+        return paymentResponse(invoice, payment, transaction);
     }
 
     @Scheduled(fixedDelayString = "${sse.payments.reconciliation-interval-ms:3600000}")
@@ -747,7 +799,15 @@ public class FinanceService {
         result.put("accountName", qr.accountName());
         result.put("transferContent", qr.transferContent());
         result.put("expiresAt", transaction.getCreatedAt().plus(30, ChronoUnit.MINUTES));
+        result.put("emailDelivery", notifications.deliveryStatus("PAYMENT", payment.getId(), "EMAIL"));
         return result;
+    }
+
+    private void sendVietQrReceipt(Invoice invoice, Payment payment, String title) {
+        notifications.notifyUserWithTransactionalEmail(invoice.getParentId(), "INVOICE", title,
+                String.format("Biên nhận %s%nHọc sinh: %s%nSố tiền: %,d₫%nPhương thức: VietQR%nNội dung chuyển khoản: %s%nTrạng thái: Thành công",
+                        invoice.getCode(), invoice.getStudentName(), payment.getAmount(), payment.getTxnRef()),
+                "PAYMENT", payment.getId());
     }
 
     private Payment getVietQrPayment(String paymentId) {
