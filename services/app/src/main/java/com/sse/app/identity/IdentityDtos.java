@@ -6,13 +6,22 @@ import jakarta.validation.constraints.Size;
 import jakarta.validation.constraints.Email;
 
 import java.time.LocalDate;
+import java.time.Instant;
 import java.util.List;
 
 /** Gom các request DTO của phân hệ identity. */
 public final class IdentityDtos {
     private IdentityDtos() {}
 
-    public record LoginRequest(@NotBlank String username, @NotBlank String password) {}
+    public record LoginRequest(@NotBlank String username, @NotBlank String password,
+                               @Pattern(regexp = "^$|^[0-9]{6}$", message = "Mã xác thực phải gồm 6 chữ số")
+                               String twoFactorCode) {}
+
+    public record TwoFactorStatus(boolean enabled) {}
+    public record TwoFactorSetup(String secret, String otpauthUri) {}
+    public record TwoFactorCodeRequest(
+            @NotBlank @Pattern(regexp = "^[0-9]{6}$", message = "Mã xác thực phải gồm 6 chữ số")
+            String code) {}
 
     /** Refresh token may be supplied in the request body by mobile clients or by an HttpOnly cookie on web. */
     public record RefreshRequest(String refreshToken) {}
@@ -40,7 +49,6 @@ public final class IdentityDtos {
     public record CreateUserRequest(
             String id,
             String username,
-            @Size(min = 10, max = 128) String password,
             @NotBlank String fullName,
             @NotBlank @Pattern(regexp = "ADMIN|ACADEMIC_STAFF|ACCOUNTANT|TEACHER|STUDENT|PARENT") String role,
             String email,
@@ -83,8 +91,6 @@ public final class IdentityDtos {
             String guardianPhone
     ) {}
 
-    public record AdminResetPasswordRequest(@Size(min = 10, max = 128) String newPassword) {}
-
     public record BulkAccountActionRequest(
             @Size(min = 1, max = 500) List<String> userIds,
             @NotBlank @Pattern(regexp = "RESEND_ACTIVATION|SEND_PASSWORD_RESET|UNLOCK|LOCK|REQUIRE_PASSWORD_CHANGE") String action) {}
@@ -97,8 +103,8 @@ public final class IdentityDtos {
                                           long pendingActivation, long requiresPasswordChange,
                                           long missingEmail) {}
 
-    public record ProvisioningResult(UserDto user, String delivery,
-                                     boolean activationRequired, String temporaryPassword) {}
+    public record SessionView(String id, String device, String ipAddress,
+                              Instant createdAt, Instant expiresAt, boolean current) {}
 
     public record LinkChildRequest(
             @NotBlank String studentId,

@@ -18,12 +18,15 @@ import org.springframework.mock.web.MockMultipartFile;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
 import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import jakarta.servlet.http.Cookie;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 
 import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
@@ -81,46 +84,32 @@ class SecurityIntegrationTest {
     }
 
     @Test
-    void adminPasswordResetClearsPreviousLoginThrottle() throws Exception {
+    void adminCannotSetOrResetAUsersPasswordInClearText() throws Exception {
         String admin = login("admin", "admin@123");
         JsonNode created = body(mvc.perform(post("/users")
                 .header("Authorization", "Bearer " + admin)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
-                        {"username":"lock-reset-accountant","password":"Initial123@@",
-                         "fullName":"Kiểm thử khóa đăng nhập","role":"ACCOUNTANT"}
+                        {"username":"activation-only-accountant","password":"MustBeIgnored123@@",
+                         "fullName":"Kiểm thử kích hoạt an toàn","role":"ACCOUNTANT",
+                         "email":"activation-only@example.edu.vn"}
                         """))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.activationStatus").value("PENDING_EMAIL"))
                 .andReturn().getResponse().getContentAsString());
 
-        for (int i = 0; i < 5; i++) {
-            mvc.perform(post("/auth/login")
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content("""
-                                    {"username":"lock-reset-accountant","password":"WrongPassword@@"}
-                                    """))
-                    .andExpect(status().isUnauthorized());
-        }
         mvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"username":"lock-reset-accountant","password":"Initial123@@"}
+                                {"username":"activation-only-accountant","password":"MustBeIgnored123@@"}
                                 """))
-                .andExpect(status().isTooManyRequests());
+                .andExpect(status().isForbidden());
 
         mvc.perform(post("/users/{id}/reset-password", created.path("id").asText())
                         .header("Authorization", "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"newPassword\":\"ResetPassword123@@\"}"))
-                .andExpect(status().isOk());
-
-        mvc.perform(post("/auth/login")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"username":"lock-reset-accountant","password":"ResetPassword123@@"}
-                                """))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.user.passwordChangeRequired").value(true));
+                .andExpect(status().isNotFound());
     }
 
     @Test
@@ -176,9 +165,42 @@ class SecurityIntegrationTest {
     }
 
     @Test
+    void adminOperationsAndTwoFactorSecurityAreRoleScoped() throws Exception {
+        String teacher = login("gv.hoa", "teacher@123");
+        mvc.perform(get("/admin/operations/overview").header("Authorization", "Bearer " + teacher))
+                .andExpect(status().isForbidden());
+
+        String admin = login("admin", "admin@123");
+        mvc.perform(get("/admin/operations/overview").header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.components").isArray())
+                .andExpect(jsonPath("$.deliveries.failed").isNumber())
+                .andExpect(jsonPath("$.actionItems").isArray());
+
+        JsonNode setup = body(mvc.perform(post("/auth/two-factor/setup")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.secret").isString())
+                .andExpect(jsonPath("$.otpauthUri").value(org.hamcrest.Matchers.startsWith("otpauth://totp/")))
+                .andReturn().getResponse().getContentAsString());
+        String secret = setup.path("secret").asText();
+        String code = totp(secret, Instant.now().getEpochSecond() / 30);
+        mvc.perform(post("/auth/two-factor/enable").header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"code\":\"" + code + "\"}"))
+                .andExpect(status().isOk());
+        mvc.perform(post("/auth/login").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"admin\",\"password\":\"Admin123@@\"}"))
+                .andExpect(status().isPreconditionRequired())
+                .andExpect(jsonPath("$.code").value("TWO_FACTOR_REQUIRED"));
+        mvc.perform(post("/auth/two-factor/disable").header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"code\":\"" + code + "\"}"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
     void forgotPasswordUsesOneTimeResetTokenAndRevokesOldPassword() throws Exception {
         String admin = login("admin", "admin@123");
-        mvc.perform(post("/users")
+        JsonNode created = body(mvc.perform(post("/users")
                         .header("Authorization", "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -187,11 +209,23 @@ class SecurityIntegrationTest {
                                  "email":"reset.lifecycle@example.edu.vn"}
                                 """))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.activationStatus").value("ACTIVE"));
+                .andExpect(jsonPath("$.activationStatus").value("PENDING_EMAIL"))
+                .andReturn().getResponse().getContentAsString());
+
+        JsonNode activation = body(mvc.perform(post("/auth/forgot-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"account.reset.flow\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.devPurpose").value("ACTIVATION_LINK"))
+                .andReturn().getResponse().getContentAsString());
+        mvc.perform(post("/auth/activate").contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of("token", activation.path("devResetToken").asText(),
+                                "newPassword", "ActivatedPassword123@@"))))
+                .andExpect(status().isOk());
 
         JsonNode issue = body(mvc.perform(post("/auth/forgot-password")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"username\":\"account.reset.flow\"}"))
+                        .content("{\"email\":\"reset.lifecycle@example.edu.vn\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.devPurpose").value("RESET_LINK"))
                 .andReturn().getResponse().getContentAsString());
@@ -207,7 +241,7 @@ class SecurityIntegrationTest {
                                 "token", issue.path("devResetToken").asText(), "newPassword", "ReuseBlockedPassword123@@"))))
                 .andExpect(status().isBadRequest());
         mvc.perform(post("/auth/login").contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"username\":\"account.reset.flow\",\"password\":\"InitialPassword123@@\"}"))
+                        .content("{\"username\":\"account.reset.flow\",\"password\":\"ActivatedPassword123@@\"}"))
                 .andExpect(status().isUnauthorized());
         mvc.perform(post("/auth/login").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"username\":\"account.reset.flow\",\"password\":\"RecoveredPassword123@@\"}"))
@@ -1372,13 +1406,34 @@ class SecurityIntegrationTest {
     }
 
     @Test
+    @Transactional
     void adminFinanceWorkflowSupportsDraftEditingPartialCashAndReminders() throws Exception {
         String admin = login("ketoan", "Ketoan123@@");
+        mvc.perform(post("/fee-periods")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"code":"FIN-MISSING-YEAR","name":"Thiếu phạm vi năm học"}
+                                """))
+                .andExpect(status().isBadRequest());
+        jdbc.update("""
+                INSERT INTO academic_years (id, code, name, start_date, end_date, status)
+                VALUES ('ay-finance-closed', '2024-2025-FIN', 'Năm học đã đóng kiểm thử tài chính',
+                        DATE '2024-08-01', DATE '2025-05-31', 'CLOSED')
+                """);
+        mvc.perform(post("/fee-periods")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"code":"FIN-CLOSED-YEAR","name":"Không được ghi vào lịch sử",
+                                 "academicYearId":"ay-finance-closed"}
+                                """))
+                .andExpect(status().isConflict());
         JsonNode period = body(mvc.perform(post("/fee-periods")
                         .header("Authorization", "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"code":"FIN-UX-2026","name":"Khoản thu trải nghiệm mới",
+                                {"code":"FIN-UX-2026","name":"Khoản thu trải nghiệm mới","academicYearId":"ay-2026",
                                  "applyToGrades":"K10","dueDate":"2026-08-15"}
                                 """))
                 .andExpect(status().isOk())
@@ -1390,7 +1445,7 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"name":"Học phí trải nghiệm mới","applyToGrades":"K10",
+                                {"name":"Học phí trải nghiệm mới","academicYearId":"ay-2026","applyToGrades":"K10",
                                  "dueDate":"2026-08-20"}
                                 """))
                 .andExpect(status().isOk())
@@ -1410,14 +1465,26 @@ class SecurityIntegrationTest {
         mvc.perform(put("/fee-periods/{id}", periodId)
                         .header("Authorization", "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"Không được sửa\"}"))
+                        .content("{\"name\":\"Không được sửa\",\"academicYearId\":\"ay-2026\"}"))
                 .andExpect(status().isConflict());
+
+        mvc.perform(get("/fee-periods/{id}/invoice-preview", periodId)
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.academicYearId").value("ay-2026"))
+                .andExpect(jsonPath("$.eligibleStudents").isNumber())
+                .andExpect(jsonPath("$.invoicesToCreate").isNumber())
+                .andExpect(jsonPath("$.classes").isArray());
 
         JsonNode generated = body(mvc.perform(post("/fee-periods/{id}/generate-invoices", periodId)
                         .header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString());
         assertTrue(generated.size() > 0);
+        mvc.perform(post("/fee-periods/{id}/generate-invoices", periodId)
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(generated.size()));
         JsonNode invoice = generated.get(0);
         assertTrue(invoice.path("classId").isTextual());
         assertTrue(invoice.path("classCode").isTextual());
@@ -1548,31 +1615,27 @@ class SecurityIntegrationTest {
     }
 
     @Test
-    void temporaryPasswordMustBeChangedAndOldAccessTokenIsRevoked() throws Exception {
+    void provisioningNeverExposesOrAcceptsATemporaryPassword() throws Exception {
         String admin = login("admin", "admin@123");
-        mvc.perform(post("/users")
+        JsonNode created = body(mvc.perform(post("/users")
                         .header("Authorization", "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"username":"forced.change","password":"Temporary@123",
-                                 "fullName":"Tài khoản đổi mật khẩu","role":"PARENT"}
+                                {"username":"activation.parent","password":"Temporary@123",
+                                 "fullName":"Tài khoản kích hoạt","role":"PARENT",
+                                 "email":"activation.parent@example.edu.vn"}
                                 """))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.passwordChangeRequired").value(true));
+                .andExpect(jsonPath("$.passwordChangeRequired").value(true))
+                .andExpect(jsonPath("$.activationStatus").value("PENDING_EMAIL"))
+                .andExpect(jsonPath("$.password").doesNotExist())
+                .andExpect(jsonPath("$.temporaryPassword").doesNotExist())
+                .andReturn().getResponse().getContentAsString());
 
-        String temporaryToken = login("forced.change", "Temporary@123");
-        mvc.perform(get("/classes").header("Authorization", "Bearer " + temporaryToken))
+        mvc.perform(post("/auth/login").contentType(MediaType.APPLICATION_JSON)
+                        .content(json.writeValueAsString(Map.of("username", created.path("username").asText(),
+                                "password", "Temporary@123"))))
                 .andExpect(status().isForbidden());
-        mvc.perform(put("/me/password")
-                        .header("Authorization", "Bearer " + temporaryToken)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"currentPassword":"Temporary@123","newPassword":"Permanent@456"}
-                                """))
-                .andExpect(status().isOk());
-        mvc.perform(get("/me").header("Authorization", "Bearer " + temporaryToken))
-                .andExpect(status().isUnauthorized());
-        login("forced.change", "Permanent@456");
     }
 
     @Test
@@ -2413,10 +2476,25 @@ class SecurityIntegrationTest {
         String academicStaff = login("giaovu", "Giaovu123@@");
         String teacher = login("gv.hoa", "teacher@123");
 
+        jdbc.update("""
+                insert into teacher_load_registrations
+                (id, teacher_id, teacher_name, semester_id, max_weekly_periods,
+                 standard_weekly_periods, min_weekly_periods, max_daily_periods,
+                 max_consecutive_periods, status, created_at, updated_at)
+                values (?, ?, ?, ?, 20, 18, 16, 5, 4, 'APPROVED', current_timestamp, current_timestamp)
+                """, "load-security-teacher-1", "u-teacher-1", "Nguyễn Đức Minh", "sm-2026-2");
+        jdbc.update("""
+                insert into teacher_load_registrations
+                (id, teacher_id, teacher_name, semester_id, max_weekly_periods,
+                 standard_weekly_periods, min_weekly_periods, max_daily_periods,
+                 max_consecutive_periods, status, created_at, updated_at)
+                values (?, ?, ?, ?, 20, 18, 16, 5, 4, 'APPROVED', current_timestamp, current_timestamp)
+                """, "load-security-teacher-2", "u-teacher-2", "Lê Văn Minh", "sm-2026-2");
+
         String batchPayload = """
                 {"assignments":[{"classId":"c-10a2","weeklyPeriods":2},
                                   {"classId":"c-8a1","weeklyPeriods":3}],
-                 "subjectId":"sj-bio","teacherId":"u-teacher-2","semesterId":"sm-2026-2"}
+                 "subjectId":"sj-phys","teacherId":"u-teacher-2","semesterId":"sm-2026-2"}
                 """;
         mvc.perform(post("/teaching-assignments/batch")
                         .header("Authorization", "Bearer " + admin)
@@ -2449,7 +2527,7 @@ class SecurityIntegrationTest {
                         .value(org.hamcrest.Matchers.containsString("10A2")));
 
         mvc.perform(get("/teaching-assignments")
-                        .queryParam("subjectId", "sj-bio")
+                        .queryParam("subjectId", "sj-phys")
                         .queryParam("semesterId", "sm-2026-2")
                         .header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk())
@@ -2492,7 +2570,8 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + academicStaff)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(crossSpecialtyAssignment))
-                .andExpect(status().isOk());
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("chuyên môn")));
 
         String conflictingAssignment = """
                 {"classId":"c-8a1","subjectId":"sj-math","teacherId":"u-teacher-1",
@@ -2603,7 +2682,7 @@ class SecurityIntegrationTest {
                 .andExpect(status().isConflict());
 
         String missingAssignmentSlot = """
-                {"classId":"c-10a2","subjectId":"sj-phys","teacherId":"u-teacher-2",
+                {"classId":"c-10a2","subjectId":"sj-bio","teacherId":"u-teacher-2",
                  "roomCode":"LAB1","dayOfWeek":"WED","periodNo":3,
                  "startTime":"08:45","endTime":"09:30","semesterId":"sm-2026-2"}
                 """;
@@ -2822,6 +2901,29 @@ class SecurityIntegrationTest {
         return json.readTree(value);
     }
 
+    private String totp(String base32, long counter) throws Exception {
+        String alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+        ByteBuffer decoded = ByteBuffer.allocate(base32.length() * 5 / 8 + 1);
+        int buffer = 0, bits = 0;
+        for (char character : base32.toCharArray()) {
+            buffer = (buffer << 5) | alphabet.indexOf(character);
+            bits += 5;
+            if (bits >= 8) {
+                decoded.put((byte) ((buffer >> (bits - 8)) & 0xff));
+                bits -= 8;
+            }
+        }
+        byte[] key = new byte[decoded.position()];
+        decoded.flip(); decoded.get(key);
+        Mac mac = Mac.getInstance("HmacSHA1");
+        mac.init(new SecretKeySpec(key, "HmacSHA1"));
+        byte[] hash = mac.doFinal(ByteBuffer.allocate(8).putLong(counter).array());
+        int offset = hash[hash.length - 1] & 0x0f;
+        int value = ((hash[offset] & 0x7f) << 24) | ((hash[offset + 1] & 0xff) << 16)
+                | ((hash[offset + 2] & 0xff) << 8) | (hash[offset + 3] & 0xff);
+        return String.format("%06d", value % 1_000_000);
+    }
+
     private String upload(String token, String name, String contentType, String content) throws Exception {
         MockMultipartFile file = new MockMultipartFile("file", name, contentType, content.getBytes());
         String response = mvc.perform(multipart("/files").file(file)
@@ -2839,19 +2941,16 @@ class SecurityIntegrationTest {
             header.createCell(0).setCellValue("Tên đăng nhập");
             header.createCell(1).setCellValue("Họ tên");
             header.createCell(2).setCellValue("Vai trò");
-            header.createCell(3).setCellValue("Mật khẩu");
 
             var valid = sheet.createRow(1);
             valid.createCell(0).setCellValue("safe.import.student");
             valid.createCell(1).setCellValue("Học sinh Import An Toàn");
             valid.createCell(2).setCellValue("Học sinh");
-            valid.createCell(3).setCellValue("Safe@123456");
 
             var invalid = sheet.createRow(2);
             invalid.createCell(0).setCellValue("admin");
             invalid.createCell(1).setCellValue("Tài khoản trùng");
             invalid.createCell(2).setCellValue("Quản trị viên");
-            invalid.createCell(3).setCellValue("Safe@123456");
 
             workbook.write(output);
             return output.toByteArray();

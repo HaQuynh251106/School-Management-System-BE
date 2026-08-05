@@ -99,8 +99,8 @@ ON CONFLICT DO NOTHING;
 -- Chương trình 12 môn, đăng ký tải và phân công cho sáu lớp.
 WITH curriculum(subject_id,subject_name,weekly_periods,teacher_id) AS (VALUES
 ('sj-math','Toán',4,'u-teacher-1'),('sj-lit','Ngữ văn',4,'u-teacher-3'),('sj-eng','Tiếng Anh',3,'u-teacher-4'),
-('sj-phys','Vật lý',3,'u-teacher-2'),('sj-chem','Hóa học',2,'u-teacher-5'),('sj-bio','Sinh học',2,'u-teacher-6'),
-('sj-hist','Lịch sử',2,'u-teacher-7'),('sj-geo','Địa lý',2,'u-teacher-8'),('sj-it','Tin học',2,'u-teacher-9'),
+('sj-phys','Vật lý',2,'u-teacher-2'),('sj-chem','Hóa học',2,'u-teacher-5'),('sj-bio','Sinh học',2,'u-teacher-6'),
+('sj-hist','Lịch sử',1,'u-teacher-7'),('sj-geo','Địa lý',1,'u-teacher-8'),('sj-it','Tin học',2,'u-teacher-9'),
 ('sj-tech','Công nghệ',2,'u-teacher-10'),('sj-pe','Giáo dục thể chất',2,'u-teacher-11'),('sj-civic','Giáo dục KT&PL',2,'u-teacher-12'))
 INSERT INTO curriculum_requirements (id,semester_id,grade_level,subject_id,subject_name,weekly_periods,created_at,updated_at)
 SELECT 'cur-'||grade||'-'||subject_id,'sm-2026-1',grade,subject_id,subject_name,weekly_periods,now(),now()
@@ -113,8 +113,8 @@ FROM users u WHERE u.role='TEACHER' AND u.id IN ('u-teacher-1','u-teacher-2','u-
 ON CONFLICT DO NOTHING;
 
 WITH curriculum(subject_id,subject_name,weekly_periods,teacher_id) AS (VALUES
-('sj-math','Toán',4,'u-teacher-1'),('sj-lit','Ngữ văn',4,'u-teacher-3'),('sj-eng','Tiếng Anh',3,'u-teacher-4'),('sj-phys','Vật lý',3,'u-teacher-2'),
-('sj-chem','Hóa học',2,'u-teacher-5'),('sj-bio','Sinh học',2,'u-teacher-6'),('sj-hist','Lịch sử',2,'u-teacher-7'),('sj-geo','Địa lý',2,'u-teacher-8'),
+('sj-math','Toán',4,'u-teacher-1'),('sj-lit','Ngữ văn',4,'u-teacher-3'),('sj-eng','Tiếng Anh',3,'u-teacher-4'),('sj-phys','Vật lý',2,'u-teacher-2'),
+('sj-chem','Hóa học',2,'u-teacher-5'),('sj-bio','Sinh học',2,'u-teacher-6'),('sj-hist','Lịch sử',1,'u-teacher-7'),('sj-geo','Địa lý',1,'u-teacher-8'),
 ('sj-it','Tin học',2,'u-teacher-9'),('sj-tech','Công nghệ',2,'u-teacher-10'),('sj-pe','Giáo dục thể chất',2,'u-teacher-11'),('sj-civic','Giáo dục KT&PL',2,'u-teacher-12'))
 INSERT INTO teaching_assignments (id,class_id,class_code,semester_id,subject_id,subject_name,teacher_id,teacher_name,weekly_periods,assigned_at,assigned_by,updated_at,effective_from,effective_to,status,version)
 SELECT 'ta-'||c.code||'-'||x.subject_id,c.id,c.code,'sm-2026-1',x.subject_id,x.subject_name,x.teacher_id,u.full_name,x.weekly_periods,now(),'u-admin-1',now(),date '2026-08-17',date '2027-01-15','ACTIVE',0
@@ -122,14 +122,14 @@ FROM classes c CROSS JOIN curriculum x JOIN users u ON u.id=x.teacher_id
 WHERE c.id IN ('c-10a1','c-10a2','c-11a1','c-11a2','c-12a1','c-12a2')
 ON CONFLICT DO NOTHING;
 
--- Thời khóa biểu đầy đủ 30 tiết/lớp, sáu ngày, năm tiết/ngày.
+-- Thời khóa biểu 25 tiết/lớp, Thứ 2-Thứ 6, năm tiết liền mạch/ngày.
 DELETE FROM timetable_slots WHERE class_id IN ('c-10a1','c-10a2','c-11a1','c-11a2','c-12a1','c-12a2');
 WITH class_list AS (
   SELECT * FROM (VALUES ('c-10a1','10A1',0),('c-10a2','10A2',5),('c-11a1','11A1',10),('c-11a2','11A2',15),('c-12a1','12A1',20),('c-12a2','12A2',25)) v(class_id,class_code,offset_no)
 ), expanded AS (
   SELECT * FROM (VALUES
-  (1,'sj-math','Toán','u-teacher-1',4),(2,'sj-lit','Ngữ văn','u-teacher-3',4),(3,'sj-eng','Tiếng Anh','u-teacher-4',3),(4,'sj-phys','Vật lý','u-teacher-2',3),
-  (5,'sj-chem','Hóa học','u-teacher-5',2),(6,'sj-bio','Sinh học','u-teacher-6',2),(7,'sj-hist','Lịch sử','u-teacher-7',2),(8,'sj-geo','Địa lý','u-teacher-8',2),
+  (1,'sj-math','Toán','u-teacher-1',4),(2,'sj-lit','Ngữ văn','u-teacher-3',4),(3,'sj-eng','Tiếng Anh','u-teacher-4',3),(4,'sj-phys','Vật lý','u-teacher-2',2),
+  (5,'sj-chem','Hóa học','u-teacher-5',2),(6,'sj-bio','Sinh học','u-teacher-6',2),(7,'sj-hist','Lịch sử','u-teacher-7',1),(8,'sj-geo','Địa lý','u-teacher-8',1),
   (9,'sj-it','Tin học','u-teacher-9',2),(10,'sj-tech','Công nghệ','u-teacher-10',2),(11,'sj-pe','Giáo dục thể chất','u-teacher-11',2),(12,'sj-civic','Giáo dục KT&PL','u-teacher-12',2)) x(ord,subject_id,subject_name,teacher_id,cnt)
   CROSS JOIN LATERAL generate_series(1,x.cnt) g(n)
 ), numbered AS (
@@ -137,7 +137,7 @@ WITH class_list AS (
 )
 INSERT INTO timetable_slots (id,class_id,semester_id,subject_id,subject_name,teacher_id,teacher_name,room_code,day_of_week,period_no,start_time,end_time,locked)
 SELECT 'tt26-'||cl.class_code||'-'||(n.slot_no+1),cl.class_id,'sm-2026-1',n.subject_id,n.subject_name,n.teacher_id,u.full_name,c.room_code,
-       (ARRAY['MON','TUE','WED','THU','FRI','SAT'])[(((n.slot_no+cl.offset_no)/5)::int%6)+1],((n.slot_no+cl.offset_no)%5)+1,
+       (ARRAY['MON','TUE','WED','THU','FRI'])[(((n.slot_no+cl.offset_no)/5)::int%5)+1],((n.slot_no+cl.offset_no)%5)+1,
        CASE c.study_shift WHEN 'AFTERNOON' THEN (ARRAY['13:00','13:50','14:50','15:40','16:35'])[((n.slot_no+cl.offset_no)%5)+1] ELSE (ARRAY['07:00','07:50','08:50','09:40','10:35'])[((n.slot_no+cl.offset_no)%5)+1] END,
        CASE c.study_shift WHEN 'AFTERNOON' THEN (ARRAY['13:45','14:35','15:35','16:25','17:20'])[((n.slot_no+cl.offset_no)%5)+1] ELSE (ARRAY['07:45','08:35','09:35','10:25','11:20'])[((n.slot_no+cl.offset_no)%5)+1] END,false
 FROM class_list cl CROSS JOIN numbered n JOIN users u ON u.id=n.teacher_id JOIN classes c ON c.id=cl.class_id;

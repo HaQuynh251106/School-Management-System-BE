@@ -186,6 +186,20 @@ public class DashboardService {
         int activeParents = integer("select count(*) from users where role = 'PARENT' and status = 'ACTIVE'");
         int unassignedStudents = currentUnassignedStudents();
         int inactiveAccounts = integer("select count(*) from users where status <> 'ACTIVE'");
+        int pendingActivationAccounts = integer("select count(*) from users where coalesce(activation_status, 'ACTIVE') <> 'ACTIVE'");
+        int passwordChangeRequiredAccounts = integer("select count(*) from users where password_change_required = true");
+        int missingEmailAccounts = integer("select count(*) from users where email is null or trim(email) = ''");
+        int lockedAccounts = integer("select count(*) from users where status = 'LOCKED'");
+        int readyAccounts = integer("""
+                select count(*) from users
+                where status = 'ACTIVE' and coalesce(activation_status, 'ACTIVE') = 'ACTIVE'
+                  and password_change_required = false and email is not null and trim(email) <> ''
+                """);
+        int notReadyAccounts = integer("""
+                select count(*) from users
+                where status <> 'ACTIVE' or coalesce(activation_status, 'ACTIVE') <> 'ACTIVE'
+                   or password_change_required = true or email is null or trim(email) = ''
+                """);
         int classes = activeAcademicYearId.isBlank() ? 0 : integer("""
                 select count(*) from classes where academic_year_id=? and status='ACTIVE'
                 """, activeAcademicYearId);
@@ -258,8 +272,8 @@ public class DashboardService {
                 "Hoàn thiện lớp học trước khi phát hành thời khóa biểu.", "học sinh", "CRITICAL", "A1S");
         addWorkItem(workItems, classesWithoutHomeroom, "missing-homeroom", "Lớp chưa có giáo viên chủ nhiệm",
                 "Yêu cầu Giáo vụ hoàn tất phân công chủ nhiệm.", "lớp", "WARNING", "A8");
-        addWorkItem(workItems, inactiveAccounts, "inactive-accounts", "Tài khoản chưa hoạt động",
-                "Rà soát tài khoản bị khóa hoặc chưa sẵn sàng đăng nhập.", "tài khoản", "WARNING", "A1O");
+        addWorkItem(workItems, notReadyAccounts, "account-readiness", "Tài khoản chưa sẵn sàng",
+                "Rà soát kích hoạt, email, yêu cầu đổi mật khẩu và trạng thái khóa.", "tài khoản", "CRITICAL", "A1L");
         int missingPeriods = Math.max(0, requiredPeriods - scheduledPeriods);
         addWorkItem(workItems, missingPeriods, "timetable-incomplete", "Thời khóa biểu chưa hoàn tất",
                 "Theo dõi Giáo vụ xử lý các tiết chưa được xếp.", "tiết", "WARNING", "A8");
@@ -279,8 +293,8 @@ public class DashboardService {
         List<DashboardDtos.Metric> metrics = List.of(
                 metric("students", "Học sinh đang học", activeStudents, "NUMBER",
                         unassignedStudents == 0 ? "Tất cả đã được xếp lớp" : unassignedStudents + " học sinh chưa có lớp", unassignedStudents > 0 ? "orange" : "blue"),
-                metric("teachers", "Giáo viên hoạt động", activeTeachers, "NUMBER",
-                        classesWithoutHomeroom == 0 ? classes + " lớp đã có chủ nhiệm" : classesWithoutHomeroom + " lớp thiếu chủ nhiệm", classesWithoutHomeroom > 0 ? "orange" : "violet"),
+                metric("accounts", "Tài khoản sẵn sàng", readyAccounts, "NUMBER",
+                        notReadyAccounts == 0 ? "Toàn bộ tài khoản có thể sử dụng" : notReadyAccounts + " tài khoản cần xử lý", notReadyAccounts > 0 ? "orange" : "green"),
                 metric("attendance", "Có mặt hôm nay", attendance,
                         attendanceRecords == 0 ? "PERCENT_OR_EMPTY" : "PERCENT",
                         attendanceRecords == 0 ? "Chưa phát sinh dữ liệu điểm danh" : present + "/" + attendanceRecords + " lượt ghi nhận có mặt", "green"),
@@ -297,16 +311,23 @@ public class DashboardService {
                                 where c.academic_year_id=? and c.status='ACTIVE'
                                 group by c.grade_level order by c.grade_level
                                 """, activeAcademicYearId)),
-                chart("Trạng thái tài khoản", "Mức độ sẵn sàng truy cập hệ thống", "BAR", " tài khoản", rows("""
-                        select case status when 'ACTIVE' then 'Đang hoạt động'
-                               when 'LOCKED' then 'Đã khóa' when 'INACTIVE' then 'Ngừng hoạt động'
-                               else status end label, count(*) metric_value
-                        from users group by status order by metric_value desc
+                chart("Mức độ sẵn sàng tài khoản", "Mỗi tài khoản chỉ nằm trong một trạng thái ưu tiên", "BAR", " tài khoản", rows("""
+                        select case
+                                 when status = 'LOCKED' then 'Đã khóa'
+                                 when status <> 'ACTIVE' then 'Ngừng hoạt động'
+                                 when email is null or trim(email) = '' then 'Thiếu email'
+                                 when coalesce(activation_status, 'ACTIVE') <> 'ACTIVE' then 'Chờ kích hoạt'
+                                 when password_change_required = true then 'Cần đổi mật khẩu'
+                                 else 'Sẵn sàng'
+                               end label, count(*) metric_value
+                        from users group by label order by metric_value desc
                         """))
         );
         DashboardDtos.AdminOverview overview = new DashboardDtos.AdminOverview(
                 academicYear, academicYearStatus, semester, semesterStatus, Instant.now().toString(),
                 activeStudents, activeTeachers, activeParents, unassignedStudents, inactiveAccounts,
+                readyAccounts, pendingActivationAccounts, passwordChangeRequiredAccounts,
+                missingEmailAccounts, lockedAccounts,
                 classes, classesWithoutHomeroom, attendanceRecords, present, excused, unexcused, late,
                 scheduledPeriods, requiredPeriods, timetableCoverage, upcomingExams, draftExams,
                 totalReceivables, collectedAmount, outstandingAmount, overdueInvoices,

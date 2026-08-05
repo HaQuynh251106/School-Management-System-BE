@@ -58,7 +58,7 @@ class CriticalBusinessWorkflowE2ETest {
                         .header("Authorization", bearer(academicStaff))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"code":"E2E-DENIED","name":"Không được tạo","dueDate":"2026-10-01"}
+                                {"code":"E2E-DENIED","name":"Không được tạo","academicYearId":"ay-2026","dueDate":"2026-10-01"}
                                 """))
                 .andExpect(status().isForbidden());
 
@@ -189,7 +189,7 @@ class CriticalBusinessWorkflowE2ETest {
                         .header("Authorization", bearer(accountant))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"code":"E2E-FIN-2026","name":"Khoản thu E2E","applyToGrades":"K10",
+                                {"code":"E2E-FIN-2026","name":"Khoản thu E2E","academicYearId":"ay-2026","applyToGrades":"K10",
                                  "dueDate":"2026-10-01"}
                                 """), 200);
         String periodId = period.path("id").asText();

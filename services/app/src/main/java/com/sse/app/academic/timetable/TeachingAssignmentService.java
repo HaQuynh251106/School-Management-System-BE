@@ -34,15 +34,24 @@ public class TeachingAssignmentService {
     private final TimetableRepository slots;
     private final StructureService structure;
     private final UserService users;
+    private final TeacherLoadRegistrationRepository loadRegistrations;
+    private final CurriculumRequirementRepository curriculumRequirements;
+    private final TeacherWorkloadPolicyService workloadPolicies;
 
     public TeachingAssignmentService(TeachingAssignmentRepository assignments,
                                      TimetableRepository slots,
                                      StructureService structure,
-                                     UserService users) {
+                                     UserService users,
+                                     TeacherLoadRegistrationRepository loadRegistrations,
+                                     CurriculumRequirementRepository curriculumRequirements,
+                                     TeacherWorkloadPolicyService workloadPolicies) {
         this.assignments = assignments;
         this.slots = slots;
         this.structure = structure;
         this.users = users;
+        this.loadRegistrations = loadRegistrations;
+        this.curriculumRequirements = curriculumRequirements;
+        this.workloadPolicies = workloadPolicies;
     }
 
     public List<TeachingAssignmentResponse> list(String classId, String subjectId, String teacherId,
@@ -97,7 +106,7 @@ public class TeachingAssignmentService {
 
     @Transactional
     public TeachingAssignmentResponse create(SaveTeachingAssignmentRequest request, String actorId) {
-        AssignmentScope scope = validateScope(request);
+        AssignmentScope scope = validateScope(request, null);
         assignments.findByClassIdAndSubjectIdAndSemesterId(
                         request.classId(), request.subjectId(), request.semesterId())
                 .ifPresent(existing -> {
@@ -133,7 +142,8 @@ public class TeachingAssignmentService {
                 .map(item -> new SaveTeachingAssignmentRequest(item.classId(), request.subjectId(),
                         request.teacherId(), request.semesterId(), item.weeklyPeriods()))
                 .toList();
-        List<AssignmentScope> scopes = requests.stream().map(this::validateScope).toList();
+        List<AssignmentScope> scopes = requests.stream().map(item -> validateScope(item, null)).toList();
+        assertBatchCapacity(request.teacherId(), request.semesterId(), requests);
         List<String> conflicts = new ArrayList<>();
         for (int index = 0; index < requests.size(); index++) {
             SaveTeachingAssignmentRequest item = requests.get(index);
@@ -160,7 +170,7 @@ public class TeachingAssignmentService {
     @Transactional
     public TeachingAssignmentResponse update(String id, SaveTeachingAssignmentRequest request) {
         TeachingAssignment current = require(id);
-        AssignmentScope scope = validateScope(request);
+        AssignmentScope scope = validateScope(request, id);
         boolean scopeChanged = !Objects.equals(current.getClassId(), request.classId())
                 || !Objects.equals(current.getSubjectId(), request.subjectId())
                 || !Objects.equals(current.getTeacherId(), request.teacherId())
@@ -266,7 +276,7 @@ public class TeachingAssignmentService {
         return assignments.findById(id).orElseThrow(() -> ApiException.notFound("Phân công giảng dạy"));
     }
 
-    private AssignmentScope validateScope(SaveTeachingAssignmentRequest request) {
+    private AssignmentScope validateScope(SaveTeachingAssignmentRequest request, String ignoredAssignmentId) {
         SchoolClass schoolClass = structure.getClass(request.classId());
         structure.assertSemesterWritable(request.semesterId());
         Semester semester = structure.getSemester(request.semesterId());
@@ -279,7 +289,49 @@ public class TeachingAssignmentService {
         if (!"TEACHER".equals(teacher.getRole()) || !"ACTIVE".equals(teacher.getStatus())) {
             throw ApiException.badRequest("Chỉ có thể phân công giáo viên đang hoạt động");
         }
+        if (!teacherSupportsSubject(teacher, request.subjectId())) {
+            throw ApiException.badRequest("Giáo viên không đúng chuyên môn của môn " + subjectName);
+        }
+        TeacherLoadRegistration load = workloadPolicies.ensureRegistration(
+                teacher.getId(), teacher.getFullName(), semester.getId());
+        int currentLoad = assignments.findByTeacherId(teacher.getId()).stream()
+                .filter(item -> semester.getId().equals(item.getSemesterId()))
+                .filter(item -> ignoredAssignmentId == null || !ignoredAssignmentId.equals(item.getId()))
+                .mapToInt(TeachingAssignment::getWeeklyPeriods).sum();
+        if (currentLoad + request.weeklyPeriods() > load.getMaxWeeklyPeriods()) {
+            throw ApiException.conflict("Phân công làm giáo viên vượt tải tối đa: "
+                    + (currentLoad + request.weeklyPeriods()) + "/" + load.getMaxWeeklyPeriods() + " tiết/tuần");
+        }
+        curriculumRequirements.findBySemesterIdAndGradeLevelAndSubjectId(
+                        semester.getId(), normalizeGrade(schoolClass.getGradeLevel()), request.subjectId())
+                .ifPresent(requirement -> {
+                    if (requirement.getWeeklyPeriods() != request.weeklyPeriods()) {
+                        throw ApiException.badRequest("Số tiết phân công phải đúng định mức "
+                                + requirement.getWeeklyPeriods() + " tiết/tuần của " + subjectName);
+                    }
+                });
         return new AssignmentScope(schoolClass, semester, subjectName, teacher);
+    }
+
+    private void assertBatchCapacity(String teacherId, String semesterId,
+                                     List<SaveTeachingAssignmentRequest> requests) {
+        User teacher = users.getById(teacherId);
+        TeacherLoadRegistration load = workloadPolicies.ensureRegistration(
+                teacherId, teacher.getFullName(), semesterId);
+        int current = assignments.findByTeacherId(teacherId).stream()
+                .filter(item -> semesterId.equals(item.getSemesterId()))
+                .mapToInt(TeachingAssignment::getWeeklyPeriods).sum();
+        int added = requests.stream().mapToInt(SaveTeachingAssignmentRequest::weeklyPeriods).sum();
+        if (current + added > load.getMaxWeeklyPeriods()) {
+            throw ApiException.conflict("Đợt phân công làm giáo viên vượt tải tối đa: "
+                    + (current + added) + "/" + load.getMaxWeeklyPeriods() + " tiết/tuần");
+        }
+    }
+
+    private static String normalizeGrade(String value) {
+        if (value == null) return "";
+        String grade = value.trim().toUpperCase(java.util.Locale.ROOT).replace("KHỐI", "").trim();
+        return grade.startsWith("K") ? grade : "K" + grade;
     }
 
     public boolean teacherSupportsSubject(User teacher, String subjectId) {

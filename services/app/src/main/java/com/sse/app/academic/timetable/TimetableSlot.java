@@ -23,7 +23,7 @@ public class TimetableSlot {
     private String teacherId;
     private String teacherName;
     private String roomCode;
-    private String dayOfWeek;   // MON | TUE | WED | THU | FRI | SAT
+    private String dayOfWeek;   // MON | TUE | WED | THU | FRI
     private int periodNo;
     private String startTime;   // "07:00"
     private String endTime;     // "07:45"

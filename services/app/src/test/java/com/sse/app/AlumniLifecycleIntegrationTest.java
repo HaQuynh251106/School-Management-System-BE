@@ -44,7 +44,7 @@ class AlumniLifecycleIntegrationTest {
                 "class-12a1-test", "12A1-TEST", "Lớp 12A1 kiểm thử", "K12",
                 year.getId(), null, "MORNING", 45, null));
         var student = users.create(new CreateUserRequest(
-                "student-graduation-test", "hs.graduation.test", "Graduation123@@",
+                "student-graduation-test", "hs.graduation.test",
                 "Học sinh Tốt Nghiệp", "STUDENT", "graduate@test.edu.vn", "0901234567",
                 null, null, null, "HS-GRAD-001", schoolClass.getId(), schoolClass.getCode(),
                 LocalDate.of(2013, 3, 20), "FEMALE", "Hà Nội", "Kinh", "Việt Nam",

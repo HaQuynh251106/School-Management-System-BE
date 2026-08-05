@@ -81,16 +81,24 @@ public class NotificationService {
 
     public Notification notifyUser(String recipientId, String type, String priority, String title, String body,
                                    String refType, String refId) {
+        return notifyUser(recipientId, type, priority, title, body, refType, refId, null);
+    }
+
+    public Notification notifyUser(String recipientId, String type, String priority, String title, String body,
+                                   String refType, String refId, String actionUrl) {
         Notification notification = null;
         // Thông báo điều hành phải luôn được lưu trong hộp thư ứng dụng. Người dùng
         // vẫn có thể tắt email/push, nhưng không được bỏ lỡ thông báo từ nhà trường.
         if ("ANNOUNCEMENT".equalsIgnoreCase(refType) || "EXAM_PERIOD".equalsIgnoreCase(refType)
+                || "TIMETABLE_PUBLICATION".equalsIgnoreCase(refType)
                 || channelEnabled(recipientId, "IN_APP")) {
+            Instant now = Instant.now();
             notification = notifications.save(Notification.builder()
                     .id(Ids.gen("noti")).recipientId(recipientId).type(type)
                     .priority(priority)
                     .title(title).body(body).read(false)
-                    .refType(refType).refId(refId).createdAt(Instant.now()).build());
+                    .refType(refType).refId(refId).actionUrl(actionUrl)
+                    .sentAt(now).deliveredAt(now).createdAt(now).build());
             deliveryLogs.save(NotificationDeliveryLog.builder().id(Ids.gen("ndl"))
                     .notificationId(notification.getId()).recipientId(recipientId).channel("IN_APP")
                     .status("DELIVERED").attempts(1).createdAt(Instant.now()).build());
@@ -98,6 +106,19 @@ public class NotificationService {
         }
         dispatcher.dispatch(recipientId, notification == null ? null : notification.getId(), title, body);
         return notification;
+    }
+
+    /**
+     * Gửi đúng một thông báo nghiệp vụ cho một người nhận và một ngữ cảnh.
+     * Dùng cho outbox có thể chạy lại sau khi tiến trình bị gián đoạn.
+     */
+    @Transactional
+    public Notification notifyUserOnce(String recipientId, String type, String priority, String title, String body,
+                                       String refType, String refId, String actionUrl) {
+        Optional<Notification> existing = notifications
+                .findFirstByRecipientIdAndRefTypeAndRefIdOrderByCreatedAtDesc(recipientId, refType, refId);
+        return existing.orElseGet(() -> notifyUser(recipientId, type, priority, title, body,
+                refType, refId, actionUrl));
     }
 
     /**
@@ -220,6 +241,7 @@ public class NotificationService {
         Notification n = notifications.findById(id).orElseThrow(() -> ApiException.notFound("Thông báo"));
         if (!recipientId.equals(n.getRecipientId())) throw ApiException.forbidden("Không phải thông báo của bạn");
         n.setRead(true);
+        n.setReadAt(Instant.now());
         Notification saved = notifications.save(n);
         publishInboxChanged(recipientId, saved);
         return saved;
@@ -229,6 +251,7 @@ public class NotificationService {
         Notification n = notifications.findById(id).orElseThrow(() -> ApiException.notFound("Thông báo"));
         if (!recipientId.equals(n.getRecipientId())) throw ApiException.forbidden("Không phải thông báo của bạn");
         n.setRead(false);
+        n.setReadAt(null);
         Notification saved = notifications.save(n);
         publishInboxChanged(recipientId, saved);
         return saved;
@@ -236,7 +259,11 @@ public class NotificationService {
 
     public void markAllRead(String recipientId) {
         var list = notifications.findByRecipientIdAndReadIsFalseOrderByCreatedAtDesc(recipientId);
-        list.forEach(n -> n.setRead(true));
+        Instant now = Instant.now();
+        list.forEach(n -> {
+            n.setRead(true);
+            n.setReadAt(now);
+        });
         notifications.saveAll(list);
         realtime.publish(recipientId, "NOTIFICATION", Map.of("action", "READ_ALL"));
     }
@@ -320,6 +347,20 @@ public class NotificationService {
 
     public List<NotificationDeliveryLog> deliveryLogs() {
         return deliveryLogs.findTop200ByOrderByCreatedAtDesc();
+    }
+
+    public NotificationDeliveryLog retryDelivery(String id, String reason) {
+        dispatcher.retryFailedNow(id, reason);
+        return deliveryLogs.findById(id).orElseThrow(() -> ApiException.notFound("Lần gửi thông báo"));
+    }
+
+    /** Gửi lại các kênh email/push lỗi của một nhóm thông báo nghiệp vụ. */
+    public int retryFailedDeliveriesForNotifications(List<String> notificationIds, String reason) {
+        if (notificationIds == null || notificationIds.isEmpty()) return 0;
+        List<NotificationDeliveryLog> failed = deliveryLogs.findByNotificationIdInAndStatusIn(
+                notificationIds, List.of("FAILED", "SKIPPED"));
+        failed.forEach(log -> dispatcher.retryFailedNow(log.getId(), reason));
+        return failed.size();
     }
 
     /**

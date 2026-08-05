@@ -6,8 +6,6 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
-import java.time.Clock;
-import java.time.LocalDate;
 import java.util.Comparator;
 import java.util.List;
 
@@ -19,7 +17,6 @@ public class TeacherWorkspaceService {
     private final JdbcTemplate jdbc;
     private final StructureService structure;
     private final TeacherLoadRegistrationRepository registrations;
-    private final Clock clock;
 
     public WorkspaceContext context(String teacherId) {
         List<HomeroomClass> homeroomClasses = jdbc.query("""
@@ -63,47 +60,26 @@ public class TeacherWorkspaceService {
                 where ega.teacher_id=? and rr.status in ('PENDING','IN_REVIEW')
                 """, teacherId);
 
-        Semester semester = currentRegistrationSemester();
-        LoadRegistrationWindow window = semester == null ? null : loadRegistrationWindow(semester);
-        String registrationStatus = semester == null ? null : registrations
-                .findByTeacherIdAndSemesterId(teacherId, semester.getId())
-                .map(TeacherLoadRegistration::getStatus).orElse(null);
-        boolean registrationVisible = window != null && (window.open() || registrationStatus != null);
-        boolean registrationEditable = window != null && window.open()
-                && (registrationStatus == null || "DRAFT".equals(registrationStatus) || "REJECTED".equals(registrationStatus));
+        Semester semester = currentOperationalSemester();
+        TeacherLoadRegistration registration = semester == null ? null : registrations
+                .findByTeacherIdAndSemesterId(teacherId, semester.getId()).orElse(null);
+        String registrationStatus = registration == null ? null : registration.getStatus();
 
         return new WorkspaceContext(!homeroomClasses.isEmpty(), homeroomClasses, teachingClassCount,
                 invigilationDutyCount + gradingDutyCount + pendingReviewCount > 0,
                 invigilationDutyCount, gradingDutyCount, pendingReviewCount,
                 semester == null ? null : semester.getId(), semester == null ? null : semester.getName(),
-                registrationVisible, window != null && window.open(), registrationEditable,
-                window == null ? null : window.opensOn(), window == null ? null : window.closesOn(),
+                false, false, false, null, null,
                 registrationStatus);
     }
 
-    public LoadRegistrationWindow loadRegistrationWindow(String semesterId) {
-        return loadRegistrationWindow(structure.getSemester(semesterId));
-    }
-
-    private LoadRegistrationWindow loadRegistrationWindow(Semester semester) {
-        if (semester.getStartDate() == null) {
-            return new LoadRegistrationWindow(semester.getId(), semester.getName(), null, null, false);
-        }
-        LocalDate opensOn = semester.getStartDate().minusMonths(3);
-        LocalDate closesOn = semester.getStartDate().minusDays(7);
-        LocalDate today = LocalDate.now(clock);
-        boolean open = !"CLOSED".equals(semester.getStatus())
-                && !today.isBefore(opensOn) && !today.isAfter(closesOn);
-        return new LoadRegistrationWindow(semester.getId(), semester.getName(), opensOn, closesOn, open);
-    }
-
-    private Semester currentRegistrationSemester() {
+    private Semester currentOperationalSemester() {
         return structure.listYears().stream()
                 .filter(year -> "ACTIVE".equals(year.getStatus()) || "PLANNED".equals(year.getStatus()))
                 .flatMap(year -> structure.listSemesters(year.getId()).stream())
                 .filter(semester -> !"CLOSED".equals(semester.getStatus()))
                 .sorted(Comparator
-                        .comparing((Semester semester) -> !loadRegistrationWindow(semester).open())
+                        .comparing((Semester semester) -> !"ACTIVE".equals(semester.getStatus()))
                         .thenComparing(Semester::getStartDate, Comparator.nullsLast(Comparator.naturalOrder())))
                 .findFirst().orElse(null);
     }

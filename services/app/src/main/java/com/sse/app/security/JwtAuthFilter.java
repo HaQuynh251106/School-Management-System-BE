@@ -20,7 +20,7 @@ import java.io.IOException;
 import java.util.Map;
 
 /**
- * Xác thực JWT cho mọi request trừ /auth/** và preflight OPTIONS — khớp hành vi mock-server.
+ * Xác thực JWT cho mọi request trừ các endpoint auth công khai và preflight OPTIONS.
  * Hợp lệ → set {@link CurrentUserHolder}; thiếu/không hợp lệ → 401 {"error": "..."}.
  */
 @Component
@@ -40,7 +40,12 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String p = request.getRequestURI();
         return HttpMethod.OPTIONS.matches(request.getMethod())
-                || p.startsWith("/auth/")
+                || p.equals("/auth/login")
+                || p.equals("/auth/refresh")
+                || p.equals("/auth/logout")
+                || p.equals("/auth/forgot-password")
+                || p.equals("/auth/reset-password")
+                || p.equals("/auth/activate")
                 || p.equals("/")
                 || p.equals("/health")
                 || p.equals("/actuator/health")

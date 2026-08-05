@@ -1,11 +1,15 @@
 package com.sse.app.finance;
 
+import com.sse.app.academic.structure.AcademicYear;
+import com.sse.app.academic.structure.ClassEnrollment;
+import com.sse.app.academic.structure.Cohort;
 import com.sse.app.academic.structure.SchoolClass;
 import com.sse.app.academic.structure.StructureService;
 import com.sse.app.common.ApiException;
 import com.sse.app.common.Ids;
 import com.sse.app.common.PageResponse;
 import com.sse.app.common.Paging;
+import com.sse.app.common.SchedulerExecutionRegistry;
 import com.sse.app.finance.FinanceDtos.*;
 import com.sse.app.identity.UserDto;
 import com.sse.app.identity.UserService;
@@ -15,6 +19,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.domain.Page;
 import org.springframework.data.jpa.domain.Specification;
 
 import java.time.Instant;
@@ -37,13 +42,15 @@ public class FinanceService {
     private final NotificationService notifications;
     private final VietQrGateway vietQrGateway;
     private final String paymentMode;
+    private final SchedulerExecutionRegistry executions;
 
     public FinanceService(FeePeriodRepository periods, FeePeriodItemRepository periodItems,
                           InvoiceRepository invoices, InvoiceItemRepository invoiceItems,
                           PaymentRepository payments, PaymentGatewayTransactionRepository gatewayTransactions,
                           StructureService structure,
                           UserService users, NotificationService notifications, VietQrGateway vietQrGateway,
-                          @Value("${sse.payments.mode:disabled}") String paymentMode) {
+                          @Value("${sse.payments.mode:disabled}") String paymentMode,
+                          SchedulerExecutionRegistry executions) {
         this.periods = periods;
         this.periodItems = periodItems;
         this.invoices = invoices;
@@ -55,6 +62,7 @@ public class FinanceService {
         this.notifications = notifications;
         this.vietQrGateway = vietQrGateway;
         this.paymentMode = paymentMode;
+        this.executions = executions;
     }
 
     // ---------- Đợt thu ----------
@@ -68,28 +76,31 @@ public class FinanceService {
         return result;
     }
 
-    public List<FeePeriod> listPeriods() { return periods.findAll(); }
+    public List<FeePeriod> listPeriods(String academicYearId) {
+        String effectiveYearId = academicYearId == null || academicYearId.isBlank()
+                ? defaultAcademicYearId() : academicYearId;
+        structure.getYear(effectiveYearId);
+        return periods.findByAcademicYearIdOrderByCreatedAtDesc(effectiveYearId);
+    }
 
     public FeePeriod createPeriod(CreateFeePeriodRequest r) {
         String code = r.code().trim();
         if (periods.findByCode(code).isPresent()) throw ApiException.conflict("Mã đợt thu đã tồn tại");
-        if (r.academicYearId() != null && !r.academicYearId().isBlank()) structure.getYear(r.academicYearId());
+        AcademicYear year = requireWritableYear(r.academicYearId());
         return periods.save(FeePeriod.builder()
                 .id(r.id() == null || r.id().isBlank() ? Ids.gen("fp") : r.id())
                 .code(code).name(r.name()).status("DRAFT")
-                .academicYearId(r.academicYearId()).applyToGrades(r.applyToGrades())
+                .academicYearId(year.getId()).applyToGrades(normalizeGrades(r.applyToGrades()))
                 .dueDate(r.dueDate()).createdAt(Instant.now()).build());
     }
 
     public FeePeriod updatePeriod(String periodId, UpdateFeePeriodRequest r) {
         FeePeriod period = getPeriod(periodId);
         requireDraft(period);
-        if (r.academicYearId() != null && !r.academicYearId().isBlank()) {
-            structure.getYear(r.academicYearId());
-        }
+        AcademicYear year = requireWritableYear(r.academicYearId());
         period.setName(r.name().trim());
-        period.setAcademicYearId(blankToNull(r.academicYearId()));
-        period.setApplyToGrades(blankToNull(r.applyToGrades()));
+        period.setAcademicYearId(year.getId());
+        period.setApplyToGrades(normalizeGrades(r.applyToGrades()));
         period.setDueDate(r.dueDate());
         return periods.save(period);
     }
@@ -97,6 +108,7 @@ public class FinanceService {
     @Transactional
     public void deletePeriod(String periodId) {
         FeePeriod period = getPeriod(periodId);
+        requireWritableYear(period.getAcademicYearId());
         requireDraft(period);
         if (invoices.existsByFeePeriodId(periodId)) {
             throw ApiException.conflict("Không thể xóa đợt thu đã phát sinh hóa đơn");
@@ -109,6 +121,7 @@ public class FinanceService {
 
     public FeePeriodItem addItem(String periodId, AddFeeItemRequest r) {
         FeePeriod period = getPeriod(periodId);
+        requireWritableYear(period.getAcademicYearId());
         requireDraft(period);
         return periodItems.save(FeePeriodItem.builder()
                 .id(r.id() == null || r.id().isBlank() ? Ids.gen("fpi") : r.id())
@@ -117,6 +130,7 @@ public class FinanceService {
 
     public void deleteItem(String periodId, String itemId) {
         FeePeriod period = getPeriod(periodId);
+        requireWritableYear(period.getAcademicYearId());
         requireDraft(period);
         FeePeriodItem item = periodItems.findById(itemId)
                 .orElseThrow(() -> ApiException.notFound("Khoản thu"));
@@ -128,6 +142,7 @@ public class FinanceService {
 
     public FeePeriod open(String periodId) {
         FeePeriod p = getPeriod(periodId);
+        requireWritableYear(p.getAcademicYearId());
         if ("OPEN".equals(p.getStatus())) return p;
         if (!"DRAFT".equals(p.getStatus())) throw ApiException.conflict("Đợt thu không còn ở trạng thái nháp");
         if (periodItems.findByFeePeriodId(periodId).isEmpty()) {
@@ -162,70 +177,149 @@ public class FinanceService {
         return value == null || value.isBlank() ? null : value.trim();
     }
 
-    // ---------- Sinh hóa đơn (flowchart 2.8) ----------
-    @Transactional
-    public List<Invoice> generateInvoices(String periodId) {
-        FeePeriod p = getPeriod(periodId);
-        if (!"OPEN".equals(p.getStatus())) throw ApiException.badRequest("Đợt thu phải ở trạng thái OPEN");
+    private AcademicYear requireWritableYear(String academicYearId) {
+        if (academicYearId == null || academicYearId.isBlank()) {
+            throw ApiException.badRequest("Đợt thu bắt buộc phải thuộc một năm học");
+        }
+        AcademicYear year = structure.getYear(academicYearId.trim());
+        if ("CLOSED".equalsIgnoreCase(year.getStatus())) {
+            throw ApiException.conflict("Năm học " + year.getCode() + " đã đóng và chỉ được phép xem lịch sử");
+        }
+        return year;
+    }
 
-        Set<String> gradeFilter = parseGrades(p.getApplyToGrades());
+    private String normalizeGrades(String value) {
+        Set<String> grades = parseGrades(value);
+        return grades == null ? null : String.join(",", grades.stream().sorted().toList());
+    }
+
+    // ---------- Sinh hóa đơn (flowchart 2.8) ----------
+    public InvoiceGenerationPreview previewInvoiceGeneration(String periodId) {
+        FeePeriod period = getPeriod(periodId);
+        AcademicYear year = structure.getYear(period.getAcademicYearId());
+        Set<String> gradeFilter = parseGrades(period.getApplyToGrades());
         List<FeePeriodItem> items = itemsOf(periodId);
         if (items.isEmpty()) throw ApiException.badRequest("Đợt thu chưa có khoản thu");
-        List<Invoice> created = new ArrayList<>();
 
-        for (UserDto s : users.list("STUDENT", null, null)) {
-            String gl = structure.gradeLevelOf(s.classId());
-            if (gradeFilter != null && (gl == null || !gradeFilter.contains(gl))) continue;
+        List<EligibleStudent> eligible = eligibleStudents(period, items);
+        Map<String, List<EligibleStudent>> byClass = eligible.stream()
+                .collect(java.util.stream.Collectors.groupingBy(row -> row.schoolClass().getId(),
+                        LinkedHashMap::new, java.util.stream.Collectors.toList()));
+        List<InvoiceScopeClass> scopes = byClass.values().stream().map(rows -> {
+            EligibleStudent first = rows.get(0);
+            return new InvoiceScopeClass(first.schoolClass().getId(), first.schoolClass().getCode(),
+                    first.schoolClass().getGradeLevel(), rows.size(),
+                    (int) rows.stream().filter(EligibleStudent::invoiceExists).count(),
+                    (int) rows.stream().filter(row -> row.parentIds().isEmpty()).count(),
+                    first.totalAmount());
+        }).toList();
+        int existing = (int) eligible.stream().filter(EligibleStudent::invoiceExists).count();
+        int missingParents = (int) eligible.stream().filter(row -> row.parentIds().isEmpty()).count();
+        long expected = eligible.stream().filter(row -> !row.invoiceExists())
+                .mapToLong(EligibleStudent::totalAmount).sum();
+        List<String> warnings = new ArrayList<>();
+        if (missingParents > 0) warnings.add(missingParents
+                + " học sinh chưa liên kết phụ huynh; hóa đơn vẫn được tạo nhưng chưa thể gửi thông báo");
+        if (existing > 0) warnings.add(existing + " học sinh đã có hóa đơn và sẽ được giữ nguyên");
+        if (eligible.isEmpty()) warnings.add("Không có học sinh đang theo học phù hợp với phạm vi đợt thu");
+        return new InvoiceGenerationPreview(period.getId(), period.getCode(), period.getName(),
+                year.getId(), year.getCode(), gradeFilter == null ? List.of() : gradeFilter.stream().sorted().toList(),
+                scopes.size(), eligible.size(), existing, eligible.size() - existing, missingParents,
+                expected, scopes, warnings);
+    }
 
-            List<FeePeriodItem> applicable = items.stream()
-                    .filter(it -> it.getGradeLevel() == null || it.getGradeLevel().equals(gl))
-                    .toList();
-            if (applicable.isEmpty()) continue;
+    @Transactional
+    public List<Invoice> generateInvoices(String periodId) {
+        FeePeriod period = getPeriod(periodId);
+        requireWritableYear(period.getAcademicYearId());
+        if (!"OPEN".equals(period.getStatus())) throw ApiException.badRequest("Đợt thu phải ở trạng thái OPEN");
+        List<FeePeriodItem> items = itemsOf(periodId);
+        if (items.isEmpty()) throw ApiException.badRequest("Đợt thu chưa có khoản thu");
+        List<Invoice> synchronizedInvoices = new ArrayList<>();
 
-            Optional<Invoice> existing = invoices.findByFeePeriodIdAndStudentId(periodId, s.id());
+        for (EligibleStudent candidate : eligibleStudents(period, items)) {
+            UserDto student = candidate.student();
+            Optional<Invoice> existing = invoices.findByFeePeriodIdAndStudentId(periodId, student.id());
             if (existing.isPresent()) {
-                created.add(existing.get());
+                synchronizedInvoices.add(existing.get());
                 continue;
             }
-
-            long total = applicable.stream().mapToLong(FeePeriodItem::getAmount).sum();
-            List<String> parentIds = users.parentIdsOf(s.id()).stream().distinct().toList();
-            String parentId = parentIds.stream().findFirst().orElse(null);
-            SchoolClass schoolClass = s.classId() == null ? null : structure.getClass(s.classId());
-
-            Invoice inv = invoices.save(Invoice.builder()
-                    .id(Ids.gen("inv")).code("INV-" + p.getCode() + "-" + s.id())
-                    .studentId(s.id()).studentName(s.fullName()).parentId(parentId)
-                    .classId(s.classId())
-                    .classCode(schoolClass == null ? s.className() : schoolClass.getCode())
-                    .gradeLevel(schoolClass == null ? gl : schoolClass.getGradeLevel())
-                    .feePeriodId(periodId).totalAmount(total).paidAmount(0).status("PENDING")
-                    .issuedAt(Instant.now()).dueDate(p.getDueDate()).build());
-
-            for (FeePeriodItem it : applicable) {
+            SchoolClass schoolClass = candidate.schoolClass();
+            String parentId = candidate.parentIds().stream().findFirst().orElse(null);
+            Invoice invoice = invoices.save(Invoice.builder()
+                    .id(Ids.gen("inv")).code("INV-" + period.getCode() + "-" + student.id())
+                    .studentId(student.id()).studentName(student.fullName()).parentId(parentId)
+                    .classId(schoolClass.getId()).classCode(schoolClass.getCode())
+                    .gradeLevel(schoolClass.getGradeLevel()).feePeriodId(periodId)
+                    .totalAmount(candidate.totalAmount()).paidAmount(0).status("PENDING")
+                    .issuedAt(Instant.now()).dueDate(period.getDueDate()).build());
+            for (FeePeriodItem item : candidate.items()) {
                 invoiceItems.save(InvoiceItem.builder().id(Ids.gen("ii"))
-                        .invoiceId(inv.getId()).name(it.getName()).amount(it.getAmount()).build());
+                        .invoiceId(invoice.getId()).name(item.getName()).amount(item.getAmount()).build());
             }
-            created.add(inv);
-
-            if (!parentIds.isEmpty()) {
-                notifications.notifyUsers(parentIds, "FEE", "IMPORTANT", "Khoản thu mới",
-                        String.format("%s — %s: %,d₫. Hạn thanh toán: %s", s.fullName(), inv.getCode(), total,
-                                inv.getDueDate() == null ? "theo thông báo của nhà trường" : inv.getDueDate()),
-                        "INVOICE", inv.getId());
+            synchronizedInvoices.add(invoice);
+            if (!candidate.parentIds().isEmpty()) {
+                notifications.notifyUsers(candidate.parentIds(), "FEE", "IMPORTANT", "Khoản thu mới",
+                        String.format("%s — %s: %,d₫. Hạn thanh toán: %s", student.fullName(),
+                                invoice.getCode(), candidate.totalAmount(),
+                                invoice.getDueDate() == null ? "theo thông báo của nhà trường" : invoice.getDueDate()),
+                        "INVOICE", invoice.getId());
             }
         }
-        if (created.isEmpty()) {
+        if (synchronizedInvoices.isEmpty()) {
             throw ApiException.badRequest(
-                    "Không có học sinh phù hợp để phát hành. Hãy kiểm tra khối áp dụng, lớp học và dữ liệu học sinh");
+                    "Không có học sinh đang theo học phù hợp trong đúng năm học và khối áp dụng");
         }
-        return created;
+        return synchronizedInvoices;
     }
+
+    private List<EligibleStudent> eligibleStudents(FeePeriod period, List<FeePeriodItem> items) {
+        String academicYearId = period.getAcademicYearId();
+        if (academicYearId == null || academicYearId.isBlank()) {
+            throw ApiException.badRequest("Đợt thu chưa có năm học; vui lòng cập nhật trước khi phát hành");
+        }
+        structure.getYear(academicYearId);
+        Set<String> gradeFilter = parseGrades(period.getApplyToGrades());
+        List<EligibleStudent> result = new ArrayList<>();
+        for (ClassEnrollment enrollment : structure.activeEnrollments(academicYearId)) {
+            UserDto student = users.dtoById(enrollment.getStudentId());
+            if (!"STUDENT".equals(student.role()) || !"ACTIVE".equals(student.status())
+                    || "GRADUATED".equals(student.studentStatus())) continue;
+            SchoolClass schoolClass = structure.getClass(enrollment.getClassId());
+            if (!academicYearId.equals(schoolClass.getAcademicYearId())) continue;
+            if (enrollment.getCohortId() != null && !enrollment.getCohortId().isBlank()) {
+                Cohort cohort = structure.getCohort(enrollment.getCohortId());
+                if ("COMPLETED".equalsIgnoreCase(cohort.getStatus())) continue;
+            }
+            String gradeLevel = schoolClass.getGradeLevel();
+            if (gradeFilter != null && (gradeLevel == null || !gradeFilter.contains(gradeLevel))) continue;
+            List<FeePeriodItem> applicable = items.stream()
+                    .filter(item -> item.getGradeLevel() == null || item.getGradeLevel().isBlank()
+                            || item.getGradeLevel().equalsIgnoreCase(gradeLevel))
+                    .toList();
+            if (applicable.isEmpty()) continue;
+            result.add(new EligibleStudent(student, schoolClass, applicable,
+                    users.parentIdsOf(student.id()).stream().distinct().toList(),
+                    invoices.findByFeePeriodIdAndStudentId(period.getId(), student.id()).isPresent(),
+                    applicable.stream().mapToLong(FeePeriodItem::getAmount).sum()));
+        }
+        return result;
+    }
+
+    private record EligibleStudent(UserDto student, SchoolClass schoolClass,
+                                   List<FeePeriodItem> items, List<String> parentIds,
+                                   boolean invoiceExists, long totalAmount) {}
 
     private Set<String> parseGrades(String csv) {
         if (csv == null || csv.isBlank()) return null;
         Set<String> set = new HashSet<>();
-        for (String g : csv.split(",")) set.add(g.trim());
+        for (String grade : csv.split(",")) {
+            String normalized = grade.trim().toUpperCase(Locale.ROOT);
+            if (!Set.of("K10", "K11", "K12").contains(normalized)) {
+                throw ApiException.badRequest("Khối áp dụng không hợp lệ: " + grade.trim());
+            }
+            set.add(normalized);
+        }
         return set;
     }
 
@@ -431,16 +525,23 @@ public class FinanceService {
 
     /** Tổng hợp theo lớp; allowedClassIds = null nghĩa là Admin được xem toàn trường. */
     public List<FinanceClassSummary> classSummaries(String periodId, Set<String> allowedClassIds) {
-        return classSummaries(periodId, allowedClassIds, null, null, null);
+        return classSummaries(periodId, null, allowedClassIds, null, null, null);
     }
 
     public List<FinanceClassSummary> classSummaries(String periodId, Set<String> allowedClassIds,
                                                      String gradeLevel, String filterClassId, String status) {
-        Map<String, SchoolClass> classMap = structure.listClasses(null, null).stream()
+        return classSummaries(periodId, null, allowedClassIds, gradeLevel, filterClassId, status);
+    }
+
+    public List<FinanceClassSummary> classSummaries(String periodId, String academicYearId,
+                                                     Set<String> allowedClassIds, String gradeLevel,
+                                                     String filterClassId, String status) {
+        Set<String> scopedPeriodIds = periodIdsForScope(periodId, academicYearId);
+        Map<String, SchoolClass> classMap = structure.listClasses(academicYearId, null).stream()
                 .collect(java.util.stream.Collectors.toMap(SchoolClass::getId, item -> item));
         LocalDate today = LocalDate.now();
         return invoices.findAll().stream()
-                .filter(invoice -> periodId == null || periodId.isBlank() || periodId.equals(invoice.getFeePeriodId()))
+                .filter(invoice -> scopedPeriodIds == null || scopedPeriodIds.contains(invoice.getFeePeriodId()))
                 .filter(invoice -> invoice.getClassId() != null && !invoice.getClassId().isBlank())
                 .filter(invoice -> allowedClassIds == null || allowedClassIds.contains(invoice.getClassId()))
                 .collect(java.util.stream.Collectors.groupingBy(Invoice::getClassId))
@@ -668,6 +769,32 @@ public class FinanceService {
                 .toList();
     }
 
+    private Set<String> periodIdsForScope(String periodId, String academicYearId) {
+        if (periodId != null && !periodId.isBlank()) {
+            FeePeriod period = getPeriod(periodId);
+            if (academicYearId != null && !academicYearId.isBlank()
+                    && !academicYearId.equals(period.getAcademicYearId())) {
+                throw ApiException.badRequest("Đợt thu không thuộc năm học đã chọn");
+            }
+            return Set.of(periodId);
+        }
+        String effectiveYearId = academicYearId == null || academicYearId.isBlank()
+                ? defaultAcademicYearId() : academicYearId;
+        structure.getYear(effectiveYearId);
+        return periods.findByAcademicYearIdOrderByCreatedAtDesc(effectiveYearId).stream()
+                .map(FeePeriod::getId).collect(java.util.stream.Collectors.toSet());
+    }
+
+    private String defaultAcademicYearId() {
+        return structure.listYears().stream()
+                .filter(year -> "ACTIVE".equalsIgnoreCase(year.getStatus()))
+                .findFirst()
+                .or(() -> structure.listYears().stream()
+                        .filter(year -> !"CLOSED".equalsIgnoreCase(year.getStatus())).findFirst())
+                .orElseThrow(() -> ApiException.badRequest("Hệ thống chưa có năm học đang vận hành"))
+                .getId();
+    }
+
     public List<Map<String, Object>> vietQrReceiptDeliveries() {
         return gatewayTransactions
                 .findByGatewayAndStatusInOrderByCreatedAtDesc("VIETQR", List.of("SUCCESS"))
@@ -763,6 +890,10 @@ public class FinanceService {
     @Scheduled(fixedDelayString = "${sse.payments.reconciliation-interval-ms:3600000}")
     @Transactional
     public void expirePendingPayments() {
+        executions.run("vietqr-expiration", "Dọn giao dịch VietQR quá hạn", this::expirePendingPaymentsInternal);
+    }
+
+    private void expirePendingPaymentsInternal() {
         Instant cutoff = Instant.now().minus(30, ChronoUnit.MINUTES);
         for (PaymentGatewayTransaction transaction
                 : gatewayTransactions.findByStatusAndCreatedAtBefore("PENDING", cutoff)) {
@@ -782,6 +913,52 @@ public class FinanceService {
 
     public List<Payment> allPayments() {
         return payments.findAll(Sort.by(Sort.Direction.DESC, "createdAt"));
+    }
+
+    public PageResponse<PaymentView> paymentPage(String academicYearId, String periodId,
+                                                  String status, String query, int page, int size) {
+        Set<String> scopedPeriods = periodIdsForScope(periodId, academicYearId);
+        String normalizedQuery = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+        Map<String, Invoice> invoiceMap = invoices.findAll().stream()
+                .filter(invoice -> scopedPeriods == null || scopedPeriods.contains(invoice.getFeePeriodId()))
+                .collect(java.util.stream.Collectors.toMap(Invoice::getId, invoice -> invoice));
+
+        Specification<Payment> specification = Specification.where(null);
+        if (scopedPeriods != null) {
+            Set<String> invoiceIds = invoiceMap.keySet();
+            specification = specification.and((root, ignored, builder) -> invoiceIds.isEmpty()
+                    ? builder.disjunction() : root.get("invoiceId").in(invoiceIds));
+        }
+        if (status != null && !status.isBlank() && !"ALL".equalsIgnoreCase(status)) {
+            specification = specification.and((root, ignored, builder) ->
+                    builder.equal(builder.upper(root.get("status")), status.trim().toUpperCase(Locale.ROOT)));
+        }
+        if (!normalizedQuery.isBlank()) {
+            String pattern = "%" + normalizedQuery + "%";
+            Set<String> matchingInvoiceIds = invoiceMap.values().stream()
+                    .filter(invoice -> containsIgnoreCase(invoice.getCode(), normalizedQuery)
+                            || containsIgnoreCase(invoice.getStudentName(), normalizedQuery)
+                            || containsIgnoreCase(invoice.getClassCode(), normalizedQuery))
+                    .map(Invoice::getId).collect(java.util.stream.Collectors.toSet());
+            specification = specification.and((root, ignored, builder) -> builder.or(
+                    builder.like(builder.lower(root.get("txnRef")), pattern),
+                    matchingInvoiceIds.isEmpty() ? builder.disjunction()
+                            : root.get("invoiceId").in(matchingInvoiceIds)));
+        }
+        Page<PaymentView> result = payments.findAll(specification,
+                        Paging.request(page, size, Sort.by(Sort.Direction.DESC, "createdAt")))
+                .map(payment -> paymentView(payment, invoiceMap.get(payment.getInvoiceId())));
+        return PageResponse.from(result);
+    }
+
+    private PaymentView paymentView(Payment payment, Invoice suppliedInvoice) {
+        Invoice invoice = suppliedInvoice == null ? getInvoice(payment.getInvoiceId()) : suppliedInvoice;
+        FeePeriod period = getPeriod(invoice.getFeePeriodId());
+        return new PaymentView(payment.getId(), invoice.getId(), invoice.getCode(),
+                invoice.getStudentId(), invoice.getStudentName(), invoice.getClassId(), invoice.getClassCode(),
+                period.getId(), period.getName() == null || period.getName().isBlank() ? period.getCode() : period.getName(),
+                period.getAcademicYearId(), payment.getAmount(), payment.getMethod(), payment.getStatus(),
+                payment.getTxnRef(), payment.getCreatedAt(), payment.getPaidAt());
     }
 
     public Payment getPayment(String paymentId) {
@@ -832,8 +1009,12 @@ public class FinanceService {
     @Transactional
     public void seedDefaultPeriodAndInvoices() {
         if (!periods.findAll().isEmpty()) return;
+        AcademicYear activeYear = structure.listYears().stream()
+                .filter(year -> "ACTIVE".equalsIgnoreCase(year.getStatus())).findFirst()
+                .orElseThrow(() -> ApiException.badRequest("Cần có năm học đang hoạt động trước khi tạo dữ liệu tài chính"));
         FeePeriod p = periods.save(FeePeriod.builder()
                 .id("fp-hk1").code("HK1-2025").name("Học phí HK1 2025-2026").status("OPEN")
+                .academicYearId(activeYear.getId())
                 .dueDate(LocalDate.parse("2026-01-15")).createdAt(Instant.now()).build());
         periodItems.save(FeePeriodItem.builder().id("fpi-1").feePeriodId(p.getId())
                 .name("Học phí").amount(1500000).build());
@@ -843,8 +1024,15 @@ public class FinanceService {
     }
 
     /** A8: tổng hợp doanh thu (Invoice là package-private nên gói gọn trong service). */
-    public Map<String, Object> financeOverview() {
-        List<Invoice> all = invoices.findAll();
+    public Map<String, Object> financeOverview(String academicYearId) {
+        Set<String> scopedPeriodIds = periodIdsForScope(null, academicYearId);
+        String effectiveYearId = academicYearId == null || academicYearId.isBlank()
+                ? defaultAcademicYearId() : academicYearId;
+        List<FeePeriod> scopedPeriods = periods.findByAcademicYearIdOrderByCreatedAtDesc(effectiveYearId);
+        List<Invoice> all = invoices.findAll().stream()
+                .filter(invoice -> scopedPeriodIds == null || scopedPeriodIds.contains(invoice.getFeePeriodId()))
+                .toList();
+        Set<String> scopedInvoiceIds = all.stream().map(Invoice::getId).collect(java.util.stream.Collectors.toSet());
         LocalDate today = LocalDate.now();
         LocalDate dueSoonLimit = today.plusDays(7);
         Instant monthStart = today.withDayOfMonth(1)
@@ -858,11 +1046,12 @@ public class FinanceService {
                 && i.getDueDate() != null && !i.getDueDate().isBefore(today)
                 && !i.getDueDate().isAfter(dueSoonLimit)).count();
         long collectedThisMonth = payments.findAll().stream()
+                .filter(payment -> scopedPeriodIds == null || scopedInvoiceIds.contains(payment.getInvoiceId()))
                 .filter(p -> "SUCCESS".equals(p.getStatus()) && p.getPaidAt() != null
                         && !p.getPaidAt().isBefore(monthStart))
                 .mapToLong(Payment::getAmount).sum();
 
-        List<Map<String, Object>> periodSummaries = periods.findAll().stream()
+        List<Map<String, Object>> periodSummaries = scopedPeriods.stream()
                 .map(period -> {
                     List<Invoice> periodInvoices = invoices.findByFeePeriodId(period.getId());
                     long periodTotal = periodInvoices.stream().mapToLong(Invoice::getTotalAmount).sum();
@@ -871,6 +1060,7 @@ public class FinanceService {
                     summary.put("periodId", period.getId());
                     summary.put("code", period.getCode());
                     summary.put("name", period.getName());
+                    summary.put("academicYearId", period.getAcademicYearId());
                     summary.put("status", period.getStatus());
                     summary.put("invoiceCount", periodInvoices.size());
                     summary.put("totalAmount", periodTotal);
@@ -893,8 +1083,13 @@ public class FinanceService {
         result.put("outstanding", total - paid);
         result.put("collectedThisMonth", collectedThisMonth);
         result.put("collectionRate", total == 0 ? 0d : paid * 100d / total);
+        result.put("academicYearId", academicYearId);
         result.put("periods", periodSummaries);
         return result;
+    }
+
+    public Map<String, Object> financeOverview() {
+        return financeOverview(null);
     }
 
     public Map<String, Object> revenueReport() {

@@ -53,6 +53,9 @@ sse:
     access-ttl-seconds: 900
     refresh-ttl-seconds: 604800
     cookie-secure: ${SSE_COOKIE_SECURE:false}
+  security:
+    # Khóa riêng để mã hóa bí mật TOTP. Nếu bỏ trống, hệ thống dùng khóa JWT hiện tại.
+    two-factor-key: ${SSE_TWO_FACTOR_KEY:}
   seed:
     enabled: ${SSE_SEED_ENABLED:false}
   cors:

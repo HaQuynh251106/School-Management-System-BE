@@ -47,6 +47,7 @@ interface SubjectRoomRequirementRepository extends JpaRepository<SubjectRoomRequ
 
 interface ClassEnrollmentRepository extends JpaRepository<ClassEnrollment, String> {
     List<ClassEnrollment> findByStudentIdAndStatus(String studentId, String status);
+    List<ClassEnrollment> findByAcademicYearIdAndStatus(String academicYearId, String status);
     Optional<ClassEnrollment> findByAcademicYearIdAndClassIdAndStudentId(
             String academicYearId, String classId, String studentId);
 }

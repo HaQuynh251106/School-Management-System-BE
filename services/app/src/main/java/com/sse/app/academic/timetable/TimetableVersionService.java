@@ -3,8 +3,13 @@ package com.sse.app.academic.timetable;
 import com.sse.app.academic.structure.StructureService;
 import com.sse.app.academic.timetable.TimetableDtos.TimetableVersion;
 import com.sse.app.academic.timetable.TimetableDtos.TimetableVersionSlot;
+import com.sse.app.academic.timetable.TimetableDtos.TimetablePublishResult;
+import com.sse.app.academic.timetable.TimetableDtos.TimetablePublicationStatus;
+import com.sse.app.audit.AuditService;
 import com.sse.app.common.ApiException;
 import com.sse.app.common.Ids;
+import com.sse.app.identity.User;
+import com.sse.app.identity.UserService;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -13,17 +18,31 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /** Vòng đời phiên bản TKB: snapshot nháp, kiểm tra, phát hành và khôi phục. */
 @Service
 public class TimetableVersionService {
     private final JdbcTemplate jdbc;
     private final StructureService structure;
+    private final TimetableBusinessRuleService businessRules;
+    private final TimetablePublicationNotificationService publicationNotifications;
+    private final UserService users;
+    private final AuditService audit;
 
-    public TimetableVersionService(JdbcTemplate jdbc, StructureService structure) {
+    public TimetableVersionService(JdbcTemplate jdbc, StructureService structure,
+                                   TimetableBusinessRuleService businessRules,
+                                   TimetablePublicationNotificationService publicationNotifications,
+                                   UserService users, AuditService audit) {
         this.jdbc = jdbc;
         this.structure = structure;
+        this.businessRules = businessRules;
+        this.publicationNotifications = publicationNotifications;
+        this.users = users;
+        this.audit = audit;
     }
 
     public List<TimetableVersion> list(String semesterId) {
@@ -105,17 +124,23 @@ public class TimetableVersionService {
 
     /** Phát hành nguyên tử: chỉ thay lịch trực tiếp khi toàn bộ phiên bản hợp lệ. */
     @Transactional
-    public TimetableVersion publish(String planId, String actorId) {
+    public TimetablePublishResult publish(String planId, String versionName, String reason, String actorId) {
         TimetableVersion plan = require(planId);
+        if ("PUBLISHED".equals(plan.status())) {
+            return new TimetablePublishResult(plan, publicationNotifications.requireStatusByPlan(planId));
+        }
         if (!List.of("DRAFT", "VALIDATED").contains(plan.status())) {
             throw ApiException.conflict("Chỉ có thể phát hành phiên bản nháp hoặc đã kiểm tra");
         }
         structure.assertSemesterWritable(plan.semesterId());
-        Validation validation = validate(planId);
+        Validation validation = validateForPublication(planId);
         if (!validation.valid()) throw ApiException.conflict(validation.summary());
         List<TimetableVersionSlot> versionSlots = slots(planId);
         if (versionSlots.isEmpty()) throw ApiException.badRequest("Phiên bản không có tiết học");
 
+        String cleanedVersionName = cleanName(versionName);
+        jdbc.update("update timetable_plans set name=?,updated_at=? where id=?",
+                cleanedVersionName, sqlTime(Instant.now()), planId);
         jdbc.update("update timetable_plans set status='SUPERSEDED',updated_at=? where semester_id=? and status='PUBLISHED'",
                 sqlTime(Instant.now()), plan.semesterId());
         jdbc.update("delete from timetable_slots where semester_id=?", plan.semesterId());
@@ -134,7 +159,16 @@ public class TimetableVersionService {
                 update timetable_plans set status='PUBLISHED',quality_score=100,conflict_summary=null,
                     published_by=?,published_at=?,updated_at=? where id=?
                 """, actorId, sqlTime(now), sqlTime(now), planId);
-        return require(planId);
+        TimetablePublicationStatus publication = publicationNotifications.enqueue(planId, reason, actorId);
+        User actor = users.getById(actorId);
+        audit.record(actorId, actor.getFullName(), actor.getRole(),
+                publication.eventType().equals("FIRST_PUBLICATION")
+                        ? "TIMETABLE_PUBLISHED" : "TIMETABLE_REPLACED",
+                "academic", "timetable_plan", planId,
+                "Phiên bản " + cleanedVersionName + "; học kỳ " + plan.semesterId()
+                        + "; phiên bản cũ " + (publication.previousPlanId() == null ? "không có" : publication.previousPlanId())
+                        + "; lý do: " + reason.trim() + "; " + publication.totalRecipientCount() + " lượt nhận");
+        return new TimetablePublishResult(require(planId), publication);
     }
 
     @Transactional
@@ -148,12 +182,101 @@ public class TimetableVersionService {
 
     private Validation validate(String planId) {
         TimetableVersion plan = require(planId);
-        TimetableRulePolicy.Validation validation = TimetableRulePolicy.validate(slots(planId).stream()
+        TimetableRulePolicy.Validation validation = businessRules.validate(slots(planId).stream()
                 .map(item -> new TimetableRulePolicy.SlotView(item.id(), item.classId(), item.subjectId(),
                         item.teacherId(), item.roomCode(), item.dayOfWeek(), item.periodNo(),
                         item.startTime(), item.endTime(), plan.semesterId()))
                 .toList());
         return new Validation(validation.valid(), validation.summary());
+    }
+
+    private Validation validateForPublication(String planId) {
+        Validation base = validate(planId);
+        if (!base.valid()) return base;
+        TimetableVersion plan = require(planId);
+        List<TimetableVersionSlot> planSlots = slots(planId);
+        List<String> messages = new ArrayList<>();
+        Set<String> classIds = new HashSet<>();
+        planSlots.forEach(slot -> classIds.add(slot.classId()));
+        for (String classId : classIds) {
+            int expected = count("""
+                    select coalesce(sum(r.weekly_periods),0)
+                    from curriculum_requirements r join classes c on c.grade_level=r.grade_level
+                    where r.semester_id=? and c.id=?
+                    """, plan.semesterId(), classId);
+            if (expected == 0) continue; // Dữ liệu lịch sử trước khi có định mức chương trình.
+            String classCode = planSlots.stream().filter(slot -> classId.equals(slot.classId()))
+                    .map(TimetableVersionSlot::classCode).findFirst().orElse(classId);
+            if (expected != TimetableRulePolicy.PERIODS_PER_WEEK) {
+                messages.add("Lớp " + classCode + " có định mức " + expected
+                        + " tiết/tuần; yêu cầu đúng 25 tiết");
+                continue;
+            }
+            List<TimetableVersionSlot> classSlots = planSlots.stream()
+                    .filter(slot -> classId.equals(slot.classId())).toList();
+            if (classSlots.size() != TimetableRulePolicy.PERIODS_PER_WEEK) {
+                messages.add("Lớp " + classCode + " chưa đủ 25 tiết/tuần");
+                continue;
+            }
+            for (String day : TimetableRulePolicy.OPERATING_DAYS) {
+                Set<Integer> periods = new HashSet<>(classSlots.stream()
+                        .filter(slot -> day.equals(slot.dayOfWeek()))
+                        .map(TimetableVersionSlot::periodNo).toList());
+                if (periods.size() != TimetableRulePolicy.PERIODS_PER_DAY
+                        || !periods.containsAll(List.of(1, 2, 3, 4, 5))) {
+                    messages.add("Lớp " + classCode + " chưa đủ 5 tiết liền mạch trong ngày " + day);
+                }
+            }
+        }
+        return new Validation(messages.isEmpty(), messages.isEmpty() ? null
+                : "Thời khóa biểu chưa đủ điều kiện phát hành: " + String.join("; ", messages));
+    }
+
+    /** Lưu phương án tự động trực tiếp vào vùng bản nháp, không thay đổi lịch người dùng đang xem. */
+    @Transactional
+    public TimetableVersion draftFromSlots(String semesterId, String name,
+                                           List<TimetableSlot> proposedSlots, String actorId) {
+        return draftFromSlots(semesterId, name, proposedSlots, actorId, 100, "BALANCED");
+    }
+
+    @Transactional
+    public TimetableVersion draftFromSlots(String semesterId, String name,
+                                           List<TimetableSlot> proposedSlots, String actorId,
+                                           int qualityScore, String strategy) {
+        structure.assertSemesterWritable(semesterId);
+        if (proposedSlots.isEmpty()) throw ApiException.badRequest("Phương án không có tiết học");
+        TimetableRulePolicy.Validation validation = businessRules.validate(proposedSlots.stream()
+                .map(item -> new TimetableRulePolicy.SlotView(item.getId(), item.getClassId(), item.getSubjectId(),
+                        item.getTeacherId(), item.getRoomCode(), item.getDayOfWeek(), item.getPeriodNo(),
+                        item.getStartTime(), item.getEndTime(), semesterId)).toList());
+        if (!validation.valid()) throw ApiException.conflict(validation.summary());
+        int versionNo = count("select coalesce(max(version_no),0)+1 from timetable_plans where semester_id=?", semesterId);
+        String id = Ids.gen("ttp");
+        Instant now = Instant.now();
+        jdbc.update("""
+                insert into timetable_plans
+                (id,semester_id,name,status,version_no,option_no,quality_score,progress_percent,
+                 total_assignments,total_periods,scheduled_periods,unscheduled_periods,conflict_summary,
+                 configuration_json,created_by,created_at,updated_at)
+                values (?,?,?,'VALIDATED',?,1,?,100,0,?,?,0,null,?,?,?,?)
+                """, id, semesterId, cleanName(name) + " · v" + versionNo, versionNo,
+                Math.max(0, Math.min(100, qualityScore)), proposedSlots.size(), proposedSlots.size(),
+                "{\"strategy\":\"" + safeStrategy(strategy) + "\"}",
+                actorId, sqlTime(now), sqlTime(now));
+        for (TimetableSlot slot : proposedSlots) {
+            var schoolClass = structure.getClass(slot.getClassId());
+            insertPlanSlot(id, new TimetableVersionSlot(slot.getId(), id, slot.getClassId(),
+                    schoolClass.getCode(), schoolClass.getStudyShift(), slot.getSubjectId(), slot.getSubjectName(),
+                    slot.getTeacherId(), slot.getTeacherName(), slot.getRoomCode(), slot.getDayOfWeek(),
+                    slot.getPeriodNo(), slot.getStartTime(), slot.getEndTime(), slot.isLocked()));
+        }
+        return require(id);
+    }
+
+    private String safeStrategy(String value) {
+        String normalized = value == null ? "BALANCED" : value.trim().toUpperCase();
+        return List.of("BALANCED", "TEACHER_COMFORT", "EARLY_WEEK").contains(normalized)
+                ? normalized : "BALANCED";
     }
 
     private TimetableVersion require(String id) {

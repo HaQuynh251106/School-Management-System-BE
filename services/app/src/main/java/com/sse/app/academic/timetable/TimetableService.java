@@ -20,13 +20,16 @@ public class TimetableService {
     private final StructureService structure;
     private final UserService users;
     private final TeachingAssignmentService teachingAssignments;
+    private final TimetableBusinessRuleService businessRules;
 
     public TimetableService(TimetableRepository slots, StructureService structure, UserService users,
-                            TeachingAssignmentService teachingAssignments) {
+                            TeachingAssignmentService teachingAssignments,
+                            TimetableBusinessRuleService businessRules) {
         this.slots = slots;
         this.structure = structure;
         this.users = users;
         this.teachingAssignments = teachingAssignments;
+        this.businessRules = businessRules;
     }
 
     public List<TimetableSlot> list(String classId, String teacherId, String semesterId, String dayOfWeek) {
@@ -113,7 +116,7 @@ public class TimetableService {
     }
 
     private void checkConflicts(CreateSlotRequest request, String ignoredSlotId) {
-        TimetableRulePolicy.assertCanAdd(view(request), slots.findBySemesterId(request.semesterId()).stream()
+        businessRules.assertCanAdd(view(request), slots.findBySemesterId(request.semesterId()).stream()
                 .map(this::view).toList(), ignoredSlotId);
     }
 
@@ -144,7 +147,7 @@ public class TimetableService {
 
     /** Chèn dữ liệu mẫu và tự tạo phân công tương ứng. */
     public void seedSlots(List<TimetableSlot> list) {
-        TimetableRulePolicy.Validation validation = TimetableRulePolicy.validate(list.stream().map(this::view).toList());
+        TimetableRulePolicy.Validation validation = businessRules.validate(list.stream().map(this::view).toList());
         if (!validation.valid()) throw ApiException.conflict(validation.summary());
         slots.saveAll(list);
         teachingAssignments.seedFromSlots(list);

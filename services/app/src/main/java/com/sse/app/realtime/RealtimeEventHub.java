@@ -76,4 +76,12 @@ public class RealtimeEventHub {
     int activeConnections(String userId) {
         return clients.getOrDefault(userId, Set.of()).size();
     }
+
+    public int activeConnectionCount() {
+        return clients.values().stream().mapToInt(Set::size).sum();
+    }
+
+    public int connectedUserCount() {
+        return clients.size();
+    }
 }

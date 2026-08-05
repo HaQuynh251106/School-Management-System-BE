@@ -36,9 +36,9 @@ public class FinanceController {
     }
 
     @GetMapping("/fee-periods")
-    public List<FeePeriod> periods() {
+    public List<FeePeriod> periods(@RequestParam(required = false) String academicYearId) {
         CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT", "TEACHER");
-        return finance.listPeriods();
+        return finance.listPeriods(academicYearId);
     }
 
     @PostMapping("/fee-periods")
@@ -96,6 +96,12 @@ public class FinanceController {
         return finance.generateInvoices(id);
     }
 
+    @GetMapping("/fee-periods/{id}/invoice-preview")
+    public InvoiceGenerationPreview previewInvoices(@PathVariable String id) {
+        CurrentUserHolder.requireRole("ACCOUNTANT");
+        return finance.previewInvoiceGeneration(id);
+    }
+
     // ----- Hóa đơn -----
     @GetMapping("/invoices")
     public List<Invoice> invoices(@RequestParam(required = false) String studentId,
@@ -143,16 +149,17 @@ public class FinanceController {
 
     @GetMapping("/finance/classes")
     public List<FinanceClassSummary> classSummaries(@RequestParam(required = false) String periodId,
+                                                     @RequestParam(required = false) String academicYearId,
                                                      @RequestParam(required = false) String gradeLevel,
                                                      @RequestParam(required = false) String classId,
                                                      @RequestParam(required = false) String status) {
         CurrentUser me = CurrentUserHolder.require();
         CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT", "TEACHER");
-        if (me.canManageFinance()) return finance.classSummaries(periodId, null, gradeLevel, classId, status);
+        if (me.canManageFinance()) return finance.classSummaries(periodId, academicYearId, null, gradeLevel, classId, status);
         var classIds = structure.classesOfHomeroom(me.id()).stream()
                 .map(com.sse.app.academic.structure.SchoolClass::getId)
                 .collect(java.util.stream.Collectors.toSet());
-        return finance.classSummaries(periodId, classIds, gradeLevel, classId, status);
+        return finance.classSummaries(periodId, academicYearId, classIds, gradeLevel, classId, status);
     }
 
     @PostMapping("/finance/classes/{classId}/remind-homeroom")
@@ -192,9 +199,9 @@ public class FinanceController {
     }
 
     @GetMapping("/finance/overview")
-    public Map<String, Object> overview() {
+    public Map<String, Object> overview(@RequestParam(required = false) String academicYearId) {
         CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
-        return finance.financeOverview();
+        return finance.financeOverview(academicYearId);
     }
 
     @GetMapping("/invoices/{id}")
@@ -308,6 +315,17 @@ public class FinanceController {
             throw ApiException.forbidden("Không phải hóa đơn của bạn");
         }
         return finance.paymentsOf(invoiceId);
+    }
+
+    @GetMapping("/payments/page")
+    public PageResponse<PaymentView> paymentPage(@RequestParam(required = false) String academicYearId,
+                                                  @RequestParam(required = false) String periodId,
+                                                  @RequestParam(required = false) String status,
+                                                  @RequestParam(required = false, name = "q") String query,
+                                                  @RequestParam(defaultValue = "0") int page,
+                                                  @RequestParam(defaultValue = "20") int size) {
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
+        return finance.paymentPage(academicYearId, periodId, status, query, page, size);
     }
 
     private void assertHomeroomClass(String teacherId, String classId) {

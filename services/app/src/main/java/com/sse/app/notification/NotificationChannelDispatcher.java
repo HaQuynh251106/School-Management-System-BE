@@ -1,6 +1,7 @@
 package com.sse.app.notification;
 
 import com.sse.app.common.Ids;
+import com.sse.app.common.SchedulerExecutionRegistry;
 import com.sse.app.identity.User;
 import com.sse.app.identity.UserService;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -29,6 +30,7 @@ class NotificationChannelDispatcher {
     private final Executor executor;
     private final boolean mailEnabled;
     private final String mailFrom;
+    private final SchedulerExecutionRegistry executions;
 
     NotificationChannelDispatcher(NotificationPreferenceRepository preferences,
                                   NotificationDeliveryLogRepository logs,
@@ -36,7 +38,8 @@ class NotificationChannelDispatcher {
                                   JavaMailSender mailSender, FirebasePushSender pushSender,
                                   @Qualifier("notificationExecutor") Executor executor,
                                   @Value("${sse.mail.enabled:false}") boolean mailEnabled,
-                                  @Value("${sse.mail.from:no-reply@smartschool.local}") String mailFrom) {
+                                  @Value("${sse.mail.from:no-reply@smartschool.local}") String mailFrom,
+                                  SchedulerExecutionRegistry executions) {
         this.preferences = preferences;
         this.logs = logs;
         this.devices = devices;
@@ -46,6 +49,7 @@ class NotificationChannelDispatcher {
         this.executor = executor;
         this.mailEnabled = mailEnabled;
         this.mailFrom = mailFrom;
+        this.executions = executions;
     }
 
     public void dispatch(String recipientId, String notificationId, String title, String body) {
@@ -85,6 +89,10 @@ class NotificationChannelDispatcher {
     @Scheduled(fixedDelayString = "${sse.notification-delivery.retry-interval-ms:30000}",
             initialDelayString = "${sse.notification-delivery.retry-initial-delay-ms:10000}")
     public void retryPending() {
+        executions.run("notification-delivery-retry", "Gửi lại email và thông báo đẩy", this::processPending);
+    }
+
+    private void processPending() {
         logs.findTop100ByStatusInAndAttemptsLessThanAndNextAttemptAtLessThanEqualOrderByNextAttemptAtAsc(
                 List.of("PENDING", "RETRYING"), MAX_ATTEMPTS, Instant.now())
                 .forEach(job -> process(job.getId()));
@@ -118,6 +126,25 @@ class NotificationChannelDispatcher {
         }
         job.setUpdatedAt(Instant.now());
         logs.save(job);
+    }
+
+    void retryFailedNow(String id, String reason) {
+        NotificationDeliveryLog job = logs.findById(id)
+                .orElseThrow(() -> com.sse.app.common.ApiException.notFound("Lần gửi thông báo"));
+        if (!List.of("FAILED", "SKIPPED").contains(job.getStatus())) {
+            throw com.sse.app.common.ApiException.conflict("Chỉ có thể gửi lại tác vụ thất bại hoặc đã bỏ qua");
+        }
+        if (job.getTitle() == null || job.getTitle().isBlank()
+                || job.getPayload() == null || job.getPayload().isBlank()) {
+            throw com.sse.app.common.ApiException.conflict("Tác vụ cũ không còn đủ nội dung để gửi lại an toàn");
+        }
+        job.setStatus("PENDING");
+        job.setAttempts(0);
+        job.setDetail("Yêu cầu gửi lại: " + abbreviate(reason));
+        job.setNextAttemptAt(Instant.now());
+        job.setUpdatedAt(Instant.now());
+        logs.save(job);
+        executor.execute(() -> process(job.getId()));
     }
 
     private void sendEmail(NotificationDeliveryLog job) {

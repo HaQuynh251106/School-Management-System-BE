@@ -23,17 +23,20 @@ public class TimetableController {
     private final TeachingAssignmentService teachingAssignments;
     private final AutomaticTimetableService automaticTimetable;
     private final TimetableVersionService versions;
+    private final TimetablePublicationNotificationService publicationNotifications;
 
     public TimetableController(TimetableService timetable, UserService users, StructureService structure,
                                TeachingAssignmentService teachingAssignments,
                                AutomaticTimetableService automaticTimetable,
-                               TimetableVersionService versions) {
+                               TimetableVersionService versions,
+                               TimetablePublicationNotificationService publicationNotifications) {
         this.timetable = timetable;
         this.users = users;
         this.structure = structure;
         this.teachingAssignments = teachingAssignments;
         this.automaticTimetable = automaticTimetable;
         this.versions = versions;
+        this.publicationNotifications = publicationNotifications;
     }
 
     @GetMapping("/timetableSlots")
@@ -57,7 +60,7 @@ public class TimetableController {
             @Valid @RequestBody TimetableDtos.AutoTimetableRequest request) {
         if (Boolean.TRUE.equals(request.apply())) CurrentUserHolder.requireRole("ACADEMIC_STAFF");
         else CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
-        return automaticTimetable.plan(request);
+        return automaticTimetable.plan(request, CurrentUserHolder.require().id());
     }
 
     @GetMapping("/timetable-versions")
@@ -80,9 +83,31 @@ public class TimetableController {
     }
 
     @PostMapping("/timetable-versions/{id}/publish")
-    public TimetableDtos.TimetableVersion publishVersion(@PathVariable String id) {
+    public TimetableDtos.TimetablePublishResult publishVersion(@PathVariable String id,
+            @Valid @RequestBody TimetableDtos.PublishVersionRequest request) {
         CurrentUserHolder.requireRole("ACADEMIC_STAFF");
-        return versions.publish(id, CurrentUserHolder.require().id());
+        return versions.publish(id, request.versionName(), request.reason(), CurrentUserHolder.require().id());
+    }
+
+    @GetMapping("/timetable-versions/{id}/publication-preview")
+    public TimetableDtos.TimetablePublicationPreview publicationPreview(@PathVariable String id) {
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        return publicationNotifications.preview(id);
+    }
+
+    @GetMapping("/timetable-versions/{id}/publication-status")
+    public TimetableDtos.TimetablePublicationStatus publicationStatus(@PathVariable String id) {
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        return publicationNotifications.requireStatusByPlan(id);
+    }
+
+    @PostMapping("/timetable-versions/{id}/publication-retry")
+    public TimetableDtos.TimetablePublicationStatus retryPublication(@PathVariable String id,
+            @Valid @RequestBody TimetableDtos.RetryPublicationRequest request) {
+        CurrentUserHolder.requireRole("ACADEMIC_STAFF");
+        // Lý do được bắt buộc ở hợp đồng API để thao tác gửi lại luôn có chủ đích.
+        if (request.reason().isBlank()) throw ApiException.badRequest("Vui lòng nhập lý do gửi lại");
+        return publicationNotifications.retry(id, request.reason(), CurrentUserHolder.require().id());
     }
 
     @PostMapping("/timetable-versions/{id}/restore")

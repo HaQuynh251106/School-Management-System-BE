@@ -163,8 +163,8 @@ public class DataSeeder {
                 slot("tt-4", "c-10a1", "sj-eng", "Tiếng Anh", "u-teacher-2", "Lê Văn Minh", "P201", "TUE", 1, "07:00", "07:45"),
                 slot("tt-5", "c-10a1", "sj-bio", "Sinh học", "u-teacher-1", "Trần Thị Hoa", "P201", "TUE", 2, "07:50", "08:35"),
                 slot("tt-6", "c-10a1", "sj-math", "Toán", "u-teacher-1", "Trần Thị Hoa", "P201", "WED", 1, "07:00", "07:45"),
-                slot("tt-7", "c-8a1", "sj-math", "Toán", "u-teacher-1", "Trần Thị Hoa", "P105", "MON", 4, "09:35", "10:20"),
-                slot("tt-8", "c-8a1", "sj-eng", "Tiếng Anh", "u-teacher-2", "Lê Văn Minh", "P105", "TUE", 4, "09:35", "10:20")));
+                slot("tt-7", "c-8a1", "sj-math", "Toán", "u-teacher-1", "Trần Thị Hoa", "P105", "THU", 1, "07:00", "07:45"),
+                slot("tt-8", "c-8a1", "sj-eng", "Tiếng Anh", "u-teacher-2", "Lê Văn Minh", "P105", "FRI", 1, "07:00", "07:45")));
     }
 
     // ---------- Grades + exam categories ----------

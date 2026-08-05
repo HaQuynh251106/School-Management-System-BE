@@ -23,6 +23,7 @@ class FeePeriod {
     private String name;
     /** DRAFT | OPEN | CLOSED */
     private String status;
+    @Column(nullable = false)
     private String academicYearId;
     /** CSV khối áp dụng (vd "K10,K11"); null = mọi khối. */
     private String applyToGrades;

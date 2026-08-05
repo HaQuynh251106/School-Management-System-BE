@@ -1,5 +1,6 @@
 package com.sse.app.academic.structure;
 
+import com.sse.app.common.SchedulerExecutionRegistry;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -18,17 +19,24 @@ public class AcademicStatusSynchronizer {
     private final AcademicYearRepository years;
     private final SemesterRepository semesters;
     private final Clock clock;
+    private final SchedulerExecutionRegistry executions;
 
-    public AcademicStatusSynchronizer(AcademicYearRepository years, SemesterRepository semesters, Clock clock) {
+    public AcademicStatusSynchronizer(AcademicYearRepository years, SemesterRepository semesters, Clock clock,
+                                      SchedulerExecutionRegistry executions) {
         this.years = years;
         this.semesters = semesters;
         this.clock = clock;
+        this.executions = executions;
     }
 
     @EventListener(ApplicationReadyEvent.class)
     @Scheduled(cron = "${sse.academic.status-sync-cron:0 5 0 * * *}", zone = "Asia/Ho_Chi_Minh")
     @Transactional
     public void correctFutureActiveStatuses() {
+        executions.run("academic-status-sync", "Đồng bộ trạng thái năm học và học kỳ", this::synchronize);
+    }
+
+    private void synchronize() {
         LocalDate today = LocalDate.now(clock.withZone(SCHOOL_ZONE));
         years.findByStatus("ACTIVE").stream()
                 .filter(item -> item.getStartDate() != null && today.isBefore(item.getStartDate()))

@@ -380,12 +380,12 @@ public class UserService {
         }
         validateUniqueIdentifiers(null, r.email(), r.studentCode(), r.teacherCode());
         String id = (r.id() == null || r.id().isBlank()) ? Ids.gen("u") : r.id();
-        boolean suppliedPassword = r.password() != null && !r.password().isBlank();
-        String initialPassword = suppliedPassword ? r.password() : temporaryPassword();
-        if (suppliedPassword) validatePassword(initialPassword);
+        // Tài khoản do Admin/import tạo không bao giờ nhận mật khẩu do người vận hành đặt.
+        // Chuỗi ngẫu nhiên này chỉ là bí mật nội bộ chưa được công bố; người dùng phải
+        // thiết lập mật khẩu của chính mình qua liên kết kích hoạt dùng một lần.
+        String initialPassword = temporaryPassword();
         String normalizedEmail = normalizeEmail(r.email());
-        String activationStatus = suppliedPassword ? "ACTIVE"
-                : normalizedEmail == null ? "PENDING_MANUAL" : "PENDING_EMAIL";
+        String activationStatus = normalizedEmail == null ? "PENDING_MANUAL" : "PENDING_EMAIL";
         // Học sinh không nhập mã thủ công — hệ thống tự sinh mã HS.
         String studentCode = r.studentCode();
         if ("STUDENT".equals(r.role()) && (studentCode == null || studentCode.isBlank())) {
@@ -562,23 +562,6 @@ public class UserService {
 
     private String normalizeEmail(String email) {
         return email == null || email.isBlank() ? null : email.trim().toLowerCase(java.util.Locale.ROOT);
-    }
-
-    /** A1: admin reset mật khẩu; trả lại mật khẩu mới (sinh ngẫu nhiên nếu không truyền). */
-    @Transactional
-    public String adminResetPassword(String id, String newPassword) {
-        User u = getById(id);
-        String pwd = (newPassword == null || newPassword.isBlank()) ? temporaryPassword() : newPassword;
-        validatePassword(pwd);
-        u.setPasswordHash(encoder.encode(pwd));
-        u.setPasswordChangeRequired(true);
-        u.setActivationStatus("ACTIVE");
-        u.setActivationCompletedAt(Instant.now());
-        u.setTokenVersion(u.getTokenVersion() + 1);
-        users.save(u);
-        revokeRefreshTokens(u.getId());
-        loginAttempts.clearForUsername(u.getUsername());
-        return pwd;
     }
 
     // ---------- Quên mật khẩu (A1 - flowchart 2.2) ----------

@@ -905,6 +905,15 @@ public class StructureService {
         catch (NumberFormatException ignored) { return 0; }
     }
 
+    /** Nguồn dữ liệu chuẩn cho các nghiệp vụ chỉ áp dụng với học sinh đang học trong một năm học. */
+    public List<ClassEnrollment> activeEnrollments(String academicYearId) {
+        getYear(academicYearId);
+        return enrollments.findByAcademicYearIdAndStatus(academicYearId, "ACTIVE").stream()
+                .sorted(Comparator.comparing(ClassEnrollment::getClassId)
+                        .thenComparing(ClassEnrollment::getStudentId))
+                .toList();
+    }
+
     private String normalizeRoomType(String value) {
         String normalized = value == null || value.isBlank() ? "GENERAL" : value.trim().toUpperCase(Locale.ROOT);
         if (!Set.of("GENERAL", "LAB", "COMPUTER", "LANGUAGE", "SPORT", "ART", "LIBRARY", "MULTIPURPOSE", "OTHER").contains(normalized)) {

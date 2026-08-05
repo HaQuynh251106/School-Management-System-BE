@@ -47,7 +47,7 @@ class CurriculumRequirementWorkflowIntegrationTest {
         Semester second = structure.listSemesters(year.getId()).get(1);
 
         planning.saveRequirement(new SaveCurriculumRequirementRequest(
-                first.getId(), "K10", math.getId(), 4), "academic-test");
+                first.getId(), "K10", math.getId(), 13), "academic-test");
 
         var incomplete = planning.curriculumReadiness(first.getId());
         assertThat(incomplete.complete()).isFalse();
@@ -62,7 +62,7 @@ class CurriculumRequirementWorkflowIntegrationTest {
                 .hasMessageContaining("Ngữ văn");
 
         var literatureRequirement = planning.saveRequirement(new SaveCurriculumRequirementRequest(
-                first.getId(), "K10", literature.getId(), 4), "academic-test");
+                first.getId(), "K10", literature.getId(), 12), "academic-test");
         assertThat(planning.curriculumReadiness(first.getId()).complete()).isTrue();
 
         planning.copyRequirements(new CopyCurriculumRequirementsRequest(

@@ -13,6 +13,8 @@ interface NotificationRepository extends JpaRepository<Notification, String>, Jp
     List<Notification> findByRecipientIdAndReadIsFalseOrderByCreatedAtDesc(String recipientId);
     List<Notification> findByRefTypeAndRefId(String refType, String refId);
     Optional<Notification> findFirstByRefTypeAndRefIdOrderByCreatedAtDesc(String refType, String refId);
+    Optional<Notification> findFirstByRecipientIdAndRefTypeAndRefIdOrderByCreatedAtDesc(
+            String recipientId, String refType, String refId);
     long countByRecipientIdAndReadIsFalse(String recipientId);
     boolean existsByRecipientIdAndRefTypeAndRefId(String recipientId, String refType, String refId);
 }
@@ -36,6 +38,8 @@ interface NotificationDeliveryLogRepository extends JpaRepository<NotificationDe
     Optional<NotificationDeliveryLog> findFirstByNotificationIdAndChannelOrderByCreatedAtDesc(
             String notificationId, String channel);
     void deleteByNotificationIdIn(List<String> notificationIds);
+    List<NotificationDeliveryLog> findByNotificationIdInAndStatusIn(
+            List<String> notificationIds, List<String> statuses);
     List<NotificationDeliveryLog> findTop100ByStatusInAndAttemptsLessThanAndNextAttemptAtLessThanEqualOrderByNextAttemptAtAsc(
             List<String> statuses, int maxAttempts, Instant now);
 }

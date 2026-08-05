@@ -32,7 +32,7 @@ class ExamSeatingPlanIntegrationTest {
     @Test
     @Transactional
     void unifiedOrganizationSelectsRoomsAssignsProctorsSeatsAndCanUndoAtomically() {
-        users.create(new CreateUserRequest("u-exam-unified", "hs.exam.unified", "Student123@@",
+        users.create(new CreateUserRequest("u-exam-unified", "hs.exam.unified",
                 "Học sinh kiểm thử tổ chức", "STUDENT", null, null, null,
                 null, null, null, "c-10a1", "10A1", null, null, null, null,
                 null, null, null, null, null));
@@ -74,7 +74,7 @@ class ExamSeatingPlanIntegrationTest {
     @Test
     @Transactional
     void previewApplyAndUndoSplitAClassWithoutChangingCandidateNumbers() {
-        users.create(new CreateUserRequest("u-exam-split", "hs.exam.split", "Student123@@",
+        users.create(new CreateUserRequest("u-exam-split", "hs.exam.split",
                 "Học sinh kiểm thử xếp phòng", "STUDENT", null, null, null,
                 null, null, null, "c-10a1", "10A1", null, null, null, null,
                 null, null, null, null, null));

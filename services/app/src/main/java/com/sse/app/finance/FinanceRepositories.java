@@ -9,6 +9,7 @@ import java.time.Instant;
 
 interface FeePeriodRepository extends JpaRepository<FeePeriod, String> {
     Optional<FeePeriod> findByCode(String code);
+    List<FeePeriod> findByAcademicYearIdOrderByCreatedAtDesc(String academicYearId);
 }
 
 interface FeePeriodItemRepository extends JpaRepository<FeePeriodItem, String> {
@@ -28,7 +29,7 @@ interface InvoiceItemRepository extends JpaRepository<InvoiceItem, String> {
     List<InvoiceItem> findByInvoiceId(String invoiceId);
 }
 
-interface PaymentRepository extends JpaRepository<Payment, String> {
+interface PaymentRepository extends JpaRepository<Payment, String>, JpaSpecificationExecutor<Payment> {
     List<Payment> findByInvoiceId(String invoiceId);
     Optional<Payment> findFirstByInvoiceIdAndStatusOrderByCreatedAtDesc(String invoiceId, String status);
 }

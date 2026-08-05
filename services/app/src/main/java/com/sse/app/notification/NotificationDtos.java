@@ -40,4 +40,7 @@ public final class NotificationDtos {
             @NotBlank @Size(max = 1000) String deviceToken,
             @NotBlank @Pattern(regexp = "ANDROID|IOS|WEB") String platform) {}
 
+    public record RetryDeliveryRequest(
+            @NotBlank @Size(min = 10, max = 500) String reason) {}
+
 }

@@ -234,7 +234,7 @@ public class UserImportService {
             }
 
             CreateUserRequest request = new CreateUserRequest(
-                    null, username, null, fullName, role,
+                    null, username, fullName, role,
                     email, emptyToNull(cell(row, h, "phone", f)), null,
                     teacherCode,
                     null,
@@ -398,7 +398,6 @@ public class UserImportService {
         alias(out, "tendangnhap", "username");
         alias(out, "hoten", "fullname");
         alias(out, "vaitro", "role");
-        alias(out, "matkhau", "password");
         alias(out, "malop", "classcode");
         alias(out, "mahocsinh", "studentcode");
         alias(out, "magiaovien", "teachercode");

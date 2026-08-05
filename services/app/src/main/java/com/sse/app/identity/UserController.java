@@ -194,15 +194,6 @@ public class UserController {
         return result;
     }
 
-    @PostMapping("/{id}/reset-password")
-    public Map<String, Object> resetPassword(@PathVariable String id,
-                                             @RequestBody(required = false) AdminResetPasswordRequest req) {
-        CurrentUserHolder.requireRole("ADMIN");
-        String pwd = users.adminResetPassword(id, req == null ? null : req.newPassword());
-        auditAccessAction("TEMPORARY_PASSWORD_ISSUED", id, "Cấp mật khẩu tạm và buộc đổi mật khẩu");
-        return Map.of("ok", true, "password", pwd);
-    }
-
     @GetMapping("/lifecycle/summary")
     public AccountLifecycleSummary lifecycleSummary(@RequestParam(required = false) String role) {
         CurrentUserHolder.requireRole("ADMIN");

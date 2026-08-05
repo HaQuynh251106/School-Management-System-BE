@@ -43,8 +43,11 @@ class FunctionalRoomTimetableIntegrationTest {
         var subject = structure.createSubject(new CreateSubjectRequest("subject-chem", "CHEM", "Hóa học", 1D));
         requirements.save(new SaveRequest(subject.getId(), "LAB", "bộ thí nghiệm", 1, true, 80));
 
-        jdbc.update("insert into teacher_load_registrations (id,teacher_id,teacher_name,semester_id,max_weekly_periods,status,created_at,updated_at) values (?,?,?,?,?,'APPROVED',current_timestamp,current_timestamp)",
+        jdbc.update("insert into teacher_load_registrations (id,teacher_id,teacher_name,semester_id,max_weekly_periods,status,created_at,updated_at) values (?,?,?,?,?,'SYSTEM',current_timestamp,current_timestamp)",
                 "load-chem", "teacher-chem", "Nguyễn Ngọc Lan", semester.getId(), 18);
+        jdbc.update("insert into teacher_schedule_restriction_requests (id,teacher_id,teacher_name,semester_id,restricted_slots,effective_from,effective_to,reason,status,reviewed_by,reviewed_at,submitted_at,created_at,updated_at) values (?,?,?,?,?,?,?,?,?,'academic-test',current_timestamp,current_timestamp,current_timestamp,current_timestamp)",
+                "restriction-chem", "teacher-chem", "Nguyễn Ngọc Lan", semester.getId(), "MORNING:MON:1",
+                semester.getStartDate(), semester.getEndDate(), "Ngoại lệ lịch đã được Giáo vụ duyệt", "APPROVED");
         jdbc.update("insert into teaching_assignments (id,class_id,class_code,subject_id,subject_name,teacher_id,teacher_name,semester_id,weekly_periods,assigned_at,assigned_by,updated_at) values (?,?,?,?,?,?,?,?,?,current_timestamp,'u-test',current_timestamp)",
                 "ta-chem", schoolClass.getId(), schoolClass.getCode(), subject.getId(), subject.getName(),
                 "teacher-chem", "Nguyễn Ngọc Lan", semester.getId(), 3);
@@ -55,5 +58,20 @@ class FunctionalRoomTimetableIntegrationTest {
         assertThat(plan.items()).filteredOn(item -> "LAB-HOA".equals(item.roomCode())).hasSize(1);
         assertThat(plan.items()).filteredOn(item -> "A101".equals(item.roomCode())).hasSize(2);
         assertThat(plan.items()).extracting(item -> item.dayOfWeek() + ":" + item.periodNo()).doesNotHaveDuplicates();
+        assertThat(plan.items()).noneMatch(item -> "MON".equals(item.dayOfWeek()) && item.periodNo() == 1);
+
+        int liveBefore = jdbc.queryForObject(
+                "select count(*) from timetable_slots where semester_id=?", Integer.class, semester.getId());
+        var applied = automaticTimetable.plan(new AutoTimetableRequest(
+                semester.getId(), true, false, true, "BALANCED"), "u-academic-test");
+        int liveAfter = jdbc.queryForObject(
+                "select count(*) from timetable_slots where semester_id=?", Integer.class, semester.getId());
+        Integer storedQuality = jdbc.queryForObject(
+                "select quality_score from timetable_plans where semester_id=? order by version_no desc limit 1",
+                Integer.class, semester.getId());
+
+        assertThat(applied.applied()).isTrue();
+        assertThat(liveAfter).isEqualTo(liveBefore);
+        assertThat(storedQuality).isEqualTo(applied.qualityScore());
     }
 }

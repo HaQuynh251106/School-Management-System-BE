@@ -5,6 +5,8 @@ import com.sse.app.common.ApiException;
 import com.sse.app.common.Ids;
 import com.sse.app.identity.IdentityDtos.*;
 import com.sse.app.security.JwtService;
+import com.sse.app.security.CurrentUser;
+import com.sse.app.security.CurrentUserHolder;
 import io.jsonwebtoken.Claims;
 import jakarta.validation.Valid;
 import jakarta.servlet.http.HttpServletRequest;
@@ -19,6 +21,7 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 /** E1 + A1: đăng nhập, refresh token, quên/đặt lại mật khẩu. */
@@ -38,6 +41,7 @@ public class AuthController {
     private final PasswordResetMailer resetMailer;
     private final LoginHistoryService loginHistory;
     private final LoginAttemptService loginAttempts;
+    private final TwoFactorService twoFactor;
     private final boolean secureRefreshCookie;
     private final Map<String, Long> recoveryRequests = new ConcurrentHashMap<>();
 
@@ -46,6 +50,7 @@ public class AuthController {
                           PasswordResetMailer resetMailer,
                           LoginHistoryService loginHistory,
                           LoginAttemptService loginAttempts,
+                          TwoFactorService twoFactor,
                           @Value("${sse.password-reset.expose-token:false}") boolean exposeResetToken,
                           @Value("${sse.jwt.cookie-secure:false}") boolean secureRefreshCookie) {
         this.users = users;
@@ -56,6 +61,7 @@ public class AuthController {
         this.resetMailer = resetMailer;
         this.loginHistory = loginHistory;
         this.loginAttempts = loginAttempts;
+        this.twoFactor = twoFactor;
         this.secureRefreshCookie = secureRefreshCookie;
     }
 
@@ -66,6 +72,7 @@ public class AuthController {
         loginAttempts.assertAllowed(req.username(), ipAddress);
         try {
             User u = users.authenticate(req.username(), req.password());
+            twoFactor.verifyLogin(u.getId(), req.twoFactorCode());
             loginAttempts.succeeded(req.username(), ipAddress);
             loginHistory.record(u.getId(), u.getUsername(), true, null, ipAddress, request.getHeader("User-Agent"));
             audit.record(u.getId(), u.getFullName(), u.getRole(), "LOGIN", "identity",
@@ -133,6 +140,70 @@ public class AuthController {
         if (exposeResetToken && issue != null) body.put("devResetToken", issue.token());
         if (exposeResetToken && issue != null) body.put("devPurpose", issue.purpose());
         return body;
+    }
+
+    @GetMapping("/two-factor/status")
+    public TwoFactorStatus twoFactorStatus() {
+        CurrentUser current = CurrentUserHolder.require();
+        return new TwoFactorStatus(twoFactor.isEnabled(current.id()));
+    }
+
+    @PostMapping("/two-factor/setup")
+    public TwoFactorSetup setupTwoFactor() {
+        CurrentUser current = CurrentUserHolder.require();
+        TwoFactorSetup setup = twoFactor.beginSetup(current.id());
+        audit.record(current.id(), current.username(), current.role(), "TWO_FACTOR_SETUP_STARTED",
+                "identity", "user", current.id(), "Người dùng bắt đầu thiết lập 2FA");
+        return setup;
+    }
+
+    @PostMapping("/two-factor/enable")
+    public Map<String, Object> enableTwoFactor(@Valid @RequestBody TwoFactorCodeRequest request) {
+        CurrentUser current = CurrentUserHolder.require();
+        twoFactor.enable(current.id(), request.code());
+        audit.record(current.id(), current.username(), current.role(), "TWO_FACTOR_ENABLED",
+                "identity", "user", current.id(), "Đã bật xác thực hai lớp");
+        return Map.of("ok", true);
+    }
+
+    @PostMapping("/two-factor/disable")
+    public Map<String, Object> disableTwoFactor(@Valid @RequestBody TwoFactorCodeRequest request) {
+        CurrentUser current = CurrentUserHolder.require();
+        twoFactor.disable(current.id(), request.code());
+        audit.record(current.id(), current.username(), current.role(), "TWO_FACTOR_DISABLED",
+                "identity", "user", current.id(), "Đã tắt xác thực hai lớp");
+        return Map.of("ok", true);
+    }
+
+    @GetMapping("/sessions")
+    public List<SessionView> sessions(
+            @CookieValue(name = REFRESH_COOKIE, required = false) String cookieToken) {
+        CurrentUser current = CurrentUserHolder.require();
+        return refreshTokens.activeSessions(current.id(), cookieToken);
+    }
+
+    @GetMapping("/login-history")
+    public List<LoginHistory> myLoginHistory() {
+        return loginHistory.list(CurrentUserHolder.require().id());
+    }
+
+    @DeleteMapping("/sessions/{id}")
+    public Map<String, Object> revokeSession(@PathVariable String id) {
+        CurrentUser current = CurrentUserHolder.require();
+        boolean revoked = refreshTokens.revokeSession(current.id(), id);
+        audit.record(current.id(), current.username(), current.role(), "SESSION_REVOKED", "identity",
+                "refresh_token", id, "Người dùng thu hồi một phiên đăng nhập");
+        return Map.of("ok", true, "revoked", revoked);
+    }
+
+    @PostMapping("/sessions/revoke-others")
+    public Map<String, Object> revokeOtherSessions(
+            @CookieValue(name = REFRESH_COOKIE, required = false) String cookieToken) {
+        CurrentUser current = CurrentUserHolder.require();
+        int revoked = refreshTokens.revokeOtherSessions(current.id(), cookieToken);
+        audit.record(current.id(), current.username(), current.role(), "OTHER_SESSIONS_REVOKED", "identity",
+                "refresh_token", null, "Đã thu hồi " + revoked + " phiên đăng nhập khác");
+        return Map.of("ok", true, "revoked", revoked);
     }
 
     private Map<String, Object> recoveryResponse() {

@@ -7,6 +7,7 @@ import com.sse.app.academic.structure.StructureService;
 import com.sse.app.academic.timetable.TeachingAssignmentService;
 import com.sse.app.common.ApiException;
 import com.sse.app.common.PageResponse;
+import com.sse.app.audit.AuditService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 
@@ -21,12 +22,14 @@ public class NotificationController {
     private final NotificationService notifications;
     private final TeachingAssignmentService teachingAssignments;
     private final StructureService structure;
+    private final AuditService audit;
 
     public NotificationController(NotificationService notifications, TeachingAssignmentService teachingAssignments,
-                                  StructureService structure) {
+                                  StructureService structure, AuditService audit) {
         this.notifications = notifications;
         this.teachingAssignments = teachingAssignments;
         this.structure = structure;
+        this.audit = audit;
     }
 
     @GetMapping("/notifications")
@@ -108,6 +111,17 @@ public class NotificationController {
     public List<NotificationDeliveryLog> deliveryLogs() {
         CurrentUserHolder.requireRole("ADMIN");
         return notifications.deliveryLogs();
+    }
+
+    @PostMapping("/notification-delivery-logs/{id}/retry")
+    public NotificationDeliveryLog retryDelivery(@PathVariable String id,
+                                                  @Valid @RequestBody RetryDeliveryRequest request) {
+        CurrentUser actor = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("ADMIN");
+        NotificationDeliveryLog result = notifications.retryDelivery(id, request.reason());
+        audit.record(actor.id(), actor.username(), actor.role(), "DELIVERY_RETRY_REQUESTED",
+                "notification", "notification_delivery", id, request.reason());
+        return result;
     }
 
     // ----- Announcements (route khớp json-server) -----

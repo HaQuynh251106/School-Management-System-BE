@@ -177,8 +177,8 @@ WHERE student.id = relation.student_id AND student.role = 'STUDENT';
 
 -- Định mức chương trình, tải dạy và phân công đủ 12 môn.
 WITH curriculum(subject_id,subject_name,weekly_periods,subject_no) AS (VALUES
-('sub-math','Toán',4,1),('sub-lit','Ngữ văn',4,2),('sub-eng','Tiếng Anh',3,3),('sub-phys','Vật lý',3,4),
-('sub-chem','Hóa học',2,5),('sub-bio','Sinh học',2,6),('sub-hist','Lịch sử',2,7),('sub-geo','Địa lý',2,8),
+('sub-math','Toán',4,1),('sub-lit','Ngữ văn',4,2),('sub-eng','Tiếng Anh',3,3),('sub-phys','Vật lý',2,4),
+('sub-chem','Hóa học',2,5),('sub-bio','Sinh học',2,6),('sub-hist','Lịch sử',1,7),('sub-geo','Địa lý',1,8),
 ('sub-it','Tin học',2,9),('sub-tech','Công nghệ',2,10),('sub-pe','Giáo dục thể chất',2,11),('sub-civic','Giáo dục KT&PL',2,12)),
 scope AS (SELECT s.id semester_id,g.grade_level FROM semesters s CROSS JOIN (VALUES('K10'),('K11'),('K12')) g(grade_level))
 INSERT INTO curriculum_requirements(id,semester_id,grade_level,subject_id,subject_name,weekly_periods,created_at,updated_at)
@@ -188,7 +188,7 @@ FROM scope CROSS JOIN curriculum;
 INSERT INTO teacher_load_registrations(id,teacher_id,teacher_name,semester_id,max_weekly_periods,unavailable_slots,preferred_grade_levels,
   note,review_note,status,submitted_at,reviewed_at,reviewed_by,created_at,updated_at)
 SELECT 'load-'||s.id||'-'||u.id,u.id,u.full_name,s.id,24,
-  CASE (row_number() over(partition by s.id order by u.id))%6 WHEN 0 THEN 'MON:1' WHEN 1 THEN 'TUE:5' WHEN 2 THEN 'WED:1' WHEN 3 THEN 'THU:5' WHEN 4 THEN 'FRI:1' ELSE 'SAT:5' END,
+  CASE (row_number() over(partition by s.id order by u.id))%5 WHEN 0 THEN 'MON:1' WHEN 1 THEN 'TUE:5' WHEN 2 THEN 'WED:1' WHEN 3 THEN 'THU:5' ELSE 'FRI:1' END,
   'K10,K11,K12','Đăng ký tải dạy theo học kỳ','Đã kiểm tra chuyên môn và tải dạy',
   CASE WHEN s.id='sem-2026-2' THEN 'SUBMITTED' ELSE 'APPROVED' END,now()-interval '20 days',
   CASE WHEN s.id='sem-2026-2' THEN NULL ELSE now()-interval '18 days' END,
@@ -196,8 +196,8 @@ SELECT 'load-'||s.id||'-'||u.id,u.id,u.full_name,s.id,24,
 FROM users u CROSS JOIN semesters s WHERE u.role='TEACHER';
 
 WITH curriculum(subject_id,subject_name,weekly_periods,subject_no) AS (VALUES
-('sub-math','Toán',4,1),('sub-lit','Ngữ văn',4,2),('sub-eng','Tiếng Anh',3,3),('sub-phys','Vật lý',3,4),
-('sub-chem','Hóa học',2,5),('sub-bio','Sinh học',2,6),('sub-hist','Lịch sử',2,7),('sub-geo','Địa lý',2,8),
+('sub-math','Toán',4,1),('sub-lit','Ngữ văn',4,2),('sub-eng','Tiếng Anh',3,3),('sub-phys','Vật lý',2,4),
+('sub-chem','Hóa học',2,5),('sub-bio','Sinh học',2,6),('sub-hist','Lịch sử',1,7),('sub-geo','Địa lý',1,8),
 ('sub-it','Tin học',2,9),('sub-tech','Công nghệ',2,10),('sub-pe','Giáo dục thể chất',2,11),('sub-civic','Giáo dục KT&PL',2,12)),
 class_scope AS (SELECT c.*,regexp_replace(c.code,'[^0-9]','','g')::int grade,substring(c.code from 'A([0-9]+)$')::int section FROM classes c),
 semester_scope AS (SELECT s.*,CASE s.academic_year_id WHEN 'ay-2025' THEN 'old' ELSE 'current' END prefix FROM semesters s)
@@ -208,20 +208,20 @@ SELECT 'assign-'||sem.id||'-'||c.code||'-'||cur.subject_id,c.id,c.code,sem.id,cu
 FROM semester_scope sem JOIN class_scope c ON c.academic_year_id=sem.academic_year_id
 CROSS JOIN curriculum cur JOIN users u ON u.id='teacher-'||lpad((CASE WHEN sem.prefix='old' AND cur.subject_no=1 AND c.section=1 THEN 73 ELSE ((cur.subject_no-1)*6)+((c.section-1)%6)+1 END)::text,3,'0');
 
--- Thời khóa biểu 30 tiết/tuần cho cả hai học kỳ cũ và HK1 hiện hành.
+-- Thời khóa biểu 25 tiết/tuần, Thứ 2-Thứ 6, năm tiết liền mạch mỗi ngày.
 WITH curriculum(ord,subject_id,subject_name,weekly_periods) AS (VALUES
-(1,'sub-math','Toán',4),(2,'sub-lit','Ngữ văn',4),(3,'sub-eng','Tiếng Anh',3),(4,'sub-phys','Vật lý',3),
-(5,'sub-chem','Hóa học',2),(6,'sub-bio','Sinh học',2),(7,'sub-hist','Lịch sử',2),(8,'sub-geo','Địa lý',2),
+(1,'sub-math','Toán',4),(2,'sub-lit','Ngữ văn',4),(3,'sub-eng','Tiếng Anh',3),(4,'sub-phys','Vật lý',2),
+(5,'sub-chem','Hóa học',2),(6,'sub-bio','Sinh học',2),(7,'sub-hist','Lịch sử',1),(8,'sub-geo','Địa lý',1),
 (9,'sub-it','Tin học',2),(10,'sub-tech','Công nghệ',2),(11,'sub-pe','Giáo dục thể chất',2),(12,'sub-civic','Giáo dục KT&PL',2)),
 expanded AS (SELECT c.*,g.n,row_number() over(order by c.ord,g.n)-1 base_slot FROM curriculum c CROSS JOIN LATERAL generate_series(1,c.weekly_periods) g(n)),
 class_scope AS (SELECT c.*,regexp_replace(c.code,'[^0-9]','','g')::int grade,substring(c.code from 'A([0-9]+)$')::int section FROM classes c),
 scope AS (SELECT s.*,CASE s.academic_year_id WHEN 'ay-2025' THEN 'old' ELSE 'current' END prefix FROM semesters s WHERE s.id<>'sem-2026-2'),
-placed AS (SELECT sem.id semester_id,sem.prefix,c.*,x.subject_id,x.subject_name,x.ord,((x.base_slot+(c.grade-10)*10+((c.section-1)/6)*15)%30) slot_no
+placed AS (SELECT sem.id semester_id,sem.prefix,c.*,x.subject_id,x.subject_name,x.ord,((x.base_slot+(c.grade-10)*10+((c.section-1)/6)*15)%25) slot_no
   FROM scope sem JOIN class_scope c ON c.academic_year_id=sem.academic_year_id CROSS JOIN expanded x)
 INSERT INTO timetable_slots(id,class_id,subject_id,subject_name,teacher_id,teacher_name,room_code,day_of_week,period_no,start_time,end_time,semester_id,locked)
 SELECT 'slot-'||p.semester_id||'-'||p.code||'-'||(p.slot_no+1),p.id,p.subject_id,p.subject_name,
   'teacher-'||lpad((CASE WHEN p.prefix='old' AND p.ord=1 AND p.section=1 THEN 73 ELSE ((p.ord-1)*6)+((p.section-1)%6)+1 END)::text,3,'0'),u.full_name,p.room_code,
-  (ARRAY['MON','TUE','WED','THU','FRI','SAT'])[(p.slot_no/5)+1],(p.slot_no%5)+1,
+  (ARRAY['MON','TUE','WED','THU','FRI'])[(p.slot_no/5)+1],(p.slot_no%5)+1,
   CASE p.study_shift WHEN 'AFTERNOON' THEN (ARRAY['13:00','13:50','14:50','15:40','16:35'])[(p.slot_no%5)+1] ELSE (ARRAY['07:00','07:50','08:50','09:40','10:35'])[(p.slot_no%5)+1] END,
   CASE p.study_shift WHEN 'AFTERNOON' THEN (ARRAY['13:45','14:35','15:35','16:25','17:20'])[(p.slot_no%5)+1] ELSE (ARRAY['07:45','08:35','09:35','10:25','11:20'])[(p.slot_no%5)+1] END,
   p.semester_id,false FROM placed p JOIN users u ON u.id='teacher-'||lpad((CASE WHEN p.prefix='old' AND p.ord=1 AND p.section=1 THEN 73 ELSE ((p.ord-1)*6)+((p.section-1)%6)+1 END)::text,3,'0');

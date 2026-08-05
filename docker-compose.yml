@@ -55,6 +55,7 @@ services:
       start_period: 30s
     volumes:
       - uploads-data:/data/uploads
+      - ./backups:/data/backups:ro
 
 volumes:
   postgres-data:

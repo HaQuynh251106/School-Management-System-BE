@@ -28,4 +28,6 @@ interface TeachingAssignmentRepository extends JpaRepository<TeachingAssignment,
             @Param("semesterId") String semesterId);
 
     List<TeachingAssignment> findByTeacherId(String teacherId);
+    List<TeachingAssignment> findBySemesterId(String semesterId);
+    void deleteBySemesterId(String semesterId);
 }

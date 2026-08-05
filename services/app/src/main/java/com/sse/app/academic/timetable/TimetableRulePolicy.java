@@ -6,16 +6,28 @@ import java.time.LocalTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** One authoritative rule set for automatic, manual and published timetables. */
 public final class TimetableRulePolicy {
     public static final int MAX_SUBJECT_PERIODS_PER_CLASS_DAY = 2;
+    public static final int PERIODS_PER_DAY = 5;
+    public static final int PERIODS_PER_WEEK = 25;
+    public static final List<String> OPERATING_DAYS = List.of("MON", "TUE", "WED", "THU", "FRI");
 
     private TimetableRulePolicy() {}
 
     public static void assertCanAdd(SlotView candidate, List<SlotView> current, String ignoredId) {
+        String day = normalizedDay(candidate.dayOfWeek());
+        if (!OPERATING_DAYS.contains(day)) {
+            throw ApiException.badRequest("Nhà trường chỉ xếp thời khóa biểu từ Thứ 2 đến Thứ 6");
+        }
+        if (candidate.periodNo() == null || candidate.periodNo() < 1 || candidate.periodNo() > PERIODS_PER_DAY) {
+            throw ApiException.badRequest("Mỗi ngày chỉ có 5 tiết, từ tiết 1 đến tiết 5");
+        }
         List<SlotView> effective = current.stream()
                 .filter(item -> ignoredId == null || !ignoredId.equals(item.id()))
                 .filter(item -> sameSemester(candidate, item))
@@ -46,6 +58,12 @@ public final class TimetableRulePolicy {
 
     public static Validation validate(List<SlotView> slots) {
         List<String> messages = new ArrayList<>();
+        long invalidDays = slots.stream().filter(slot ->
+                !OPERATING_DAYS.contains(normalizedDay(slot.dayOfWeek()))).count();
+        if (invalidDays > 0) messages.add(invalidDays + " tiết nằm ngoài tuần học Thứ 2–Thứ 6");
+        long invalidPeriods = slots.stream().filter(slot -> slot.periodNo() == null
+                || slot.periodNo() < 1 || slot.periodNo() > PERIODS_PER_DAY).count();
+        if (invalidPeriods > 0) messages.add(invalidPeriods + " tiết nằm ngoài khung tiết 1–5");
         for (int i = 0; i < slots.size(); i++) {
             SlotView left = slots.get(i);
             for (int j = i + 1; j < slots.size(); j++) {
@@ -69,6 +87,19 @@ public final class TimetableRulePolicy {
                 .filter(value -> value > MAX_SUBJECT_PERIODS_PER_CLASS_DAY).count();
         if (overloaded > 0) messages.add(overloaded + " nhóm môn/lớp/ngày vượt "
                 + MAX_SUBJECT_PERIODS_PER_CLASS_DAY + " tiết");
+        Map<String, Set<Integer>> classDayPeriods = new HashMap<>();
+        for (SlotView slot : slots) {
+            String key = clean(slot.semesterId()) + "|" + clean(slot.classId()) + "|"
+                    + normalizedDay(slot.dayOfWeek());
+            classDayPeriods.computeIfAbsent(key, ignored -> new HashSet<>()).add(slot.periodNo());
+        }
+        long daysWithGaps = classDayPeriods.values().stream().filter(periods -> {
+            if (periods.isEmpty() || periods.contains(null)) return true;
+            int max = periods.stream().mapToInt(Integer::intValue).max().orElse(0);
+            return !periods.contains(1) || max != periods.size();
+        }).count();
+        if (daysWithGaps > 0) messages.add(daysWithGaps
+                + " ngày học bị ngắt quãng; các tiết phải liền mạch từ tiết 1");
         return new Validation(messages.isEmpty(), messages.stream().distinct().toList());
     }
 

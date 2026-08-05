@@ -21,5 +21,10 @@ public class Notification {
     private boolean read;
     private String refType;
     private String refId;
+    @Column(length = 1000)
+    private String actionUrl;
+    private Instant sentAt;
+    private Instant deliveredAt;
+    private Instant readAt;
     private Instant createdAt;
 }

@@ -18,32 +18,36 @@ import java.util.*;
 
 @Service
 public class WorkloadPlanningService {
-    private static final Set<String> REVIEW_STATUSES = Set.of("APPROVED", "REJECTED", "LOCKED", "DRAFT");
-
     private final CurriculumRequirementRepository requirements;
     private final CurriculumRequirementHistoryRepository requirementHistory;
     private final TeacherLoadRegistrationRepository registrations;
+    private final TeacherScheduleRestrictionRequestRepository restrictionRequests;
+    private final TeacherWorkloadPolicyService workloadPolicies;
     private final TeachingAssignmentRepository assignments;
     private final TeachingAssignmentService teachingAssignments;
+    private final TeachingAssignmentVersionService assignmentVersions;
     private final StructureService structure;
     private final UserService users;
-    private final TeacherWorkspaceService teacherWorkspace;
 
     public WorkloadPlanningService(CurriculumRequirementRepository requirements,
                                    CurriculumRequirementHistoryRepository requirementHistory,
                                    TeacherLoadRegistrationRepository registrations,
+                                   TeacherScheduleRestrictionRequestRepository restrictionRequests,
+                                   TeacherWorkloadPolicyService workloadPolicies,
                                    TeachingAssignmentRepository assignments,
                                    TeachingAssignmentService teachingAssignments,
-                                   StructureService structure, UserService users,
-                                   TeacherWorkspaceService teacherWorkspace) {
+                                   TeachingAssignmentVersionService assignmentVersions,
+                                   StructureService structure, UserService users) {
         this.requirements = requirements;
         this.requirementHistory = requirementHistory;
         this.registrations = registrations;
+        this.restrictionRequests = restrictionRequests;
+        this.workloadPolicies = workloadPolicies;
         this.assignments = assignments;
         this.teachingAssignments = teachingAssignments;
+        this.assignmentVersions = assignmentVersions;
         this.structure = structure;
         this.users = users;
-        this.teacherWorkspace = teacherWorkspace;
     }
 
     public List<CurriculumRequirement> listRequirements(String semesterId) {
@@ -70,7 +74,7 @@ public class WorkloadPlanningService {
                     .map(subject -> new MissingCurriculumSubject(subject.getId(), subject.getName())).toList();
             int periods = rows.stream().mapToInt(CurriculumRequirement::getWeeklyPeriods).sum();
             return new GradeCurriculumReadiness(grade, subjects.size(), rows.size(), periods,
-                    missing.isEmpty(), missing);
+                    missing.isEmpty() && periods == TimetableRulePolicy.PERIODS_PER_WEEK, missing);
         }).toList();
         int totalPeriods = configured.stream().mapToInt(CurriculumRequirement::getWeeklyPeriods).sum();
         boolean complete = !gradeResults.isEmpty()
@@ -103,6 +107,13 @@ public class WorkloadPlanningService {
         Optional<CurriculumRequirement> existing = requirements
                 .findBySemesterIdAndGradeLevelAndSubjectId(request.semesterId(), grade, request.subjectId());
         Integer previousPeriods = existing.map(CurriculumRequirement::getWeeklyPeriods).orElse(null);
+        int currentTotal = requirements.findBySemesterId(request.semesterId()).stream()
+                .filter(row -> grade.equals(row.getGradeLevel()))
+                .mapToInt(CurriculumRequirement::getWeeklyPeriods).sum();
+        int nextTotal = currentTotal - (previousPeriods == null ? 0 : previousPeriods) + request.weeklyPeriods();
+        if (nextTotal > TimetableRulePolicy.PERIODS_PER_WEEK && nextTotal >= currentTotal) {
+            throw ApiException.badRequest("Tổng định mức mỗi khối chỉ được tối đa 25 tiết/tuần");
+        }
         CurriculumRequirement item = existing
                 .orElseGet(() -> CurriculumRequirement.builder().id(Ids.gen("cr"))
                         .semesterId(request.semesterId()).gradeLevel(grade)
@@ -159,76 +170,59 @@ public class WorkloadPlanningService {
         recordHistory(item, "DELETED", item.getWeeklyPeriods(), null, actorId);
     }
 
+    @Transactional
     public TeacherLoadResponse mine(String teacherId, String semesterId) {
-        return registrations.findByTeacherIdAndSemesterId(teacherId, semesterId)
-                .map(this::response).orElse(null);
+        return response(ensureRegistration(teacherId, semesterId));
     }
 
+    @Transactional
     public List<TeacherLoadResponse> listRegistrations(String semesterId) {
+        structure.getSemester(semesterId);
+        users.activeUserIdsByRole("TEACHER").forEach(id -> ensureRegistration(id, semesterId));
         return registrations.findBySemesterId(semesterId).stream()
                 .sorted(Comparator.comparing(TeacherLoadRegistration::getTeacherName))
                 .map(this::response).toList();
     }
 
     @Transactional
-    public TeacherLoadResponse saveMine(String teacherId, SaveTeacherLoadRequest request) {
-        structure.assertSemesterWritable(request.semesterId());
-        assertTeacherRegistrationOpen(request.semesterId());
-        User teacher = requireActiveTeacher(teacherId);
-        Instant now = Instant.now();
-        TeacherLoadRegistration item = registrations
-                .findByTeacherIdAndSemesterId(teacherId, request.semesterId())
-                .orElseGet(() -> TeacherLoadRegistration.builder().id(Ids.gen("tlr"))
-                        .teacherId(teacherId).teacherName(teacher.getFullName())
-                        .semesterId(request.semesterId()).status("DRAFT").createdAt(now).build());
-        if (!Set.of("DRAFT", "REJECTED").contains(item.getStatus())) {
-            throw ApiException.conflict("Đăng ký đã gửi hoặc đã duyệt. Hãy liên hệ quản trị viên để mở lại.");
-        }
-        item.setTeacherName(teacher.getFullName());
-        item.setMaxWeeklyPeriods(request.maxWeeklyPeriods());
-        item.setUnavailableSlots(csv(request.unavailableSlots()));
-        item.setPreferredGradeLevels(csv(normalizeGrades(request.preferredGradeLevels())));
-        item.setNote(clean(request.note()));
-        item.setStatus("DRAFT");
-        item.setReviewNote(null);
-        item.setReviewedAt(null);
-        item.setReviewedBy(null);
-        item.setUpdatedAt(now);
-        return response(registrations.save(item));
-    }
-
-    @Transactional
-    public TeacherLoadResponse submitMine(String teacherId, String semesterId) {
-        structure.assertSemesterWritable(semesterId);
-        assertTeacherRegistrationOpen(semesterId);
-        TeacherLoadRegistration item = registrations.findByTeacherIdAndSemesterId(teacherId, semesterId)
-                .orElseThrow(() -> ApiException.badRequest("Hãy lưu đăng ký tải dạy trước khi gửi duyệt"));
-        if (!Set.of("DRAFT", "REJECTED").contains(item.getStatus())) {
-            throw ApiException.conflict("Đăng ký hiện không ở trạng thái có thể gửi duyệt");
-        }
-        item.setStatus("SUBMITTED");
-        item.setSubmittedAt(Instant.now());
-        item.setUpdatedAt(Instant.now());
-        return response(registrations.save(item));
-    }
-
-    @Transactional
-    public TeacherLoadResponse review(String id, ReviewTeacherLoadRequest request, String actorId) {
-        TeacherLoadRegistration item = registrations.findById(id)
-                .orElseThrow(() -> ApiException.notFound("Đăng ký tải dạy"));
-        structure.assertSemesterWritable(item.getSemesterId());
-        String status = request.status().trim().toUpperCase(Locale.ROOT);
-        if (!REVIEW_STATUSES.contains(status)) throw ApiException.badRequest("Trạng thái duyệt không hợp lệ");
-        if (Set.of("APPROVED", "REJECTED", "LOCKED").contains(status)
-                && !"SUBMITTED".equals(item.getStatus()) && !"APPROVED".equals(item.getStatus())) {
-            throw ApiException.conflict("Chỉ có thể duyệt đăng ký giáo viên đã gửi");
-        }
-        item.setStatus(status);
-        item.setReviewNote(clean(request.reviewNote()));
-        item.setReviewedAt(Instant.now());
-        item.setReviewedBy(actorId);
-        item.setUpdatedAt(Instant.now());
-        return response(registrations.save(item));
+    public SchedulingReadinessResponse schedulingReadiness(String semesterId) {
+        Semester semester = structure.getSemester(semesterId);
+        List<SchoolClass> classes = structure.listClasses(semester.getAcademicYearId(), null);
+        List<TeacherLoadResponse> teacherLoads = listRegistrations(semesterId);
+        CurriculumReadiness curriculum = curriculumReadiness(semesterId);
+        List<TeachingAssignment> semesterAssignments = assignments.findAll().stream()
+                .filter(item -> semesterId.equals(item.getSemesterId())).toList();
+        int expectedAssignments = classes.stream().mapToInt(schoolClass -> (int) listRequirements(semesterId).stream()
+                .filter(item -> normalizeGrade(schoolClass.getGradeLevel()).equals(item.getGradeLevel())).count()).sum();
+        int missingAssignments = Math.max(0, expectedAssignments - semesterAssignments.size());
+        int expectedSlots = classes.size() * TimetableRulePolicy.PERIODS_PER_WEEK;
+        int slotCount = registrations.countTimetableSlots(semesterId);
+        int roomCount = structure.listRooms().size();
+        int missingSpecialization = (int) teacherLoads.stream()
+                .filter(item -> item.mainSubject() == null || item.mainSubject().isBlank()).count();
+        int overLimit = (int) teacherLoads.stream().filter(item -> "OVER_LIMIT".equals(item.workloadStatus())).count();
+        long pendingRestrictions = restrictionRequests.countBySemesterIdAndStatus(semesterId, "PENDING")
+                + restrictionRequests.countBySemesterIdAndStatus(semesterId, "NEEDS_INFO");
+        long approvedRestrictions = restrictionRequests.countBySemesterIdAndStatus(semesterId, "APPROVED");
+        List<String> blocking = new ArrayList<>();
+        List<String> advisory = new ArrayList<>();
+        if (!curriculum.complete()) blocking.add("Định mức môn học chưa đầy đủ cho tất cả các khối");
+        if (missingSpecialization > 0) blocking.add(missingSpecialization + " giáo viên chưa được chuẩn hóa chuyên môn");
+        if (overLimit > 0) blocking.add(overLimit + " giáo viên đang vượt giới hạn tải được phê duyệt");
+        if (missingAssignments > 0) blocking.add(missingAssignments + " môn–lớp chưa có giáo viên phụ trách");
+        if (classes.isEmpty()) blocking.add("Học kỳ chưa có lớp để lập kế hoạch");
+        if (roomCount == 0) blocking.add("Chưa có phòng học sẵn sàng");
+        if (pendingRestrictions > 0) advisory.add(pendingRestrictions
+                + " đề nghị hạn chế lịch đang chờ xử lý; các đề nghị này chưa ràng buộc thuật toán");
+        if (approvedRestrictions > 0) advisory.add(approvedRestrictions
+                + " ngoại lệ lịch đã duyệt sẽ được áp dụng như ràng buộc cứng");
+        if (slotCount > 0 && slotCount < expectedSlots) advisory.add("Thời khóa biểu hiện có " + slotCount
+                + "/" + expectedSlots + " tiết; cần tạo bổ sung hoặc xây dựng lại");
+        return new SchedulingReadinessResponse(semesterId, curriculum.complete(), classes.size(), roomCount,
+                teacherLoads.size(), missingSpecialization, overLimit, pendingRestrictions, approvedRestrictions,
+                expectedAssignments, semesterAssignments.size(), missingAssignments, slotCount, expectedSlots,
+                curriculum.complete() && missingSpecialization == 0 && overLimit == 0 && missingAssignments == 0,
+                slotCount == expectedSlots, List.copyOf(blocking), List.copyOf(advisory));
     }
 
     @Transactional
@@ -248,20 +242,32 @@ public class WorkloadPlanningService {
                     + details + ". Hãy hoàn thiện bước 1 trước khi tiếp tục.");
         }
         if (required.isEmpty()) throw ApiException.badRequest("Chưa có định mức môn học cho học kỳ đã chọn");
-        List<TeacherLoadRegistration> approved = registrations.findBySemesterId(request.semesterId()).stream()
-                .filter(item -> Set.of("APPROVED", "LOCKED").contains(item.getStatus())).toList();
-        if (approved.isEmpty()) throw ApiException.badRequest("Chưa có đăng ký tải dạy nào được duyệt trong học kỳ");
+        users.activeUserIdsByRole("TEACHER").forEach(id -> ensureRegistration(id, request.semesterId()));
+        List<TeacherLoadRegistration> available = registrations.findBySemesterId(request.semesterId());
+        if (available.isEmpty()) throw ApiException.badRequest("Chưa có giáo viên đang hoạt động để phân công");
+        available.forEach(workloadPolicies::apply);
+        registrations.saveAll(available);
 
         Map<String, User> teacherById = new HashMap<>();
-        approved.forEach(item -> teacherById.put(item.getTeacherId(), requireActiveTeacher(item.getTeacherId())));
+        available.forEach(item -> teacherById.put(item.getTeacherId(), requireActiveTeacher(item.getTeacherId())));
         Map<String, Integer> projected = new HashMap<>();
-        approved.forEach(item -> projected.put(item.getTeacherId(),
+        available.forEach(item -> projected.put(item.getTeacherId(),
                 assignments.findByTeacherId(item.getTeacherId()).stream()
                         .filter(a -> request.semesterId().equals(a.getSemesterId()))
                         .mapToInt(TeachingAssignment::getWeeklyPeriods).sum()));
 
         List<AutoAssignmentItem> items = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
+        Map<String, TeacherLoadRegistration> approvedByTeacher = available.stream()
+                .collect(java.util.stream.Collectors.toMap(TeacherLoadRegistration::getTeacherId, item -> item));
+        projected.forEach((teacherId, assignedPeriods) -> {
+            TeacherLoadRegistration load = approvedByTeacher.get(teacherId);
+            if (load != null && assignedPeriods > load.getMaxWeeklyPeriods()) {
+                warnings.add(load.getTeacherName() + " đang được phân công " + assignedPeriods
+                        + "/" + load.getMaxWeeklyPeriods()
+                        + " tiết. Cần điều chỉnh phân công hoặc phê duyệt dạy vượt trước khi áp dụng phương án mới.");
+            }
+        });
         int existingCount = 0, proposedCount = 0, unassignedCount = 0;
         for (SchoolClass schoolClass : classes) {
             for (CurriculumRequirement requirement : required.stream()
@@ -270,27 +276,31 @@ public class WorkloadPlanningService {
                         schoolClass.getId(), requirement.getSubjectId(), request.semesterId());
                 if (existing.isPresent()) {
                     TeachingAssignment a = existing.get();
+                    TeacherLoadRegistration existingLoad = approvedByTeacher.get(a.getTeacherId());
+                    boolean overloaded = existingLoad == null
+                            || projected.getOrDefault(a.getTeacherId(), a.getWeeklyPeriods())
+                            > existingLoad.getMaxWeeklyPeriods();
                     items.add(new AutoAssignmentItem(schoolClass.getId(), schoolClass.getCode(),
                             schoolClass.getGradeLevel(), requirement.getSubjectId(), requirement.getSubjectName(),
                             a.getWeeklyPeriods(), a.getTeacherId(), a.getTeacherName(),
                             projected.getOrDefault(a.getTeacherId(), a.getWeeklyPeriods()),
-                            "EXISTING", "Giữ nguyên phân công hiện tại"));
+                            overloaded ? "OVERLOAD" : "EXISTING",
+                            overloaded ? "Phân công hiện tại vượt chỉ tiêu đã được phê duyệt"
+                                    : "Giữ nguyên phân công hiện tại"));
                     existingCount++;
                     continue;
                 }
-                TeacherLoadRegistration selected = approved.stream()
+                TeacherLoadRegistration selected = available.stream()
                         .filter(item -> teachingAssignments.teacherSupportsSubject(
                                 teacherById.get(item.getTeacherId()), requirement.getSubjectId()))
                         .filter(item -> projected.getOrDefault(item.getTeacherId(), 0)
                                 + requirement.getWeeklyPeriods() <= item.getMaxWeeklyPeriods())
-                        .min(Comparator.comparing((TeacherLoadRegistration item) ->
-                                        !containsCsv(item.getPreferredGradeLevels(),
-                                                normalizeGrade(schoolClass.getGradeLevel())))
-                                .thenComparingDouble(item -> projected.getOrDefault(item.getTeacherId(), 0)
+                        .min(Comparator.comparingDouble((TeacherLoadRegistration item) ->
+                                        projected.getOrDefault(item.getTeacherId(), 0)
                                         / (double) item.getMaxWeeklyPeriods())
                                 .thenComparing(TeacherLoadRegistration::getTeacherName)).orElse(null);
                 if (selected == null) {
-                    String message = "Thiếu giáo viên đúng chuyên môn hoặc không còn đủ tải dạy";
+                    String message = "Thiếu giáo viên đúng chuyên môn hoặc không còn chỉ tiêu theo định mức";
                     items.add(new AutoAssignmentItem(schoolClass.getId(), schoolClass.getCode(),
                             schoolClass.getGradeLevel(), requirement.getSubjectId(), requirement.getSubjectName(),
                             requirement.getWeeklyPeriods(), null, null, 0, "UNASSIGNED", message));
@@ -303,23 +313,33 @@ public class WorkloadPlanningService {
                 items.add(new AutoAssignmentItem(schoolClass.getId(), schoolClass.getCode(),
                         schoolClass.getGradeLevel(), requirement.getSubjectId(), requirement.getSubjectName(),
                         requirement.getWeeklyPeriods(), selected.getTeacherId(), selected.getTeacherName(),
-                        nextLoad, "PROPOSED", "Theo chuyên môn, tải dạy và khối ưu tiên"));
+                        nextLoad, "PROPOSED", "Theo chuyên môn và tải dạy hợp lệ"));
                 proposedCount++;
             }
         }
         boolean apply = Boolean.TRUE.equals(request.apply());
+        boolean hasExistingOverload = items.stream().anyMatch(item -> "OVERLOAD".equals(item.status()));
+        if (apply && hasExistingOverload) {
+            throw ApiException.conflict("Không thể áp dụng vì còn giáo viên đang vượt chỉ tiêu được phê duyệt. "
+                    + "Hãy điều chỉnh phân công hoặc phê duyệt dạy vượt trước.");
+        }
         if (apply && unassignedCount > 0 && !Boolean.TRUE.equals(request.allowPartial())) {
             throw ApiException.conflict("Còn " + unassignedCount
                     + " môn/lớp chưa tìm được giáo viên. Hãy bổ sung tải dạy trước khi áp dụng.");
         }
+        AssignmentVersionResponse publishedVersion = null;
         if (apply) {
             for (AutoAssignmentItem item : items) if ("PROPOSED".equals(item.status())) {
                 teachingAssignments.create(new SaveTeachingAssignmentRequest(item.classId(), item.subjectId(),
                         item.teacherId(), request.semesterId(), item.weeklyPeriods()), actorId);
             }
+            publishedVersion = assignmentVersions.publishCurrent(request.semesterId(),
+                    "Phân công tự động " + Instant.now(), warnings, actorId);
         }
         return new AutoAssignmentPlan(request.semesterId(), items.size(), existingCount,
-                proposedCount, unassignedCount, apply, items, warnings);
+                proposedCount, unassignedCount, apply, items, warnings,
+                publishedVersion == null ? null : publishedVersion.id(),
+                publishedVersion == null ? null : publishedVersion.versionNo());
     }
 
     private void recordHistory(CurriculumRequirement item, String action, Integer previousPeriods,
@@ -333,25 +353,108 @@ public class WorkloadPlanningService {
 
     private TeacherLoadResponse response(TeacherLoadRegistration item) {
         User teacher = users.getById(item.getTeacherId());
-        int assigned = assignments.findByTeacherId(item.getTeacherId()).stream()
-                .filter(a -> item.getSemesterId().equals(a.getSemesterId()))
-                .mapToInt(TeachingAssignment::getWeeklyPeriods).sum();
+        workloadPolicies.apply(item);
+        var snapshot = workloadPolicies.snapshot(item.getTeacherId(), item.getSemesterId());
+        List<TeachingAssignment> teacherAssignments = assignments.findByTeacherId(item.getTeacherId()).stream()
+                .filter(a -> item.getSemesterId().equals(a.getSemesterId())).toList();
+        int assigned = teacherAssignments.stream().mapToInt(TeachingAssignment::getWeeklyPeriods).sum();
+        String academicYearId = structure.getSemester(item.getSemesterId()).getAcademicYearId();
+        long actualInSemester = registrations.countActualTaughtPeriods(item.getTeacherId(), item.getSemesterId());
+        long actualInYear = registrations.countActualTaughtPeriodsInYear(item.getTeacherId(), academicYearId);
+        int targetBalance = assigned - snapshot.targetDirectWeeklyPeriods();
+        int overload = Math.max(0, assigned - item.getMaxWeeklyPeriods());
+        String workloadStatus = overload > 0 ? "OVER_LIMIT"
+                : targetBalance < 0 ? "UNDER_TARGET"
+                : targetBalance == 0 ? "ON_TARGET" : "APPROVED_OVERTIME";
         return new TeacherLoadResponse(item.getId(), item.getTeacherId(), teacher.getTeacherCode(),
                 item.getTeacherName(), teacher.getMainSubject(), item.getSemesterId(),
-                item.getMaxWeeklyPeriods(), assigned, Math.max(0, item.getMaxWeeklyPeriods() - assigned),
-                list(item.getUnavailableSlots()), list(item.getPreferredGradeLevels()),
+                snapshot.baseWeeklyPeriods(), snapshot.reductionWeeklyPeriods(),
+                snapshot.convertedWeeklyPeriods(), snapshot.targetDirectWeeklyPeriods(),
+                snapshot.approvedOvertimeWeeklyPeriods(), snapshot.legalWeeklyCap(),
+                snapshot.annualTargetPeriods(), snapshot.teachingWeeks(), snapshot.homeroomTeacher(),
+                snapshot.sourceDocument(),
+                item.getStandardWeeklyPeriods(), item.getMinWeeklyPeriods(), item.getMaxWeeklyPeriods(),
+                item.getMaxDailyPeriods(), item.getMaxConsecutivePeriods(),
+                assigned, Math.max(0, item.getMaxWeeklyPeriods() - assigned),
+                targetBalance, overload, workloadStatus,
+                actualInSemester, actualInYear, Math.max(0, snapshot.annualTargetPeriods() - actualInYear),
+                teacherAssignments.stream().map(TeachingAssignment::getClassCode).distinct().sorted().toList(),
+                teacherAssignments.stream().map(TeachingAssignment::getSubjectName).distinct().sorted().toList(),
+                restrictionRequests.countByTeacherIdAndSemesterIdAndStatus(item.getTeacherId(), item.getSemesterId(), "APPROVED"),
+                restrictionRequests.countByTeacherIdAndSemesterIdAndStatus(item.getTeacherId(), item.getSemesterId(), "PENDING")
+                        + restrictionRequests.countByTeacherIdAndSemesterIdAndStatus(item.getTeacherId(), item.getSemesterId(), "NEEDS_INFO"),
+                list(item.getUnavailableSlots()), list(item.getPreferredGradeLevels()), list(item.getPreferredDaysOff()),
                 item.getNote(), item.getReviewNote(), item.getStatus(), item.getSubmittedAt(),
-                item.getReviewedAt(), item.getReviewedBy(), item.getCreatedAt(), item.getUpdatedAt());
+                item.getReviewedAt(), item.getReviewedBy(), item.getExtendedClosesOn(),
+                item.getCreatedAt(), item.getUpdatedAt());
     }
 
-    private void assertTeacherRegistrationOpen(String semesterId) {
-        var window = teacherWorkspace.loadRegistrationWindow(semesterId);
-        if (!window.open()) {
-            String period = window.opensOn() == null || window.closesOn() == null
-                    ? "chưa được cấu hình"
-                    : "từ " + window.opensOn() + " đến " + window.closesOn();
-            throw ApiException.conflict("Cổng đăng ký tải dạy đang đóng. Thời gian đăng ký " + period + ".");
-        }
+    public WorkloadPolicyResponse workloadPolicy(String academicYearId) {
+        return policyResponse(workloadPolicies.policyFor(academicYearId));
+    }
+
+    @Transactional
+    public WorkloadPolicyResponse saveWorkloadPolicy(SaveWorkloadPolicyRequest request, String actorId) {
+        TeacherWorkloadPolicy saved = workloadPolicies.savePolicy(request.academicYearId(), request.teachingWeeks(),
+                request.effectiveFrom(), request.effectiveTo(), actorId);
+        refreshYearRegistrations(request.academicYearId());
+        return policyResponse(saved);
+    }
+
+    public List<WorkloadAdjustmentResponse> workloadAdjustments(String academicYearId, String teacherId) {
+        return workloadPolicies.listAdjustments(academicYearId, teacherId).stream()
+                .map(WorkloadPlanningService::adjustmentResponse).toList();
+    }
+
+    @Transactional
+    public WorkloadAdjustmentResponse saveWorkloadAdjustment(SaveWorkloadAdjustmentRequest request,
+                                                             String actorId) {
+        requireActiveTeacher(request.teacherId());
+        TeacherWorkloadAdjustment saved = workloadPolicies.saveAdjustment(request.teacherId(),
+                request.academicYearId(), request.category(), request.dutyType(), request.title(),
+                request.weeklyPeriods(), request.effectiveFrom(), request.effectiveTo(),
+                request.reason(), actorId);
+        refreshYearRegistrations(request.academicYearId());
+        return adjustmentResponse(saved);
+    }
+
+    @Transactional
+    public WorkloadAdjustmentResponse revokeWorkloadAdjustment(String id,
+                                                               RevokeWorkloadAdjustmentRequest request,
+                                                               String actorId) {
+        TeacherWorkloadAdjustment saved = workloadPolicies.revokeAdjustment(id, request.reason(), actorId);
+        refreshYearRegistrations(saved.getAcademicYearId());
+        return adjustmentResponse(saved);
+    }
+
+    private TeacherLoadRegistration ensureRegistration(String teacherId, String semesterId) {
+        structure.assertSemesterWritable(semesterId);
+        User teacher = requireActiveTeacher(teacherId);
+        return workloadPolicies.ensureRegistration(teacherId, teacher.getFullName(), semesterId);
+    }
+
+    private void refreshYearRegistrations(String academicYearId) {
+        Set<String> semesterIds = structure.listSemesters(academicYearId).stream()
+                .map(Semester::getId).collect(java.util.stream.Collectors.toSet());
+        List<TeacherLoadRegistration> rows = registrations.findAll().stream()
+                .filter(item -> semesterIds.contains(item.getSemesterId())).toList();
+        rows.forEach(workloadPolicies::apply);
+        registrations.saveAll(rows);
+    }
+
+    private static WorkloadPolicyResponse policyResponse(TeacherWorkloadPolicy item) {
+        return new WorkloadPolicyResponse(item.getId(), item.getAcademicYearId(), item.getSchoolLevel(),
+                item.getBaseWeeklyPeriods(), item.getTeachingWeeks(), item.getMaxOvertimePercent(),
+                item.getHomeroomReductionPeriods(), item.getEffectiveFrom(), item.getEffectiveTo(),
+                item.getSourceDocument(), item.isActive(), item.getConfiguredBy(), item.getUpdatedAt());
+    }
+
+    private static WorkloadAdjustmentResponse adjustmentResponse(TeacherWorkloadAdjustment item) {
+        return new WorkloadAdjustmentResponse(item.getId(), item.getTeacherId(), item.getAcademicYearId(),
+                item.getCategory(), item.getDutyType(), item.getTitle(), item.getWeeklyPeriods(),
+                item.getEffectiveFrom(), item.getEffectiveTo(), item.getReason(), item.getStatus(),
+                item.getApprovedBy(), item.getApprovedAt(), item.getRevokedBy(), item.getRevokedAt(),
+                item.getRevokeReason(), item.getCreatedAt(), item.getUpdatedAt());
     }
 
     private User requireActiveTeacher(String id) {
@@ -368,20 +471,6 @@ public class WorkloadPlanningService {
         return result.startsWith("K") ? result : "K" + result;
     }
 
-    private static List<String> normalizeGrades(List<String> values) {
-        return values == null ? List.of() : values.stream()
-                .map(WorkloadPlanningService::normalizeGrade).distinct().toList();
-    }
-
-    private static String clean(String value) {
-        return value == null || value.isBlank() ? null : value.trim();
-    }
-
-    private static String csv(List<String> values) {
-        if (values == null || values.isEmpty()) return null;
-        return String.join(",", new LinkedHashSet<>(values.stream().map(String::trim)
-                .filter(value -> !value.isBlank()).toList()));
-    }
 
     private static List<String> list(String value) {
         return value == null || value.isBlank() ? List.of()
