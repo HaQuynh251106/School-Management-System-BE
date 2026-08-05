@@ -37,6 +37,23 @@ public class User {
     @Column(nullable = false)
     private String status;
 
+    @Column(nullable = false)
+    private boolean passwordChangeRequired;
+
+    private Instant passwordChangedAt;
+
+    @Column(nullable = false)
+    private int sessionVersion;
+
+    private Instant deletedAt;
+    private String deletedBy;
+
+    @Column(length = 1000)
+    private String deleteReason;
+
+    private Instant restoredAt;
+    private String restoredBy;
+
     // Teacher
     private String teacherCode;
     private String mainSubject;
@@ -47,4 +64,5 @@ public class User {
     private String className;
 
     private Instant createdAt;
+    private Instant updatedAt;
 }

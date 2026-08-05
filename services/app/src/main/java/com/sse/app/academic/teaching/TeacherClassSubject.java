@@ -32,6 +32,12 @@ public class TeacherClassSubject {
     @Column(nullable = false)
     private String semesterId;
 
+    /** Planned periods for this class/subject in one teaching week. */
+    private Integer weeklyPeriods;
+
+    /** Periods per week that must use the subject's specialized room type. */
+    private Integer specializedRoomPeriods;
+
     @Column(nullable = false)
     private String status;
 

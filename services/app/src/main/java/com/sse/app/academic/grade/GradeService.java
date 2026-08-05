@@ -8,6 +8,7 @@ import com.sse.app.academic.timetable.TimetableService;
 import com.sse.app.academic.teaching.TeachingAssignmentService;
 import com.sse.app.event.DomainEventPublisher;
 import com.sse.app.identity.UserService;
+import com.sse.app.report.AcademicResultLockService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -16,6 +17,9 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.Comparator;
+import java.util.stream.Collectors;
 
 /** B4: Quản lý điểm (nhập/sửa có log — flowchart 2.6) + A4: cấu hình loại điểm. */
 @Service
@@ -29,11 +33,13 @@ public class GradeService {
     private final TeachingAssignmentService teachingAssignments;
     private final UserService users;
     private final DomainEventPublisher events;
+    private final AcademicResultLockService resultLocks;
 
     public GradeService(GradeRepository grades, GradeChangeLogRepository logs,
                         ExamCategoryRepository categories, StructureService structure,
                         TimetableService timetable, TeachingAssignmentService teachingAssignments,
-                        UserService users, DomainEventPublisher events) {
+                        UserService users, DomainEventPublisher events,
+                        AcademicResultLockService resultLocks) {
         this.grades = grades;
         this.logs = logs;
         this.categories = categories;
@@ -42,6 +48,7 @@ public class GradeService {
         this.teachingAssignments = teachingAssignments;
         this.users = users;
         this.events = events;
+        this.resultLocks = resultLocks;
     }
 
     public List<Grade> list(String studentId, String subjectId, String semesterId,
@@ -67,8 +74,9 @@ public class GradeService {
 
         List<Grade> result = new ArrayList<>();
         for (Entry e : req.entries()) {
+            String classId = users.dtoById(e.studentId()).classId();
+            resultLocks.assertGradeWritable(classId, req.semesterId());
             if (enforceTeacherAssignment) {
-                String classId = users.dtoById(e.studentId()).classId();
                 if (!isTeacherAssigned(changedBy, classId, req.subjectId(), req.semesterId())) {
                     throw ApiException.forbidden("Giáo viên chỉ được nhập điểm cho lớp/môn được phân công");
                 }
@@ -145,6 +153,53 @@ public class GradeService {
 
     private boolean equalsScore(Double a, Double b) {
         return a != null && b != null && Math.abs(a - b) < 1e-9;
+    }
+
+    public GradeCompletenessResponse completeness(
+            String classId, String subjectId, String semesterId,
+            String actorId, boolean enforceTeacherAssignment) {
+        if (classId == null || classId.isBlank()
+                || subjectId == null || subjectId.isBlank()
+                || semesterId == null || semesterId.isBlank()) {
+            throw ApiException.badRequest(
+                    "Bắt buộc classId, subjectId và semesterId");
+        }
+        if (enforceTeacherAssignment
+                && !isTeacherAssigned(actorId, classId, subjectId, semesterId)) {
+            throw ApiException.forbidden(
+                    "Giáo viên chưa được phân công lớp/môn/học kỳ này");
+        }
+        List<String> expected = categories.findAll().stream()
+                .map(ExamCategory::getCode)
+                .filter(code -> code != null && !code.isBlank())
+                .distinct().sorted().toList();
+        Map<String, Set<String>> enteredByStudent =
+                grades.findBySubjectIdAndSemesterId(subjectId, semesterId).stream()
+                        .filter(grade -> grade.getStudentId() != null)
+                        .collect(Collectors.groupingBy(Grade::getStudentId,
+                                Collectors.mapping(Grade::getCategory,
+                                        Collectors.toSet())));
+        List<GradeCompletenessStudent> rows = users
+                .list("STUDENT", null, classId).stream()
+                .sorted(Comparator.comparing(
+                        com.sse.app.identity.UserDto::studentCode,
+                        Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER)))
+                .map(student -> {
+                    Set<String> entered = enteredByStudent.getOrDefault(
+                            student.id(), Set.of());
+                    List<String> missing = expected.stream()
+                            .filter(code -> !entered.contains(code)).toList();
+                    return new GradeCompletenessStudent(
+                            student.id(), student.studentCode(),
+                            student.fullName(),
+                            expected.size() - missing.size(),
+                            expected.size(), missing, missing.isEmpty());
+                }).toList();
+        int complete = (int) rows.stream()
+                .filter(GradeCompletenessStudent::complete).count();
+        return new GradeCompletenessResponse(
+                classId, subjectId, semesterId, rows.size(), complete,
+                rows.size() - complete, rows, Instant.now());
     }
 
     private boolean isTeacherAssigned(String teacherId, String classId, String subjectId, String semesterId) {

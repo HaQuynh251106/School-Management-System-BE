@@ -12,7 +12,9 @@ import java.time.LocalDate;
 public class SchoolHoliday {
     @Id
     private String id;
+    private String academicYearId;
     private LocalDate date;
+    private LocalDate endDate;
     private String name;
     private String description;
 }

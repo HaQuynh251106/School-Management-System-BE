@@ -25,24 +25,30 @@ public class JwtService {
     public long accessTtlSeconds()  { return props.getAccessTtlSeconds(); }
     public long refreshTtlSeconds() { return props.getRefreshTtlSeconds(); }
 
-    public String createAccessToken(String userId, String username, String role) {
+    public String createAccessToken(String userId, String username, String role,
+                                    int sessionVersion, String sessionId) {
         long now = System.currentTimeMillis();
         return Jwts.builder()
                 .id(UUID.randomUUID().toString())
                 .subject(userId)
-                .claims(Map.of("username", username, "role", role, "type", "access"))
+                .claims(Map.of(
+                        "username", username,
+                        "role", role,
+                        "type", "access",
+                        "sv", sessionVersion,
+                        "sid", sessionId))
                 .issuedAt(new Date(now))
                 .expiration(new Date(now + props.getAccessTtlSeconds() * 1000))
                 .signWith(key)
                 .compact();
     }
 
-    public String createRefreshToken(String userId) {
+    public String createRefreshToken(String userId, int sessionVersion, String sessionId) {
         long now = System.currentTimeMillis();
         return Jwts.builder()
-                .id(UUID.randomUUID().toString())
+                .id(sessionId)
                 .subject(userId)
-                .claims(Map.of("type", "refresh"))
+                .claims(Map.of("type", "refresh", "sv", sessionVersion, "sid", sessionId))
                 .issuedAt(new Date(now))
                 .expiration(new Date(now + props.getRefreshTtlSeconds() * 1000))
                 .signWith(key)

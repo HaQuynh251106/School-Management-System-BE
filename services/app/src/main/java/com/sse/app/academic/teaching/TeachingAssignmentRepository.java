@@ -8,6 +8,7 @@ import java.util.Optional;
 public interface TeachingAssignmentRepository extends JpaRepository<TeacherClassSubject, String> {
     List<TeacherClassSubject> findByTeacherIdAndStatus(String teacherId, String status);
     List<TeacherClassSubject> findByClassIdAndStatus(String classId, String status);
+    List<TeacherClassSubject> findBySemesterIdAndStatus(String semesterId, String status);
     Optional<TeacherClassSubject> findByClassIdAndSubjectIdAndSemesterIdAndStatus(
             String classId, String subjectId, String semesterId, String status);
     boolean existsByTeacherIdAndClassIdAndSubjectIdAndSemesterIdAndStatus(

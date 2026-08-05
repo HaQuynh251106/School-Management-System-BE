@@ -36,4 +36,7 @@ public class Assignment {
     private String attachmentContentType;
     private Long attachmentSizeBytes;
     private Instant createdAt;
+    private Instant updatedAt;
+    private Instant lastReminderAt;
+    private Integer reminderCount;
 }

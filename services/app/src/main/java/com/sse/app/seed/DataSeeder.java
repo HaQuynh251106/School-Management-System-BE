@@ -1,9 +1,5 @@
 package com.sse.app.seed;
 
-import com.sse.app.academic.assignment.AssignmentService;
-import com.sse.app.academic.assignment.AssignmentDtos.CreateAssignmentRequest;
-import com.sse.app.academic.assignment.AssignmentDtos.GradeSubmissionRequest;
-import com.sse.app.academic.assignment.AssignmentDtos.SubmitRequest;
 import com.sse.app.academic.attendance.AttendanceRecord;
 import com.sse.app.academic.attendance.AttendanceService;
 import com.sse.app.academic.grade.ExamCategory;
@@ -18,7 +14,6 @@ import com.sse.app.audit.AuditLog;
 import com.sse.app.audit.AuditService;
 import com.sse.app.chat.ChatMessage;
 import com.sse.app.chat.ChatService;
-import com.sse.app.finance.FinanceService;
 import com.sse.app.identity.ParentStudent;
 import com.sse.app.identity.ParentStudentRepository;
 import com.sse.app.identity.User;
@@ -31,6 +26,8 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.annotation.Order;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.Instant;
@@ -50,6 +47,7 @@ import java.util.List;
 public class DataSeeder {
     private static final String YEAR_ID = "ay-2026";
     private static final String SEMESTER_1 = "sm-2026-1";
+    private static final String FINANCE_ADMIN_USERNAME = "admin.finance";
 
     private static final List<TeacherSeed> TEACHERS = List.of(
             new TeacherSeed("u-t-math", "gv.toan", "Nguyen Thi Mai An", "GV001", "MATH", "Toan"),
@@ -86,37 +84,44 @@ public class DataSeeder {
     );
 
     @Bean
+    @Order(10)
     ApplicationRunner seedRunner(UserRepository users, ParentStudentRepository relations,
                                  PasswordEncoder encoder, StructureService structure,
                                  TeachingAssignmentRepository teachingAssignments,
                                  TimetableService timetable, GradeService grades,
-                                 AttendanceService attendance, AssignmentService assignments,
-                                 NotificationService notifications, AuditService audit,
-                                 ChatService chat, FinanceService finance) {
+                                 AttendanceService attendance, NotificationService notifications, AuditService audit,
+                                 ChatService chat,
+                                 @Value("${sse.seed.dataset:baseline}") String dataset) {
         return args -> {
+            if (!"demo".equalsIgnoreCase(dataset) && !"scenario".equalsIgnoreCase(dataset)) {
+                log.info("[seed] Dataset '{}' keeps reference data only.", dataset);
+                return;
+            }
             if (users.count() > 0) {
-                log.info("[seed] Existing database detected; skipping seed.");
+                ensureFinanceApprovalAdmin(users, encoder);
+                log.info("[seed] Existing database detected; base demo seed already present.");
                 return;
             }
             log.info("[seed] Creating fresh high-school demonstration data...");
-            seedUsers(users, relations, encoder);
+            seedStaff(users, encoder);
             seedStructure(structure);
+            seedStudentsAndParents(users, relations, encoder);
             seedTeachingAssignments(teachingAssignments);
             seedTimetable(timetable);
             seedGrades(grades);
             seedAttendance(attendance);
-            seedAssignments(assignments);
             seedNotifications(notifications);
             seedAudit(audit);
             seedChat(chat);
-            finance.seedDefaultPeriodAndInvoices();
             log.info("[seed] Complete: {} users, grades 10-12 only; grade 10 has no students.", users.count());
         };
     }
 
-    private void seedUsers(UserRepository users, ParentStudentRepository relations, PasswordEncoder encoder) {
+    private void seedStaff(UserRepository users, PasswordEncoder encoder) {
         users.save(base("u-admin-1", "admin", encoder.encode("admin@123"), "School Administrator",
                 "admin@demo.sse.local", "0900000001", "ADMIN"));
+        users.save(base("u-admin-finance", FINANCE_ADMIN_USERNAME, encoder.encode("admin2@123"),
+                "Finance Approver", "finance.admin@demo.sse.local", "0900000002", "ADMIN"));
         int teacherNumber = 1;
         for (TeacherSeed teacher : TEACHERS) {
             users.save(teacher(teacher.id(), teacher.username(), encoder.encode("teacher@123"), teacher.name(),
@@ -124,6 +129,12 @@ public class DataSeeder {
                     teacher.code(), teacher.subjectName()));
             teacherNumber++;
         }
+    }
+
+    private void seedStudentsAndParents(
+            UserRepository users,
+            ParentStudentRepository relations,
+            PasswordEncoder encoder) {
         int studentNumber = 1;
         for (StudentSeed student : STUDENTS) {
             users.save(student(student.id(), student.username(), encoder.encode("student@123"), student.name(),
@@ -156,15 +167,22 @@ public class DataSeeder {
         }
     }
 
+    private void ensureFinanceApprovalAdmin(UserRepository users, PasswordEncoder encoder) {
+        if (users.existsByUsername(FINANCE_ADMIN_USERNAME)) return;
+        users.save(base("u-admin-finance", FINANCE_ADMIN_USERNAME, encoder.encode("admin2@123"),
+                "Finance Approver", "finance.admin@demo.sse.local", "0900000002", "ADMIN"));
+        log.info("[seed] Added finance approval Admin account {}.", FINANCE_ADMIN_USERNAME);
+    }
+
     private void seedStructure(StructureService structure) {
         LocalDate now = LocalDate.now();
         AcademicYear year = AcademicYear.builder().id(YEAR_ID).code("2026-2027").name("Nam hoc 2026-2027")
-                .startDate(LocalDate.of(2026, 9, 5)).endDate(LocalDate.of(2027, 5, 31)).status("ACTIVE").build();
+                .startDate(LocalDate.of(2026, 9, 1)).endDate(LocalDate.of(2027, 6, 30)).status("ACTIVE").build();
         List<Semester> semesters = List.of(
                 Semester.builder().id(SEMESTER_1).academicYearId(YEAR_ID).code("HK1").name("Hoc ky 1")
-                        .sequence(1).startDate(LocalDate.of(2026, 9, 5)).endDate(LocalDate.of(2027, 1, 15)).status("ACTIVE").build(),
+                        .sequence(1).startDate(LocalDate.of(2026, 9, 1)).endDate(LocalDate.of(2027, 1, 31)).status("ACTIVE").build(),
                 Semester.builder().id("sm-2026-2").academicYearId(YEAR_ID).code("HK2").name("Hoc ky 2")
-                        .sequence(2).startDate(LocalDate.of(2027, 1, 20)).endDate(LocalDate.of(2027, 5, 31)).status("PLANNED").build()
+                        .sequence(2).startDate(LocalDate.of(2027, 2, 1)).endDate(LocalDate.of(2027, 6, 30)).status("ACTIVE").build()
         );
         List<SchoolClass> classes = new ArrayList<>();
         int classIndex = 0;
@@ -179,14 +197,17 @@ public class DataSeeder {
             }
         }
         List<Subject> subjects = TEACHERS.stream().map(t -> Subject.builder().id("sj-" + t.subjectCode().toLowerCase())
-                .code(t.subjectCode()).name(t.subjectName()).build()).toList();
+                .code(t.subjectCode()).name(t.subjectName())
+                .coefficient(1).active(true).build()).toList();
         List<Room> rooms = List.of(
                 room("rm-101", "P101", "Phong hoc 101", 45), room("rm-102", "P102", "Phong hoc 102", 45),
                 room("rm-201", "P201", "Phong hoc 201", 45), room("rm-202", "P202", "Phong hoc 202", 45),
                 room("rm-lab", "LAB1", "Phong thi nghiem", 35), room("rm-it", "IT1", "Phong tin hoc", 40)
         );
         structure.seedAll(List.of(year), semesters, classes, subjects, rooms, List.of(
-                SchoolHoliday.builder().id("hol-national").date(now.plusDays(30)).name("Ngay nghi mau").build()));
+                SchoolHoliday.builder().id("hol-national").academicYearId(YEAR_ID)
+                        .date(now.plusDays(30)).endDate(now.plusDays(30))
+                        .name("Ngay nghi mau").build()));
     }
 
     private void seedTeachingAssignments(TeachingAssignmentRepository repository) {
@@ -265,19 +286,6 @@ public class DataSeeder {
         attendance.seed(rows);
     }
 
-    private void seedAssignments(AssignmentService assignments) {
-        assignments.create(new CreateAssignmentRequest("asg-11a1-math", "c-11a1", "sj-math", "Luyen tap ham so",
-                "Hoan thanh bai tap chuong ham so.", Instant.now().plusSeconds(5 * 86_400L), false, null, true, null), "u-t-math");
-        assignments.create(new CreateAssignmentRequest("asg-11a2-eng", "c-11a2", "sj-eng", "English presentation",
-                "Prepare a short presentation.", Instant.now().plusSeconds(7 * 86_400L), true, null, true, null), "u-t-eng");
-        assignments.create(new CreateAssignmentRequest("asg-12a1-lit", "c-12a1", "sj-lit", "Phan tich tac pham",
-                "Write a short analysis.", Instant.now().plusSeconds(4 * 86_400L), false, null, true, null), "u-t-lit");
-        assignments.submit("asg-11a1-math", "u-s-minh", new SubmitRequest("Bai lam cua Nguyen Gia Minh", null, null));
-        assignments.submit("asg-11a1-math", "u-s-linh", new SubmitRequest("Bai lam cua Tran Khanh Linh", null, null));
-        assignments.grade(assignments.submissionsOf("asg-11a1-math").get(0).getId(),
-                new GradeSubmissionRequest(8.4, "Lam bai tot.", null), "u-t-math");
-    }
-
     private void seedNotifications(NotificationService notifications) {
         notifications.seed(List.of(
                 Announcement.builder().id("an-welcome").title("Thong bao nam hoc moi")
@@ -325,7 +333,8 @@ public class DataSeeder {
     }
 
     private static Room room(String id, String code, String name, int capacity) {
-        return Room.builder().id(id).code(code).name(name).capacity(capacity).build();
+        return Room.builder().id(id).code(code).name(name)
+                .capacity(capacity).active(true).build();
     }
 
     private static ExamCategory category(String id, String code, String name, double weight) {

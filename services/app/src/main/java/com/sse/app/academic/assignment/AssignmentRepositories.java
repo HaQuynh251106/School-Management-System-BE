@@ -15,3 +15,15 @@ interface AssignmentSubmissionRepository extends JpaRepository<AssignmentSubmiss
     List<AssignmentSubmission> findByStudentId(String studentId);
     Optional<AssignmentSubmission> findByAssignmentIdAndStudentId(String assignmentId, String studentId);
 }
+
+interface AssignmentSubmissionVersionRepository
+        extends JpaRepository<AssignmentSubmissionVersion, String> {
+    List<AssignmentSubmissionVersion> findBySubmissionIdOrderByVersionNoDesc(String submissionId);
+}
+
+interface SubmissionResubmissionRequestRepository
+        extends JpaRepository<SubmissionResubmissionRequest, String> {
+    List<SubmissionResubmissionRequest> findBySubmissionIdOrderByRequestedAtDesc(String submissionId);
+    Optional<SubmissionResubmissionRequest> findFirstBySubmissionIdAndStatusOrderByRequestedAtDesc(
+            String submissionId, String status);
+}

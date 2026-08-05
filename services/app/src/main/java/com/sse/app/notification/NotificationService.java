@@ -9,6 +9,7 @@ import com.sse.app.notification.NotificationDtos.*;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.Locale;
 import java.util.List;
 import java.util.Map;
 
@@ -16,21 +17,26 @@ import java.util.Map;
 @Service
 public class NotificationService {
 
+    private static final List<String> FINANCE_NOTIFICATION_TYPES = List.of("INVOICE", "PAYMENT");
+
     private final NotificationRepository notifications;
     private final NotificationTemplateRepository templates;
     private final NotificationDeliveryLogRepository deliveryLogs;
     private final AnnouncementRepository announcements;
+    private final UserNotificationPreferenceRepository preferences;
     private final UserService users;
 
     public NotificationService(NotificationRepository notifications,
                                NotificationTemplateRepository templates,
                                NotificationDeliveryLogRepository deliveryLogs,
                                AnnouncementRepository announcements,
+                               UserNotificationPreferenceRepository preferences,
                                UserService users) {
         this.notifications = notifications;
         this.templates = templates;
         this.deliveryLogs = deliveryLogs;
         this.announcements = announcements;
+        this.preferences = preferences;
         this.users = users;
     }
 
@@ -38,11 +44,15 @@ public class NotificationService {
 
     public Notification notifyUser(String recipientId, String type, String title, String body,
                                    String refType, String refId) {
+        if (!isEnabled(recipientId, type, "IN_APP")) return null;
+        String groupKey = groupKey(type);
         Notification n = notifications.save(Notification.builder()
                 .id(Ids.gen("noti")).recipientId(recipientId).type(type)
                 .channel("IN_APP")
                 .title(title).body(body).read(false)
                 .refType(refType).refId(refId)
+                .deepLink(deepLink(refType, refId))
+                .groupKey(groupKey)
                 .status("SENT").attemptCount(1).sentAt(Instant.now())
                 .createdAt(Instant.now()).build());
         deliveryLogs.save(NotificationDeliveryLog.builder()
@@ -85,6 +95,68 @@ public class NotificationService {
             case "academic.timetable.changed" -> notifyClassStudentsAndParents(
                     asString(p.get("classId")), "TIMETABLE", "Thời khóa biểu được cập nhật",
                     "Thời khóa biểu lớp đã có thay đổi.", "TIMETABLE", event.entityId());
+            case "academic.timetable.published" -> {
+                String classId = asString(p.get("classId"));
+                String body = asString(p.get("message"));
+                notifyClassStudentsAndParents(classId, "TIMETABLE",
+                        "Thời khóa biểu mới", body,
+                        "TIMETABLE", event.entityId());
+                asStringList(p.get("teacherIds")).forEach(teacherId ->
+                        notifyUser(teacherId, "TIMETABLE",
+                                "Lịch giảng dạy mới", body,
+                                "TIMETABLE", event.entityId()));
+            }
+            case "academic.timetable.makeup_approved" -> {
+                String classId = asString(p.get("classId"));
+                String body = asString(p.get("message"));
+                notifyClassStudentsAndParents(classId, "TIMETABLE",
+                        "Lịch học bù", body,
+                        "TIMETABLE", event.entityId());
+                asStringList(p.get("teacherIds")).forEach(teacherId ->
+                        notifyUser(teacherId, "TIMETABLE",
+                                "Lịch dạy bù", body,
+                                "TIMETABLE", event.entityId()));
+            }
+            case "academic.exam_schedule.published" -> {
+                String periodName = asString(p.get("periodName"));
+                String body = "Lịch thi " + periodName
+                        + " đã được phát hành. Vui lòng mở mục Lịch thi để xem ngày, giờ và phòng thi.";
+                asStringList(p.get("studentIds")).forEach(studentId -> {
+                    notifyUser(studentId, "EXAM", "Đã có lịch thi mới", body,
+                            "EXAM_PERIOD", event.entityId());
+                    notifyParentsOfStudent(studentId, "EXAM", "Đã có lịch thi mới", body,
+                            "EXAM_PERIOD", event.entityId());
+                });
+                asStringList(p.get("teacherIds")).forEach(teacherId ->
+                        notifyUser(teacherId, "EXAM", "Lịch coi thi đã được phân công", body,
+                                "EXAM_PERIOD", event.entityId()));
+            }
+            case "academic.education_plan.published" -> {
+                String body = asString(p.get("message"));
+                asStringList(p.get("classIds")).forEach(classId ->
+                        notifyClassStudentsAndParents(classId, "ACADEMIC_PLAN",
+                                "Kế hoạch giáo dục mới", body,
+                                "EDUCATION_PLAN", event.entityId()));
+            }
+            case "academic.education_plan.submitted" -> users.list("ADMIN", null, null)
+                    .forEach(admin -> notifyUser(admin.id(), "ACADEMIC_PLAN",
+                            "Kế hoạch giáo dục chờ rà soát", asString(p.get("message")),
+                            "EDUCATION_PLAN", event.entityId()));
+            case "academic.education_plan.revision_required" -> notifyUser(
+                    asString(p.get("targetUserId")), "ACADEMIC_PLAN",
+                    "Kế hoạch giáo dục cần chỉnh sửa", asString(p.get("message")),
+                    "EDUCATION_PLAN", event.entityId());
+            case "academic.education_plan.approved" -> notifyUser(
+                    asString(p.get("targetUserId")), "ACADEMIC_PLAN",
+                    "Kế hoạch giáo dục đã được phê duyệt", asString(p.get("message")),
+                    "EDUCATION_PLAN", event.entityId());
+            case "academic.teacher_specialty.changed" -> notifyUser(
+                    asString(p.get("teacherId")),
+                    "ACADEMIC_PLAN",
+                    "Chuyên môn giảng dạy đã được cập nhật",
+                    asString(p.get("message")),
+                    "TEACHER_SPECIALTY",
+                    event.entityId());
             case "academic.attendance.absent" -> notifyParentsOfStudent(
                     asString(p.get("studentId")),
                     "ATTENDANCE_ALERT",
@@ -92,6 +164,24 @@ public class NotificationService {
                     asString(p.get("message")),
                     "ATTENDANCE",
                     event.entityId());
+            case "academic.attendance.repeated_violation" -> {
+                String studentId = asString(p.get("studentId"));
+                notifyUser(studentId, "ATTENDANCE_ALERT",
+                        "Cảnh báo chuyên cần lặp lại", asString(p.get("message")),
+                        "ATTENDANCE", event.entityId());
+                notifyParentsOfStudent(studentId, "ATTENDANCE_ALERT",
+                        "Cảnh báo chuyên cần lặp lại", asString(p.get("message")),
+                        "ATTENDANCE", event.entityId());
+            }
+            case "academic.attendance.excuse_reviewed" -> {
+                String studentId = asString(p.get("studentId"));
+                notifyUser(studentId, "ATTENDANCE_ALERT",
+                        "Kết quả đơn xin phép", asString(p.get("message")),
+                        "ATTENDANCE", event.entityId());
+                notifyParentsOfStudent(studentId, "ATTENDANCE_ALERT",
+                        "Kết quả đơn xin phép", asString(p.get("message")),
+                        "ATTENDANCE", event.entityId());
+            }
             case "academic.grade.published", "academic.grade.changed" -> {
                 String studentId = asString(p.get("studentId"));
                 String title = "academic.grade.changed".equals(event.name())
@@ -112,12 +202,88 @@ public class NotificationService {
                 notifyUser(studentId, "ASSIGNMENT", "Bài tập đã được chấm", body, "SUBMISSION", event.entityId());
                 notifyParentsOfStudent(studentId, "ASSIGNMENT", "Bài tập đã được chấm", body, "SUBMISSION", event.entityId());
             }
-            case "finance.invoice.issued" -> notifyParentsOfStudent(
-                    asString(p.get("studentId")), "INVOICE", "Có hóa đơn mới",
-                    asString(p.get("message")), "INVOICE", event.entityId());
+            case "academic.submission.resubmission_requested" -> {
+                String studentId = asString(p.get("studentId"));
+                String body = asString(p.get("message"));
+                notifyUser(studentId, "ASSIGNMENT", "Yêu cầu nộp lại bài",
+                        body, "SUBMISSION", event.entityId());
+                notifyParentsOfStudent(studentId, "ASSIGNMENT",
+                        "Giáo viên yêu cầu nộp lại bài", body,
+                        "SUBMISSION", event.entityId());
+            }
+            case "academic.assignment.deadline_reminder" -> {
+                String studentId = asString(p.get("studentId"));
+                String body = asString(p.get("message"));
+                notifyUser(studentId, "ASSIGNMENT", "Sắp đến hạn nộp bài",
+                        body, "ASSIGNMENT", event.entityId());
+                notifyParentsOfStudent(studentId, "ASSIGNMENT",
+                        "Con chưa nộp bài tập", body,
+                        "ASSIGNMENT", event.entityId());
+            }
+            case "academic.year_result.published" -> {
+                String studentId = asString(p.get("studentId"));
+                String body = asString(p.get("message"));
+                notifyUser(studentId, "YEAR_RESULT", "Đã có kết quả cuối năm",
+                        body, "YEAR_RESULT", event.entityId());
+                notifyParentsOfStudent(studentId, "YEAR_RESULT", "Đã có kết quả cuối năm",
+                        body, "YEAR_RESULT", event.entityId());
+            }
+            case "academic.year_result.withdrawn" -> {
+                String studentId = asString(p.get("studentId"));
+                String body = asString(p.get("message"));
+                notifyUser(studentId, "YEAR_RESULT", "Kết quả cuối năm đang được rà soát",
+                        body, "YEAR_RESULT", event.entityId());
+                notifyParentsOfStudent(studentId, "YEAR_RESULT",
+                        "Kết quả cuối năm đang được rà soát",
+                        body, "YEAR_RESULT", event.entityId());
+            }
+            case "finance.invoice.issued" -> {
+                String studentId = asString(p.get("studentId"));
+                String body = "Vui lòng vào Học phí để xem chi tiết và thanh toán.";
+                notifyUser(studentId, "INVOICE", "Có khoản thu mới", body, "INVOICE", event.entityId());
+                notifyParentsOfStudent(studentId, "INVOICE", "Có khoản thu mới", body, "INVOICE", event.entityId());
+            }
+            case "finance.invoice.reminder" -> {
+                String studentId = asString(p.get("studentId"));
+                String body = asString(p.get("message"));
+                notifyUser(studentId, "INVOICE", "Nhắc thanh toán học phí", body, "INVOICE", event.entityId());
+                notifyParentsOfStudent(studentId, "INVOICE", "Nhắc thanh toán học phí", body, "INVOICE", event.entityId());
+            }
+            case "finance.invoice.recalled" -> {
+                String studentId = asString(p.get("studentId"));
+                String body = asString(p.get("message"));
+                notifyUser(studentId, "INVOICE", "Hóa đơn được thu hồi", body, "INVOICE", event.entityId());
+                notifyParentsOfStudent(studentId, "INVOICE", "Hóa đơn được thu hồi", body, "INVOICE", event.entityId());
+            }
             case "finance.invoice.paid" -> notifyUser(
                     asString(p.get("parentId")), "PAYMENT", "Thanh toán thành công",
                     asString(p.get("message")), "INVOICE", event.entityId());
+            case "finance.payment.refunded" -> {
+                String studentId = asString(p.get("studentId"));
+                String body = asString(p.get("message"));
+                notifyUser(studentId, "PAYMENT", "Đã hoàn tiền", body,
+                        "PAYMENT_REFUND", event.entityId());
+                notifyParentsOfStudent(studentId, "PAYMENT", "Đã hoàn tiền", body,
+                        "PAYMENT_REFUND", event.entityId());
+            }
+            case "finance.payment.proof_submitted" -> notifyUser(
+                    event.actorUserId(), "PAYMENT", "Có biên lai chuyển khoản mới",
+                    asString(p.get("studentName")) + " - " + asString(p.get("invoiceCode"))
+                            + ": " + asString(p.get("message")),
+                    "PAYMENT_PROOF", event.entityId());
+            case "finance.payment.proof_reviewed" -> {
+                String title = "APPROVED".equals(asString(p.get("status")))
+                        ? "Biên lai đã được xác nhận" : "Yêu cầu thanh toán lại";
+                notifyUser(event.actorUserId(), "PAYMENT", title,
+                        asString(p.get("invoiceCode")) + ": " + asString(p.get("message")),
+                        "PAYMENT_PROOF", event.entityId());
+            }
+            case "finance.payment.failed" -> {
+                String studentId = asString(p.get("studentId"));
+                String body = asString(p.get("message"));
+                notifyUser(studentId, "PAYMENT", "Thanh toán không thành công", body, "INVOICE", event.entityId());
+                notifyParentsOfStudent(studentId, "PAYMENT", "Thanh toán không thành công", body, "INVOICE", event.entityId());
+            }
             default -> {
                 // Keep unknown events observable later without failing core flows.
             }
@@ -150,17 +316,178 @@ public class NotificationService {
         return notifications.countByRecipientIdAndReadIsFalse(recipientId);
     }
 
+    public long financeUnreadCount(String recipientId) {
+        return notifications.countByRecipientIdAndReadIsFalseAndTypeIn(
+                recipientId, FINANCE_NOTIFICATION_TYPES);
+    }
+
     public Notification markRead(String id, String recipientId) {
         Notification n = notifications.findById(id).orElseThrow(() -> ApiException.notFound("Thông báo"));
         if (!recipientId.equals(n.getRecipientId())) throw ApiException.forbidden("Không phải thông báo của bạn");
         n.setRead(true);
+        n.setReadAt(Instant.now());
         return notifications.save(n);
     }
 
     public void markAllRead(String recipientId) {
         var list = notifications.findByRecipientIdAndReadIsFalseOrderByCreatedAtDesc(recipientId);
-        list.forEach(n -> n.setRead(true));
+        list.forEach(n -> {
+            n.setRead(true);
+            n.setReadAt(Instant.now());
+        });
         notifications.saveAll(list);
+    }
+
+    public void markAllFinanceRead(String recipientId) {
+        var list = notifications.findByRecipientIdAndReadIsFalseAndTypeInOrderByCreatedAtDesc(
+                recipientId, FINANCE_NOTIFICATION_TYPES);
+        list.forEach(n -> {
+            n.setRead(true);
+            n.setReadAt(Instant.now());
+        });
+        notifications.saveAll(list);
+    }
+
+    public int markGroupRead(String recipientId, String requestedGroupKey) {
+        String key = normalize(requestedGroupKey);
+        List<Notification> rows =
+                notifications.findByRecipientIdAndReadIsFalseAndGroupKeyOrderByCreatedAtDesc(
+                        recipientId, key);
+        Instant now = Instant.now();
+        rows.forEach(row -> {
+            row.setRead(true);
+            row.setReadAt(now);
+        });
+        notifications.saveAll(rows);
+        return rows.size();
+    }
+
+    public List<UserNotificationPreference> preferences(String userId) {
+        return preferences.findByUserIdOrderByNotificationTypeAscChannelAsc(userId);
+    }
+
+    public UserNotificationPreference updatePreference(
+            String userId, UpdatePreferenceRequest request) {
+        String type = normalize(request.notificationType());
+        String channel = normalize(request.channel());
+        if (!List.of("IN_APP", "EMAIL", "PUSH").contains(channel)) {
+            throw ApiException.badRequest("Kênh thông báo chỉ nhận IN_APP, EMAIL hoặc PUSH");
+        }
+        UserNotificationPreference row = preferences
+                .findByUserIdAndNotificationTypeAndChannel(userId, type, channel)
+                .orElseGet(() -> UserNotificationPreference.builder()
+                        .id(Ids.gen("unp"))
+                        .userId(userId)
+                        .notificationType(type)
+                        .channel(channel)
+                        .build());
+        row.setEnabled(request.enabled());
+        row.setUpdatedAt(Instant.now());
+        return preferences.save(row);
+    }
+
+    public List<NotificationDeliveryLog> deliveryAttempts(String notificationId) {
+        notifications.findById(notificationId)
+                .orElseThrow(() -> ApiException.notFound("Thông báo"));
+        return deliveryLogs.findByNotificationIdOrderByAttemptNoAsc(notificationId);
+    }
+
+    public List<NotificationDeliveryLog> latestDeliveryAttempts() {
+        return deliveryLogs.findTop200ByOrderByAttemptedAtDesc();
+    }
+
+    public List<Notification> failedNotifications() {
+        return notifications.findByStatusOrderByCreatedAtDesc("FAILED");
+    }
+
+    public NotificationDtos.NotificationOperationsSummary operationsSummary() {
+        long total = notifications.count();
+        long queued = notifications.countByStatus("QUEUED");
+        long sent = notifications.countByStatus("SENT");
+        long failed = notifications.countByStatus("FAILED");
+        long retrying = notifications.countByStatus("RETRYING");
+        long attempts = deliveryLogs.count();
+        long successfulAttempts = deliveryLogs.countByStatus("SENT");
+        long failedAttempts = deliveryLogs.countByStatus("FAILED");
+        double failureRate = attempts == 0
+                ? 0.0 : Math.round(failedAttempts * 10000.0 / attempts) / 100.0;
+        return new NotificationDtos.NotificationOperationsSummary(
+                total, queued, sent, failed, retrying,
+                attempts, successfulAttempts, failedAttempts, failureRate,
+                java.util.Map.of(
+                        "IN_APP", notifications.countByChannel("IN_APP"),
+                        "EMAIL", notifications.countByChannel("EMAIL"),
+                        "PUSH", notifications.countByChannel("PUSH")),
+                Instant.now());
+    }
+
+    public Notification retry(String notificationId) {
+        Notification row = notifications.findById(notificationId)
+                .orElseThrow(() -> ApiException.notFound("Thông báo"));
+        if (!"FAILED".equals(row.getStatus())) {
+            throw ApiException.conflict("Chỉ thông báo FAILED mới được gửi lại");
+        }
+        int attempt = row.getAttemptCount() == null ? 1 : row.getAttemptCount() + 1;
+        row.setStatus("SENT");
+        row.setAttemptCount(attempt);
+        row.setSentAt(Instant.now());
+        row.setErrorMessage(null);
+        notifications.save(row);
+        deliveryLogs.save(NotificationDeliveryLog.builder()
+                .id(Ids.gen("ndl"))
+                .notificationId(row.getId())
+                .attemptNo(attempt)
+                .status("SENT")
+                .providerResponse("Manual IN_APP retry")
+                .attemptedAt(Instant.now())
+                .build());
+        return row;
+    }
+
+    private boolean isEnabled(String recipientId, String type, String channel) {
+        return java.util.Optional.ofNullable(
+                        preferences.findByUserIdAndNotificationTypeAndChannel(
+                                recipientId, normalize(type), normalize(channel)))
+                .orElse(java.util.Optional.empty())
+                .map(UserNotificationPreference::isEnabled)
+                .orElse(true);
+    }
+
+    private String groupKey(String type) {
+        String normalized = normalize(type);
+        if (FINANCE_NOTIFICATION_TYPES.contains(normalized)
+                || normalized.startsWith("REFUND")) return "FINANCE";
+        if (normalized.startsWith("ATTENDANCE")) return "ATTENDANCE";
+        if (normalized.startsWith("GRADE") || normalized.startsWith("YEAR_RESULT")) {
+            return "ACADEMIC";
+        }
+        return normalized;
+    }
+
+    private String deepLink(String refType, String refId) {
+        String id = refId == null ? "" : refId;
+        return switch (normalize(refType)) {
+            case "INVOICE", "PAYMENT", "PAYMENT_REFUND" -> "/finance?ref=" + id;
+            case "ASSIGNMENT", "SUBMISSION" -> "/assignments?ref=" + id;
+            case "ATTENDANCE" -> "/attendance?ref=" + id;
+            case "GRADE" -> "/grades?ref=" + id;
+            case "YEAR_RESULT" -> "/year-results?ref=" + id;
+            case "TIMETABLE" -> "/timetable";
+            default -> "/notifications?ref=" + id;
+        };
+    }
+
+    private String normalize(String value) {
+        return value == null ? "" : value.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private List<String> asStringList(Object value) {
+        if (value instanceof java.util.Collection<?> values) {
+            return values.stream().map(this::asString)
+                    .filter(item -> !item.isBlank()).distinct().toList();
+        }
+        String single = asString(value);
+        return single.isBlank() ? List.of() : List.of(single);
     }
 
     // ---------- Announcements ----------

@@ -1,9 +1,15 @@
 package com.sse.app.academic.timetable;
 
 import com.sse.app.academic.timetable.TimetableDtos.CreateSlotRequest;
+import com.sse.app.academic.timetable.TimetableDtos.GenerateScheduleRequest;
+import com.sse.app.academic.timetable.TimetableDtos.GenerationResult;
+import com.sse.app.academic.timetable.TimetableDtos.GenerationReadiness;
+import com.sse.app.academic.timetable.TimetableDtos.MoveDraftSlotRequest;
+import com.sse.app.academic.timetable.TimetableDtos.ScheduleValidation;
 import com.sse.app.common.ApiException;
 import com.sse.app.identity.User;
 import com.sse.app.identity.UserService;
+import com.sse.app.report.AcademicEnrollmentService;
 import com.sse.app.security.CurrentUser;
 import com.sse.app.security.CurrentUserHolder;
 import jakarta.validation.Valid;
@@ -17,10 +23,16 @@ public class TimetableController {
 
     private final TimetableService timetable;
     private final UserService users;
+    private final AutomaticTimetableService automatic;
+    private final AcademicEnrollmentService enrollments;
 
-    public TimetableController(TimetableService timetable, UserService users) {
+    public TimetableController(TimetableService timetable, UserService users,
+                               AutomaticTimetableService automatic,
+                               AcademicEnrollmentService enrollments) {
         this.timetable = timetable;
         this.users = users;
+        this.automatic = automatic;
+        this.enrollments = enrollments;
     }
 
     @GetMapping({"/timetableSlots", "/timetable/slots"})
@@ -36,12 +48,12 @@ public class TimetableController {
             teacherId = me.id();
         }
         if (me.isStudent()) {
-            User u = users.getById(me.id());
-            if (u.getClassId() == null || u.getClassId().isBlank()) return List.of();
-            classId = u.getClassId();
+            classId = enrollments.classIdForSemester(me.id(), semesterId)
+                    .orElse(null);
+            if (classId == null) return List.of();
             teacherId = null;
         }
-        return timetable.list(classId, teacherId, semesterId, dayOfWeek);
+        return timetable.listEffective(classId, teacherId, semesterId, dayOfWeek);
     }
 
     @PostMapping({"/timetableSlots", "/timetable/slots"})
@@ -58,11 +70,17 @@ public class TimetableController {
 
     /** B2/C2: TKB của chính người đang đăng nhập (HS theo lớp, GV theo mã GV). */
     @GetMapping("/me/timetable")
-    public List<TimetableSlot> myTimetable() {
+    public List<TimetableSlot> myTimetable(
+            @RequestParam(required = false) String semesterId) {
         CurrentUser me = CurrentUserHolder.require();
-        if (me.isTeacher()) return timetable.list(null, me.id(), null, null);
-        User u = users.getById(me.id());
-        if (u.getClassId() != null) return timetable.list(u.getClassId(), null, null, null);
+        if (me.isTeacher()) {
+            return timetable.listEffective(null, me.id(), semesterId, null);
+        }
+        String classId = enrollments.classIdForSemester(me.id(), semesterId)
+                .orElse(null);
+        if (classId != null) {
+            return timetable.listEffective(classId, null, semesterId, null);
+        }
         return List.of();
     }
 
@@ -83,9 +101,72 @@ public class TimetableController {
         if (!"STUDENT".equals(student.getRole())) {
             throw ApiException.badRequest("Không phải học sinh");
         }
-        if (student.getClassId() == null || student.getClassId().isBlank()) {
+        String classId = enrollments.classIdForSemester(studentId, semesterId)
+                .orElse(null);
+        if (classId == null) {
             return List.of();
         }
-        return timetable.list(student.getClassId(), null, semesterId, dayOfWeek);
+        return timetable.listEffective(classId, null, semesterId, dayOfWeek);
+    }
+
+    @GetMapping("/timetable/schedules")
+    public List<TimetableSchedule> schedules(
+            @RequestParam(required = false) String semesterId) {
+        CurrentUserHolder.requirePermission("ACADEMIC_TIMETABLE_READ");
+        return automatic.listSchedules(semesterId);
+    }
+
+    @PostMapping("/timetable/schedules/generate")
+    public GenerationResult generate(
+            @Valid @RequestBody GenerateScheduleRequest request) {
+        CurrentUser actor = CurrentUserHolder.require();
+        CurrentUserHolder.requirePermission("ACADEMIC_TIMETABLE_MANAGE");
+        return automatic.generate(request, actor.id());
+    }
+
+    @GetMapping("/timetable/schedules/generation-readiness")
+    public GenerationReadiness generationReadiness(
+            @RequestParam String academicYearId,
+            @RequestParam String semesterId,
+            @RequestParam(required = false) String scopeGradeLevel) {
+        CurrentUserHolder.requirePermission("ACADEMIC_TIMETABLE_READ");
+        return automatic.generationReadiness(
+                academicYearId, semesterId, scopeGradeLevel);
+    }
+
+    @GetMapping("/timetable/schedules/{scheduleId}/slots")
+    public List<TimetableDraftSlot> draftSlots(
+            @PathVariable String scheduleId,
+            @RequestParam(required = false) String classId) {
+        CurrentUserHolder.requirePermission("ACADEMIC_TIMETABLE_READ");
+        return automatic.listDraftSlots(scheduleId, classId);
+    }
+
+    @GetMapping("/timetable/schedules/{scheduleId}/validation")
+    public ScheduleValidation validate(@PathVariable String scheduleId) {
+        CurrentUserHolder.requirePermission("ACADEMIC_TIMETABLE_READ");
+        return automatic.validate(scheduleId);
+    }
+
+    @DeleteMapping("/timetable/schedules/{scheduleId}")
+    public void deleteDraft(@PathVariable String scheduleId) {
+        CurrentUserHolder.requirePermission("ACADEMIC_TIMETABLE_MANAGE");
+        automatic.deleteDraft(scheduleId);
+    }
+
+    @PutMapping("/timetable/schedules/{scheduleId}/slots/{slotId}")
+    public TimetableDraftSlot move(
+            @PathVariable String scheduleId,
+            @PathVariable String slotId,
+            @Valid @RequestBody MoveDraftSlotRequest request) {
+        CurrentUserHolder.requirePermission("ACADEMIC_TIMETABLE_MANAGE");
+        return automatic.move(scheduleId, slotId, request);
+    }
+
+    @PostMapping("/timetable/schedules/{scheduleId}/publish")
+    public TimetableSchedule publish(@PathVariable String scheduleId) {
+        CurrentUser actor = CurrentUserHolder.require();
+        CurrentUserHolder.requirePermission("ACADEMIC_TIMETABLE_PUBLISH");
+        return automatic.publish(scheduleId, actor.id());
     }
 }

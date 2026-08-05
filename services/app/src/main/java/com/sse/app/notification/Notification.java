@@ -21,9 +21,14 @@ public class Notification {
     private boolean read;
     private String refType;
     private String refId;
+    /** Frontend route that can be opened directly from the inbox. */
+    private String deepLink;
+    /** Logical group used for mark-as-read actions, e.g. FINANCE or ASSIGNMENT. */
+    private String groupKey;
     private String status;      // QUEUED | SENT | FAILED | RETRYING
     private Integer attemptCount;
     private Instant sentAt;
+    private Instant readAt;
     @Column(length = 1000)
     private String errorMessage;
     private Instant createdAt;

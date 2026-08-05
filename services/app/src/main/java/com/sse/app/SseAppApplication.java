@@ -3,6 +3,7 @@ package com.sse.app;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * Smart School Ecosystem — single runnable Spring Boot backend (modular monolith).
@@ -13,6 +14,7 @@ import org.springframework.scheduling.annotation.EnableAsync;
  */
 @SpringBootApplication
 @EnableAsync
+@EnableScheduling
 public class SseAppApplication {
     public static void main(String[] args) {
         SpringApplication.run(SseAppApplication.class, args);

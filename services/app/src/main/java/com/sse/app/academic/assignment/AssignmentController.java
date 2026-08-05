@@ -9,6 +9,7 @@ import com.sse.app.security.CurrentUser;
 import com.sse.app.security.CurrentUserHolder;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.http.ResponseEntity;
 
 import java.util.List;
 
@@ -95,6 +96,60 @@ public class AssignmentController {
         CurrentUser me = CurrentUserHolder.require();
         CurrentUserHolder.requireRole("TEACHER", "ADMIN");
         return assignments.grade(id, r, me.id(), me.isAdmin());
+    }
+
+    @PostMapping("/submissions/batch-grade")
+    public List<AssignmentSubmission> batchGrade(
+            @Valid @RequestBody BatchGradeRequest request) {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        return assignments.batchGrade(request, me.id(), me.isAdmin());
+    }
+
+    @PostMapping("/submissions/{id}/request-resubmission")
+    public SubmissionResubmissionRequest requestResubmission(
+            @PathVariable String id,
+            @Valid @RequestBody RequestResubmissionRequest request) {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        return assignments.requestResubmission(
+                id, request, me.id(), me.isAdmin());
+    }
+
+    @GetMapping("/submissions/{id}/resubmission-requests")
+    public List<SubmissionResubmissionRequest> resubmissionRequests(
+            @PathVariable String id) {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("STUDENT", "TEACHER", "ADMIN");
+        return assignments.resubmissionRequests(id, me.id(), me.isAdmin());
+    }
+
+    @GetMapping("/submissions/{id}/versions")
+    public List<AssignmentSubmissionVersion> submissionVersions(
+            @PathVariable String id) {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("STUDENT", "TEACHER", "ADMIN");
+        return assignments.submissionVersions(id, me.id(), me.isAdmin());
+    }
+
+    @PostMapping("/assignments/{id}/remind-due")
+    public AssignmentReminderResponse remindDue(@PathVariable String id) {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        return assignments.remindDue(id, me.id(), me.isAdmin());
+    }
+
+    @GetMapping("/assignments/{id}/submissions/export")
+    public ResponseEntity<byte[]> exportSubmissions(@PathVariable String id) {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        AssignmentExportFile file =
+                assignments.exportSubmissions(id, me.id(), me.isAdmin());
+        return ResponseEntity.ok()
+                .header("Content-Disposition",
+                        "attachment; filename=\"" + file.filename() + "\"")
+                .header("Content-Type", file.contentType())
+                .body(file.content());
     }
 
     @GetMapping("/me/submissions")

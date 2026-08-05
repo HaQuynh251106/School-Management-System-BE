@@ -18,5 +18,10 @@ public class SchoolClass {
     private String gradeLevel;      // K10
     private String academicYearId;
     private String homeroomTeacherId;
+    private String homeRoomId;
     private int studentCount;
+    /** Maximum active students. Null means the school default (45). */
+    private Integer maxStudents;
+    private Integer expectedStudentCount;
+    private String status;
 }

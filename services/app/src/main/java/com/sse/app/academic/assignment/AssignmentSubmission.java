@@ -36,4 +36,5 @@ public class AssignmentSubmission {
     private String feedback;
     private String gradedBy;
     private Instant gradedAt;
+    private Integer currentVersion;
 }

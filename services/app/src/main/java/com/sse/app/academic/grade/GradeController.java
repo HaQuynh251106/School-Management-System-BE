@@ -81,4 +81,15 @@ public class GradeController {
         CurrentUserHolder.requireRole("ADMIN");
         return grades.createCategory(r);
     }
+
+    @GetMapping("/grades/completeness")
+    public GradeCompletenessResponse completeness(
+            @RequestParam String classId,
+            @RequestParam String subjectId,
+            @RequestParam String semesterId) {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        return grades.completeness(
+                classId, subjectId, semesterId, me.id(), me.isTeacher());
+    }
 }

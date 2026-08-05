@@ -10,6 +10,7 @@ import io.minio.BucketExistsArgs;
 import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
+import io.minio.PutObjectArgs;
 import io.minio.StatObjectArgs;
 import io.minio.StatObjectResponse;
 import io.minio.http.Method;
@@ -17,6 +18,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.ByteArrayInputStream;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Locale;
@@ -49,7 +51,7 @@ public class FileStorageService {
     @Transactional
     public PresignUploadResponse createUploadUrl(PresignUploadRequest request, String uploaderId, String role) {
         String scope = validateScope(request.scope(), role);
-        validateDeclaredFile(request.fileName(), request.contentType(), request.sizeBytes());
+        validateDeclaredFile(scope, request.fileName(), request.contentType(), request.sizeBytes());
         ensureBucket();
 
         String id = Ids.gen("file");
@@ -150,6 +152,47 @@ public class FileStorageService {
         }
     }
 
+    /** Stores a server-generated receipt under a deterministic key for safe retries. */
+    public StoredFile storeGeneratedReceipt(String fileName, byte[] content, String generatedBy) {
+        if (content == null || content.length == 0) {
+            throw ApiException.badRequest("Nội dung biên nhận trống");
+        }
+        if (content.length > MAX_FILE_SIZE_BYTES) {
+            throw ApiException.badRequest("Biên nhận vượt quá 5 MB");
+        }
+        String originalLeaf = Path.of(fileName.trim()).getFileName().toString();
+        String safeName = originalLeaf.replaceAll("[^A-Za-z0-9._-]", "_");
+        if (safeName.isBlank()) safeName = "receipt.pdf";
+        if (!safeName.toLowerCase(Locale.ROOT).endsWith(".pdf")) safeName += ".pdf";
+        String fileKey = "receipts/" + safeName;
+
+        ensureBucket();
+        try {
+            minio.putObject(PutObjectArgs.builder()
+                    .bucket(properties.getBucket())
+                    .object(fileKey)
+                    .contentType("application/pdf")
+                    .stream(new ByteArrayInputStream(content), content.length, -1)
+                    .build());
+            Instant now = Instant.now();
+            StoredFile file = files.findByFileKey(fileKey).orElseGet(() -> StoredFile.builder()
+                    .id(Ids.gen("file"))
+                    .fileKey(fileKey)
+                    .createdAt(now)
+                    .build());
+            file.setScope("PAYMENT_RECEIPT");
+            file.setOriginalName(safeName);
+            file.setContentType("application/pdf");
+            file.setSizeBytes(content.length);
+            file.setUploadedBy(generatedBy == null || generatedBy.isBlank() ? "SYSTEM" : generatedBy);
+            file.setStatus("READY");
+            file.setCompletedAt(now);
+            return files.save(file);
+        } catch (Exception ex) {
+            throw storageUnavailable(ex);
+        }
+    }
+
     /**
      * Verifies that a completed file belongs to the caller before another
      * domain module links it to its aggregate.
@@ -188,8 +231,11 @@ public class FileStorageService {
 
     private String validateScope(String rawScope, String role) {
         String scope = rawScope.trim().toUpperCase(Locale.ROOT);
-        if (!Set.of("ASSIGNMENT", "SUBMISSION").contains(scope)) {
-            throw ApiException.badRequest("scope chỉ nhận ASSIGNMENT hoặc SUBMISSION");
+        if (!Set.of("ASSIGNMENT", "SUBMISSION", "PAYMENT_PROOF").contains(scope)) {
+            throw ApiException.badRequest("scope chỉ nhận ASSIGNMENT, SUBMISSION hoặc PAYMENT_PROOF");
+        }
+        if ("PAYMENT_PROOF".equals(scope) && !"PARENT".equals(role)) {
+            throw ApiException.forbidden("Chỉ phụ huynh mới được tải biên lai thanh toán");
         }
         if ("ADMIN".equals(role)) return scope;
         if ("ASSIGNMENT".equals(scope) && !("TEACHER".equals(role) || "ADMIN".equals(role))) {
@@ -201,7 +247,7 @@ public class FileStorageService {
         return scope;
     }
 
-    private void validateDeclaredFile(String fileName, String contentType, long sizeBytes) {
+    private void validateDeclaredFile(String scope, String fileName, String contentType, long sizeBytes) {
         if (sizeBytes > MAX_FILE_SIZE_BYTES) {
             throw ApiException.badRequest("Mỗi file tối đa 5 MB");
         }
@@ -210,13 +256,20 @@ public class FileStorageService {
         if (!ALLOWED_TYPES.containsKey(extension) || !ALLOWED_TYPES.get(extension).contains(normalizedType)) {
             throw ApiException.badRequest("Chỉ nhận PDF, DOCX, JPG hoặc PNG với đúng định dạng file");
         }
+        if ("PAYMENT_PROOF".equals(scope) && !Set.of("jpg", "jpeg", "png").contains(extension)) {
+            throw ApiException.badRequest("Biên lai chỉ nhận ảnh JPG hoặc PNG");
+        }
     }
 
     private String keyFor(String scope, String fileName) {
         String originalLeaf = Path.of(fileName.trim()).getFileName().toString();
         String safeName = originalLeaf.replaceAll("[^A-Za-z0-9._-]", "_");
         if (safeName.isBlank()) safeName = "upload";
-        String folder = "ASSIGNMENT".equals(scope) ? "assignments" : "submissions";
+        String folder = switch (scope) {
+            case "ASSIGNMENT" -> "assignments";
+            case "PAYMENT_PROOF" -> "payment-proofs";
+            default -> "submissions";
+        };
         return folder + "/" + UUID.randomUUID() + "-" + safeName;
     }
 

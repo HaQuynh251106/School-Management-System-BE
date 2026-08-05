@@ -12,6 +12,7 @@ import com.sse.app.file.FileStorageService;
 import com.sse.app.file.StoredFile;
 import com.sse.app.identity.User;
 import com.sse.app.identity.UserService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,6 +20,7 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.ArrayList;
 
 /** B5 + C4: vòng đời bài tập (flowchart 2.7). */
 @Service
@@ -32,11 +34,28 @@ public class AssignmentService {
     private final FileStorageService files;
     private final TeachingAssignmentService teachingAssignments;
     private final AuditService audit;
+    private final AssignmentSubmissionVersionRepository versions;
+    private final SubmissionResubmissionRequestRepository resubmissionRequests;
+    private final AssignmentSubmissionExcelExporter excel;
 
     public AssignmentService(AssignmentRepository assignments, AssignmentSubmissionRepository submissions,
                              StructureService structure, UserService users, DomainEventPublisher events,
                              FileStorageService files, TeachingAssignmentService teachingAssignments,
                              AuditService audit) {
+        this(assignments, submissions, structure, users, events, files,
+                teachingAssignments, audit, null, null, null);
+    }
+
+    @Autowired
+    public AssignmentService(AssignmentRepository assignments,
+                             AssignmentSubmissionRepository submissions,
+                             StructureService structure, UserService users,
+                             DomainEventPublisher events, FileStorageService files,
+                             TeachingAssignmentService teachingAssignments,
+                             AuditService audit,
+                             AssignmentSubmissionVersionRepository versions,
+                             SubmissionResubmissionRequestRepository resubmissionRequests,
+                             AssignmentSubmissionExcelExporter excel) {
         this.assignments = assignments;
         this.submissions = submissions;
         this.structure = structure;
@@ -45,6 +64,9 @@ public class AssignmentService {
         this.files = files;
         this.teachingAssignments = teachingAssignments;
         this.audit = audit;
+        this.versions = versions;
+        this.resubmissionRequests = resubmissionRequests;
+        this.excel = excel;
     }
 
     public List<Assignment> list(String classId, String teacherId, String status, boolean onlyPublished) {
@@ -64,20 +86,24 @@ public class AssignmentService {
 
     @Transactional
     public Assignment create(CreateAssignmentRequest r, String teacherId) {
+        String title = r.title() == null ? null : r.title().trim();
+        if (title == null || title.isBlank()) {
+            throw ApiException.badRequest("Bắt buộc nhập tên đề bài");
+        }
+        if (r.attachmentFileId() == null || r.attachmentFileId().isBlank()) {
+            throw ApiException.badRequest("Bắt buộc đính kèm file đề bài");
+        }
         if (!teachingAssignments.teacherAssignedToClassSubject(teacherId, r.classId(), r.subjectId())) {
             throw ApiException.forbidden("Ban chi co the giao bai cho lop va mon dang duoc phan cong");
         }
         boolean publish = Boolean.TRUE.equals(r.publishNow());
-        StoredFile attachment = null;
-        if (r.attachmentFileId() != null && !r.attachmentFileId().isBlank()) {
-            attachment = files.requireReadyOwnedFile(r.attachmentFileId(), "ASSIGNMENT", teacherId);
-        }
+        StoredFile attachment = files.requireReadyOwnedFile(r.attachmentFileId(), "ASSIGNMENT", teacherId);
         Assignment a = assignments.save(Assignment.builder()
                 .id(r.id() == null || r.id().isBlank() ? Ids.gen("asg") : r.id())
                 .classId(r.classId()).subjectId(r.subjectId())
                 .subjectName(structure.subjectName(r.subjectId()))
                 .teacherId(teacherId).teacherName(users.fullNameOf(teacherId))
-                .title(r.title()).description(r.description())
+                .title(title).description(r.description())
                 .status(publish ? "PUBLISHED" : "DRAFT")
                 .deadline(r.deadline()).allowLate(Boolean.TRUE.equals(r.allowLate()))
                 .attachmentName(attachment == null ? r.attachmentName() : attachment.getOriginalName())
@@ -85,7 +111,8 @@ public class AssignmentService {
                 .attachmentFileKey(attachment == null ? null : attachment.getFileKey())
                 .attachmentContentType(attachment == null ? null : attachment.getContentType())
                 .attachmentSizeBytes(attachment == null ? null : attachment.getSizeBytes())
-                .createdAt(Instant.now()).build());
+                .createdAt(Instant.now()).updatedAt(Instant.now())
+                .reminderCount(0).build());
         if (publish) publishAssignmentEvent(a);
         return a;
     }
@@ -95,7 +122,15 @@ public class AssignmentService {
         Assignment a = get(id);
         requireTeacherOwnsAssignment(id, teacherId, isAdmin);
         if ("PUBLISHED".equals(a.getStatus())) return a;
+        if (a.getAttachmentFileId() == null || a.getAttachmentFileId().isBlank()) {
+            throw ApiException.badRequest("Bắt buộc đính kèm file đề bài trước khi phát hành");
+        }
+        if (!teachingAssignments.teacherAssignedToClassSubject(
+                a.getTeacherId(), a.getClassId(), a.getSubjectId())) {
+            throw ApiException.forbidden("Không thể phát hành vì giáo viên không còn được phân công lớp và môn này");
+        }
         a.setStatus("PUBLISHED");
+        a.setUpdatedAt(Instant.now());
         assignments.save(a);
         publishAssignmentEvent(a);
         return a;
@@ -129,10 +164,25 @@ public class AssignmentService {
         final String st = status;
         AssignmentSubmission s = submissions.findByAssignmentIdAndStudentId(assignmentId, studentId)
                 .orElseGet(() -> AssignmentSubmission.builder().id(Ids.gen("sub")).build());
+        SubmissionResubmissionRequest resubmission = null;
+        if ("GRADED".equals(s.getStatus())) {
+            requireAdvancedRepositories();
+            resubmission = resubmissionRequests
+                    .findFirstBySubmissionIdAndStatusOrderByRequestedAtDesc(
+                            s.getId(), "OPEN")
+                    .orElseThrow(() -> ApiException.conflict(
+                            "Bài đã được chấm; giáo viên phải cho phép nộp lại"));
+            if (resubmission.getAllowedUntil() != null
+                    && Instant.now().isAfter(resubmission.getAllowedUntil())) {
+                resubmission.setStatus("EXPIRED");
+                resubmissionRequests.save(resubmission);
+                throw ApiException.conflict("Thời hạn nộp lại đã hết");
+            }
+        }
         boolean hasNewAttachment = r.attachmentFileId() != null && !r.attachmentFileId().isBlank();
         boolean hasExistingAttachment = s.getAttachmentFileId() != null && !s.getAttachmentFileId().isBlank();
-        if ((content == null || content.isBlank()) && !hasNewAttachment && !hasExistingAttachment) {
-            throw ApiException.badRequest("Nhap noi dung bai lam hoac dinh kem file truoc khi nop");
+        if (!hasNewAttachment && !hasExistingAttachment) {
+            throw ApiException.badRequest("Bắt buộc đính kèm file bài làm trước khi nộp");
         }
         s.setAssignmentId(assignmentId);
         s.setStudentId(studentId);
@@ -154,7 +204,34 @@ public class AssignmentService {
             s.setAttachmentSizeBytes(null);
         }
         s.setSubmittedAt(Instant.now());
-        return submissions.save(s);
+        int versionNo = s.getCurrentVersion() == null
+                ? 1 : s.getCurrentVersion() + 1;
+        s.setCurrentVersion(versionNo);
+        s.setScore(null);
+        s.setFeedback(null);
+        s.setGradedBy(null);
+        s.setGradedAt(null);
+        AssignmentSubmission saved = submissions.save(s);
+        if (versions != null) {
+            versions.save(AssignmentSubmissionVersion.builder()
+                    .id(Ids.gen("asv"))
+                    .submissionId(saved.getId())
+                    .versionNo(versionNo)
+                    .content(saved.getContent())
+                    .attachmentName(saved.getAttachmentName())
+                    .attachmentFileId(saved.getAttachmentFileId())
+                    .attachmentContentType(saved.getAttachmentContentType())
+                    .attachmentSizeBytes(saved.getAttachmentSizeBytes())
+                    .submittedBy(studentId)
+                    .submittedAt(saved.getSubmittedAt())
+                    .build());
+        }
+        if (resubmission != null) {
+            resubmission.setStatus("USED");
+            resubmission.setUsedAt(Instant.now());
+            resubmissionRequests.save(resubmission);
+        }
+        return saved;
     }
 
     @Transactional
@@ -198,6 +275,146 @@ public class AssignmentService {
         payload.put("message", "Điểm: " + (r.score() == null ? "-" : r.score()));
         events.publish("academic.submission.graded", gradedBy, "submission", s.getId(), payload);
         return s;
+    }
+
+    @Transactional
+    public List<AssignmentSubmission> batchGrade(
+            BatchGradeRequest request, String gradedBy, boolean isAdmin) {
+        if (request == null || request.entries() == null
+                || request.entries().isEmpty()) {
+            throw ApiException.badRequest("Danh sách chấm bài không được trống");
+        }
+        List<AssignmentSubmission> result = new ArrayList<>();
+        for (BatchGradeEntry entry : request.entries()) {
+            result.add(grade(entry.submissionId(),
+                    new GradeSubmissionRequest(entry.score(), entry.feedback(), entry.reason()),
+                    gradedBy, isAdmin));
+        }
+        return result;
+    }
+
+    @Transactional
+    public SubmissionResubmissionRequest requestResubmission(
+            String submissionId, RequestResubmissionRequest request,
+            String actorId, boolean isAdmin) {
+        requireAdvancedRepositories();
+        AssignmentSubmission submission = submissions.findById(submissionId)
+                .orElseThrow(() -> ApiException.notFound("Bài nộp"));
+        requireTeacherOwnsAssignment(submission.getAssignmentId(), actorId, isAdmin);
+        if (!"GRADED".equals(submission.getStatus())) {
+            throw ApiException.conflict("Chỉ yêu cầu nộp lại sau khi bài đã được chấm");
+        }
+        if (request.allowedUntil() != null
+                && !request.allowedUntil().isAfter(Instant.now())) {
+            throw ApiException.badRequest("Hạn nộp lại phải ở tương lai");
+        }
+        resubmissionRequests
+                .findFirstBySubmissionIdAndStatusOrderByRequestedAtDesc(
+                        submissionId, "OPEN")
+                .ifPresent(row -> {
+                    row.setStatus("CANCELLED");
+                    resubmissionRequests.save(row);
+                });
+        SubmissionResubmissionRequest row =
+                resubmissionRequests.save(SubmissionResubmissionRequest.builder()
+                        .id(Ids.gen("srr"))
+                        .submissionId(submissionId)
+                        .assignmentId(submission.getAssignmentId())
+                        .studentId(submission.getStudentId())
+                        .reason(request.reason().trim())
+                        .status("OPEN")
+                        .allowedUntil(request.allowedUntil())
+                        .requestedBy(actorId)
+                        .requestedAt(Instant.now())
+                        .build());
+        events.publish("academic.submission.resubmission_requested",
+                actorId, "submission", submissionId,
+                Map.of("studentId", submission.getStudentId(),
+                        "assignmentId", submission.getAssignmentId(),
+                        "message", "Giáo viên yêu cầu nộp lại bài: "
+                                + request.reason().trim()));
+        audit.record(actorId, users.fullNameOf(actorId),
+                isAdmin ? "ADMIN" : "TEACHER",
+                "REQUEST_RESUBMISSION", "academic",
+                "assignment_submission", submissionId,
+                "lý do=" + request.reason().trim()
+                        + "; hạn=" + request.allowedUntil());
+        return row;
+    }
+
+    public List<SubmissionResubmissionRequest> resubmissionRequests(
+            String submissionId, String actorId, boolean isAdmin) {
+        requireAdvancedRepositories();
+        AssignmentSubmission submission = submissions.findById(submissionId)
+                .orElseThrow(() -> ApiException.notFound("Bài nộp"));
+        if (!submission.getStudentId().equals(actorId)) {
+            requireTeacherOwnsAssignment(
+                    submission.getAssignmentId(), actorId, isAdmin);
+        }
+        return resubmissionRequests
+                .findBySubmissionIdOrderByRequestedAtDesc(submissionId);
+    }
+
+    public List<AssignmentSubmissionVersion> submissionVersions(
+            String submissionId, String actorId, boolean isAdmin) {
+        requireAdvancedRepositories();
+        AssignmentSubmission submission = submissions.findById(submissionId)
+                .orElseThrow(() -> ApiException.notFound("Bài nộp"));
+        if (!submission.getStudentId().equals(actorId)) {
+            requireTeacherOwnsAssignment(
+                    submission.getAssignmentId(), actorId, isAdmin);
+        }
+        return versions.findBySubmissionIdOrderByVersionNoDesc(submissionId);
+    }
+
+    @Transactional
+    public AssignmentReminderResponse remindDue(
+            String assignmentId, String actorId, boolean isAdmin) {
+        Assignment assignment = get(assignmentId);
+        requireTeacherOwnsAssignment(assignmentId, actorId, isAdmin);
+        if (!"PUBLISHED".equals(assignment.getStatus())) {
+            throw ApiException.conflict("Chỉ nhắc hạn bài tập đã phát hành");
+        }
+        List<String> submitted = submissions.findByAssignmentId(assignmentId)
+                .stream().map(AssignmentSubmission::getStudentId).toList();
+        List<String> pendingStudents = users.list(
+                        "STUDENT", null, assignment.getClassId()).stream()
+                .map(com.sse.app.identity.UserDto::id)
+                .filter(id -> !submitted.contains(id))
+                .toList();
+        Instant now = Instant.now();
+        assignment.setLastReminderAt(now);
+        assignment.setReminderCount(assignment.getReminderCount() == null
+                ? 1 : assignment.getReminderCount() + 1);
+        assignment.setUpdatedAt(now);
+        assignments.save(assignment);
+        for (String studentId : pendingStudents) {
+            events.publish("academic.assignment.deadline_reminder",
+                    actorId, "assignment", assignmentId,
+                    Map.of("studentId", studentId,
+                            "title", assignment.getTitle(),
+                            "deadline", assignment.getDeadline() == null
+                                    ? "" : assignment.getDeadline().toString(),
+                            "message", "Bạn chưa nộp bài "
+                                    + assignment.getTitle()));
+        }
+        return new AssignmentReminderResponse(
+                assignmentId, pendingStudents.size(), now);
+    }
+
+    public AssignmentExportFile exportSubmissions(
+            String assignmentId, String actorId, boolean isAdmin) {
+        if (excel == null) {
+            throw new IllegalStateException("Assignment exporter is unavailable");
+        }
+        Assignment assignment = get(assignmentId);
+        requireTeacherOwnsAssignment(assignmentId, actorId, isAdmin);
+        byte[] content = excel.export(
+                assignment, submissions.findByAssignmentId(assignmentId));
+        return new AssignmentExportFile(
+                "submissions-" + assignmentId + ".xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                content);
     }
 
     private String gradeCorrectionDetail(AssignmentSubmission submission, Double oldScore,
@@ -279,6 +496,13 @@ public class AssignmentService {
         Assignment assignment = get(assignmentId);
         if (!isAdmin && !teacherId.equals(assignment.getTeacherId())) {
             throw ApiException.forbidden("You can only access submissions for assignments you created");
+        }
+    }
+
+    private void requireAdvancedRepositories() {
+        if (versions == null || resubmissionRequests == null) {
+            throw new IllegalStateException(
+                    "Assignment advanced repositories are unavailable");
         }
     }
 }

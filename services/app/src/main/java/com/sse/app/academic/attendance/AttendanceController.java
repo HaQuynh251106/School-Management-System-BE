@@ -11,6 +11,9 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
 import java.util.List;
+import com.sse.app.academic.attendance.AttendanceDtos.AttendanceSummary;
+import com.sse.app.academic.attendance.AttendanceDtos.CreateExcuseRequest;
+import com.sse.app.academic.attendance.AttendanceDtos.ReviewExcuseRequest;
 
 /** B3/C3/D2: Sổ điểm danh. Route /attendance khớp json-server. */
 @RestController
@@ -57,5 +60,60 @@ public class AttendanceController {
         CurrentUser me = CurrentUserHolder.require();
         CurrentUserHolder.requireRole("TEACHER", "ADMIN");
         return attendance.bulkMark(req, me.id(), me.isTeacher());
+    }
+
+    @GetMapping("/students/{studentId}/attendance/summary")
+    public AttendanceSummary summary(
+            @PathVariable String studentId,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fromDate,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate) {
+        CurrentUser me = CurrentUserHolder.require();
+        if (me.isStudent() && !me.id().equals(studentId)) {
+            throw ApiException.forbidden("Không đủ quyền");
+        }
+        if (me.isParent()) users.assertParentOf(me.id(), studentId);
+        return attendance.summary(studentId, fromDate, toDate);
+    }
+
+    @PostMapping("/attendance/{recordId}/excuse-requests")
+    public AttendanceExcuseRequest requestExcuse(
+            @PathVariable String recordId,
+            @Valid @RequestBody CreateExcuseRequest request) {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("PARENT", "STUDENT");
+        AttendanceRecord record = attendance.getRecord(recordId);
+        if (me.isParent()) users.assertParentOf(me.id(), record.getStudentId());
+        if (me.isStudent() && !me.id().equals(record.getStudentId())) {
+            throw ApiException.forbidden("Không đủ quyền");
+        }
+        return attendance.requestExcuse(recordId, record.getStudentId(),
+                me.id(), me.role(), request.reason());
+    }
+
+    @GetMapping("/attendance/excuse-requests")
+    public List<AttendanceExcuseRequest> excuseRequests(
+            @RequestParam(required = false) String studentId,
+            @RequestParam(required = false) String status) {
+        CurrentUser me = CurrentUserHolder.require();
+        if (me.isStudent()) studentId = me.id();
+        if (me.isParent()) {
+            if (studentId == null) {
+                throw ApiException.badRequest("Thiếu studentId");
+            }
+            users.assertParentOf(me.id(), studentId);
+        }
+        return attendance.excuseRequests(studentId, status);
+    }
+
+    @PostMapping("/attendance/excuse-requests/{id}/review")
+    public AttendanceExcuseRequest reviewExcuse(
+            @PathVariable String id,
+            @Valid @RequestBody ReviewExcuseRequest request) {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("TEACHER", "ADMIN");
+        return attendance.reviewExcuse(id, request.decision(), request.note(),
+                me.id(), me.role());
     }
 }

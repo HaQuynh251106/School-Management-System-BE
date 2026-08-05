@@ -32,6 +32,16 @@ public class RefreshToken {
 
     private Instant revokedAt;
 
+    private Instant lastSeenAt;
+    private String revokedBy;
+    private String revokedReason;
+    private String deviceId;
+
+    @Column(nullable = false)
+    private int sessionVersion;
+
+    private String replacedByTokenId;
+
     @Column(nullable = false)
     private Instant createdAt;
 }

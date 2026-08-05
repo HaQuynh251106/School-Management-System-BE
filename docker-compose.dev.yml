@@ -14,8 +14,6 @@
 #   - Tạo file infrastructure/docker/postgres/init-multi-db.sh
 #     để init sẵn 4 database trong 1 instance (hoặc tách 4 container)
 # ============================================================
-version: "3.9"
-
 services:
   # ---------- PostgreSQL ----------
   postgres-identity:
@@ -87,6 +85,7 @@ services:
     environment:
       MINIO_ROOT_USER: sse
       MINIO_ROOT_PASSWORD: sse_dev_minio
+      MINIO_API_CORS_ALLOW_ORIGIN: http://localhost:5173,http://127.0.0.1:5173,http://localhost:5175,http://127.0.0.1:5175
     ports:
       - "9000:9000"     # S3 API
       - "9001:9001"     # Console UI
@@ -98,12 +97,12 @@ services:
     depends_on:
       minio:
         condition: service_started
-    entrypoint: ["/bin/sh", "-c"]
-    command: >
-      until mc alias set local http://minio:9000 sse sse_dev_minio; do sleep 1; done;
-      mc mb --ignore-existing local/sse-files;
-      mc cors set local/sse-files /config/cors.json;
-    volumes: ["./infrastructure/docker/minio/cors.json:/config/cors.json:ro"]
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until mc alias set local http://minio:9000 sse sse_dev_minio; do sleep 1; done
+        mc mb --ignore-existing local/sse-files
 
   # ---------- Mailhog (giả lập SMTP cho dev) ----------
   mailhog:

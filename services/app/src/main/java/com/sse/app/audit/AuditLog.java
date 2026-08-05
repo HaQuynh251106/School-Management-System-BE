@@ -24,5 +24,11 @@ public class AuditLog {
     private String entityId;
     @Column(length = 1000)
     private String detail;
+    private String ipAddress;
+
+    @Column(length = 1000)
+    private String userAgent;
+
+    private String requestId;
     private Instant createdAt;
 }

@@ -13,4 +13,11 @@ public class Subject {
     @Column(unique = true)
     private String code;    // MATH
     private String name;    // Toán
+    private double coefficient;
+    private String requiredRoomType;
+    private String subjectType;
+    private String departmentName;
+    private String assessmentMethod;
+    private String facilityNote;
+    private boolean active;
 }

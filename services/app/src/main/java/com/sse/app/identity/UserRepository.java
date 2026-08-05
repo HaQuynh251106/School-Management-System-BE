@@ -15,9 +15,11 @@ public interface UserRepository extends JpaRepository<User, String> {
     Optional<User> findByRoleAndPhone(String role, String phone);
     Optional<User> findByRoleAndEmailIgnoreCase(String role, String email);
     List<User> findByRole(String role);
+    List<User> findByRoleAndStatusNot(String role, String status);
     List<User> findByClassId(String classId);
     boolean existsByUsername(String username);
     long countByRoleAndClassId(String role, String classId);
+    long countByRoleAndStatusAndDeletedAtIsNull(String role, String status);
 
     @Query("""
             select u from User u

@@ -29,6 +29,11 @@ public class NotificationController {
         return Map.of("count", notifications.unreadCount(CurrentUserHolder.require().id()));
     }
 
+    @GetMapping("/notifications/finance/unread-count")
+    public Map<String, Object> financeUnreadCount() {
+        return Map.of("count", notifications.financeUnreadCount(CurrentUserHolder.require().id()));
+    }
+
     @PostMapping("/notifications/{id}/read")
     public Notification markRead(@PathVariable String id) {
         return notifications.markRead(id, CurrentUserHolder.require().id());
@@ -38,6 +43,61 @@ public class NotificationController {
     public Map<String, Object> markAllRead() {
         notifications.markAllRead(CurrentUserHolder.require().id());
         return Map.of("ok", true);
+    }
+
+    @PostMapping("/notifications/finance/read-all")
+    public Map<String, Object> markAllFinanceRead() {
+        notifications.markAllFinanceRead(CurrentUserHolder.require().id());
+        return Map.of("ok", true);
+    }
+
+    @PostMapping("/notifications/groups/{groupKey}/read")
+    public Map<String, Object> markGroupRead(@PathVariable String groupKey) {
+        int updated = notifications.markGroupRead(
+                CurrentUserHolder.require().id(), groupKey);
+        return Map.of("ok", true, "updated", updated);
+    }
+
+    @GetMapping("/me/notification-preferences")
+    public List<UserNotificationPreference> preferences() {
+        return notifications.preferences(CurrentUserHolder.require().id());
+    }
+
+    @PutMapping("/me/notification-preferences")
+    public UserNotificationPreference updatePreference(
+            @Valid @RequestBody UpdatePreferenceRequest request) {
+        return notifications.updatePreference(
+                CurrentUserHolder.require().id(), request);
+    }
+
+    @GetMapping("/admin/notification-deliveries")
+    public List<NotificationDeliveryLog> deliveries() {
+        CurrentUserHolder.requireRole("ADMIN");
+        return notifications.latestDeliveryAttempts();
+    }
+
+    @GetMapping("/admin/notification-operations/summary")
+    public NotificationOperationsSummary operationsSummary() {
+        CurrentUserHolder.requireRole("ADMIN");
+        return notifications.operationsSummary();
+    }
+
+    @GetMapping("/admin/notifications/{id}/deliveries")
+    public List<NotificationDeliveryLog> deliveries(@PathVariable String id) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return notifications.deliveryAttempts(id);
+    }
+
+    @GetMapping("/admin/notifications/failed")
+    public List<Notification> failed() {
+        CurrentUserHolder.requireRole("ADMIN");
+        return notifications.failedNotifications();
+    }
+
+    @PostMapping("/admin/notifications/{id}/retry")
+    public Notification retry(@PathVariable String id) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return notifications.retry(id);
     }
 
     // ----- Announcements (route khớp json-server) -----

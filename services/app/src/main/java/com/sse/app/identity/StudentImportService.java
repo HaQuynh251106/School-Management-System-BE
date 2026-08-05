@@ -35,13 +35,16 @@ public class StudentImportService {
     private final ParentStudentRepository relations;
     private final StructureService structure;
     private final PasswordEncoder encoder;
+    private final RbacService rbac;
 
     public StudentImportService(UserRepository users, ParentStudentRepository relations,
-                                StructureService structure, PasswordEncoder encoder) {
+                                StructureService structure, PasswordEncoder encoder,
+                                RbacService rbac) {
         this.users = users;
         this.relations = relations;
         this.structure = structure;
         this.encoder = encoder;
+        this.rbac = rbac;
     }
 
     @Transactional
@@ -120,6 +123,8 @@ public class StudentImportService {
                 .id(Ids.gen("u"))
                 .role("STUDENT")
                 .status("ACTIVE")
+                .passwordChangeRequired(true)
+                .sessionVersion(0)
                 .studentCode(data.studentCode)
                 .createdAt(Instant.now())
                 .build());
@@ -137,8 +142,11 @@ public class StudentImportService {
         if (createdStudent || !isBlank(data.studentPassword)) {
             studentPassword = firstNonBlank(data.studentPassword, defaultStudentPassword(data.studentCode));
             student.setPasswordHash(encoder.encode(studentPassword));
+            student.setPasswordChangeRequired(true);
         }
+        student.setUpdatedAt(Instant.now());
         student = users.save(student);
+        if (createdStudent) rbac.assignPrimaryRole(student.getId(), "STUDENT", null);
 
         ParentUpsert parentUpsert = upsertParent(data);
         boolean linked = ensureSingleParentRelation(parentUpsert.parent.getId(), student.getId());
@@ -170,6 +178,8 @@ public class StudentImportService {
                 .id(Ids.gen("u"))
                 .role("PARENT")
                 .status("ACTIVE")
+                .passwordChangeRequired(true)
+                .sessionVersion(0)
                 .createdAt(Instant.now())
                 .build());
 
@@ -183,8 +193,12 @@ public class StudentImportService {
         if (created || !isBlank(data.parentPassword)) {
             createdPassword = firstNonBlank(data.parentPassword, defaultParentPassword(data.parentPhone));
             parent.setPasswordHash(encoder.encode(createdPassword));
+            parent.setPasswordChangeRequired(true);
         }
-        return new ParentUpsert(users.save(parent), created, createdPassword);
+        parent.setUpdatedAt(Instant.now());
+        parent = users.save(parent);
+        if (created) rbac.assignPrimaryRole(parent.getId(), "PARENT", null);
+        return new ParentUpsert(parent, created, createdPassword);
     }
 
     private Optional<User> findParent(RowData data) {

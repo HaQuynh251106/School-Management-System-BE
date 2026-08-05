@@ -14,4 +14,6 @@ public class Room {
     private String code;    // P201
     private String name;
     private Integer capacity;
+    private String roomType;
+    private boolean active;
 }

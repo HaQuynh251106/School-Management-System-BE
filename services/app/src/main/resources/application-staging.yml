@@ -1,0 +1,33 @@
+spring:
+  datasource:
+    url: ${SSE_DB_URL}
+    username: ${SSE_DB_USER}
+    password: ${SSE_DB_PASSWORD}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  sql:
+    init:
+      mode: never
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 1
+    validate-on-migrate: true
+    clean-disabled: true
+
+sse:
+  seed:
+    enabled: false
+  events:
+    rabbitmq:
+      enabled: true
+    local-listener:
+      enabled: false
+  notifications:
+    worker:
+      enabled: true
+
+logging:
+  level:
+    com.sse.app: INFO

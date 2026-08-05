@@ -24,4 +24,5 @@ public class AttendanceRecord {
     private String note;
     private String subjectName;
     private Integer periodNo;
+    private Integer lateMinutes;
 }

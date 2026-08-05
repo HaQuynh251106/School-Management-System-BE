@@ -8,4 +8,5 @@ import java.util.Optional;
 public interface UserDeviceRepository extends JpaRepository<UserDevice, String> {
     Optional<UserDevice> findByUserIdAndDeviceToken(String userId, String deviceToken);
     List<UserDevice> findByUserIdAndActiveIsTrue(String userId);
+    List<UserDevice> findByUserIdOrderByLastSeenAtDesc(String userId);
 }

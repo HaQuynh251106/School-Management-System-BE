@@ -30,6 +30,15 @@ public class UserDevice {
     @Column(nullable = false)
     private Instant lastSeenAt;
 
+    private String lastIpAddress;
+
+    @Column(length = 1000)
+    private String lastUserAgent;
+
+    private Instant deactivatedAt;
+    private String deactivatedBy;
+    private String deactivationReason;
+
     @Column(nullable = false)
     private Instant createdAt;
 }

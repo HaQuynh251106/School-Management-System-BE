@@ -52,6 +52,7 @@ App lắng nghe tại `http://localhost:4000`. Kiểm tra: `curl localhost:4000/
 | Vai trò | username | password |
 |---|---|---|
 | Admin | `admin` | `admin@123` |
+| Admin duyệt tài chính | `admin.finance` | `admin2@123` |
 | Teacher | `gv.hoa`, `gv.minh` | `teacher@123` |
 | Student | `hs.an`, `hs.binh` | `student@123` |
 | Parent | `ph.pham` (cha của hs.an + hs.binh) | `parent@123` |
@@ -91,6 +92,18 @@ curl -X POST localhost:4000/auth/login -H 'Content-Type: application/json' \
 **Tài chính (A7/D4)**
 `GET/POST /fee-periods` · `GET/POST /fee-periods/{id}/items` · `POST /fee-periods/{id}/open`
 `POST /fee-periods/{id}/generate-invoices` · `GET /invoices` · `GET /invoices/{id}` · `POST /payments` · `GET /payments?invoiceId`
+
+**Báo cáo tài chính (P5)**
+`GET /reports/finance` (lọc theo ngày, đợt thu, khối, lớp, học sinh, phương thức)
+`GET /reports/finance/export?format=XLSX|PDF` (xuất file và ghi audit)
+
+Kiểm thử P5 tự động sau khi backend chạy ở cổng `4000`:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\smoke-finance-p5.ps1 `
+  -BaseUrl http://127.0.0.1:4000
+```
 
 **Thông báo (E2/C5)**
 `GET /notifications?unread` · `GET /notifications/unread-count` · `POST /notifications/{id}/read` · `/notifications/read-all`

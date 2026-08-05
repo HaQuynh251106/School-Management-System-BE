@@ -1,6 +1,8 @@
 package com.sse.app.academic.timetable;
 
 import com.sse.app.academic.structure.StructureService;
+import com.sse.app.academic.teaching.TeacherClassSubject;
+import com.sse.app.academic.teaching.TeachingAssignmentRepository;
 import com.sse.app.common.ApiException;
 import com.sse.app.common.Ids;
 import com.sse.app.academic.timetable.TimetableDtos.CreateSlotRequest;
@@ -11,6 +13,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** A3: Xếp TKB + Conflict Resolution (flowchart 2.4). */
 @Service
@@ -20,13 +23,35 @@ public class TimetableService {
     private final StructureService structure;
     private final UserService users;
     private final DomainEventPublisher events;
+    private final TeachingAssignmentRepository teachingAssignments;
+    private final TimetableScheduleRepository schedules;
+    private final TimetablePlanSourceService planSources;
 
     public TimetableService(TimetableRepository slots, StructureService structure,
-                            UserService users, DomainEventPublisher events) {
+                            UserService users, DomainEventPublisher events,
+                            TeachingAssignmentRepository teachingAssignments,
+                            TimetableScheduleRepository schedules,
+                            TimetablePlanSourceService planSources) {
         this.slots = slots;
         this.structure = structure;
         this.users = users;
         this.events = events;
+        this.teachingAssignments = teachingAssignments;
+        this.schedules = schedules;
+        this.planSources = planSources;
+    }
+
+    public String effectiveSemesterId() {
+        return schedules.findFirstByStatusOrderByPublishedAtDesc("PUBLISHED")
+                .map(TimetableSchedule::getSemesterId).orElse(null);
+    }
+
+    public List<TimetableSlot> listEffective(String classId, String teacherId,
+                                             String semesterId, String dayOfWeek) {
+        String effectiveSemester = semesterId == null || semesterId.isBlank()
+                ? effectiveSemesterId() : semesterId;
+        if (effectiveSemester == null) return List.of();
+        return list(classId, teacherId, effectiveSemester, dayOfWeek);
     }
 
     public List<TimetableSlot> list(String classId, String teacherId, String semesterId, String dayOfWeek) {
@@ -46,6 +71,8 @@ public class TimetableService {
     }
 
     public TimetableSlot create(CreateSlotRequest r) {
+        TeacherClassSubject assignment = requireTeachingAssignment(r);
+        assertWithinWeeklyPlan(assignment);
         checkConflicts(r);
 
         User teacher = users.getById(r.teacherId());
@@ -69,6 +96,34 @@ public class TimetableService {
                 Map.of("classId", safe(saved.getClassId()), "teacherId", safe(saved.getTeacherId()),
                         "subjectId", safe(saved.getSubjectId()), "semesterId", safe(saved.getSemesterId())));
         return saved;
+    }
+
+    private TeacherClassSubject requireTeachingAssignment(CreateSlotRequest request) {
+        TeacherClassSubject assignment = teachingAssignments
+                .findByClassIdAndSubjectIdAndSemesterIdAndStatus(
+                        request.classId(), request.subjectId(), request.semesterId(), "ACTIVE")
+                .orElseThrow(() -> ApiException.forbidden(
+                        "Lớp, môn và học kỳ này chưa có phân công giáo viên"));
+        if (!request.teacherId().equals(assignment.getTeacherId())) {
+            throw ApiException.forbidden("Giáo viên không được phân công dạy môn này cho lớp đã chọn");
+        }
+        return assignment;
+    }
+
+    private void assertWithinWeeklyPlan(TeacherClassSubject assignment) {
+        long scheduled = slots.findByClassId(assignment.getClassId()).stream()
+                .filter(slot -> assignment.getTeacherId().equals(slot.getTeacherId()))
+                .filter(slot -> assignment.getSubjectId().equals(slot.getSubjectId()))
+                .filter(slot -> assignment.getSemesterId().equals(slot.getSemesterId()))
+                .count();
+        var schoolClass = structure.getClass(assignment.getClassId());
+        var source = planSources.resolve(schoolClass.getAcademicYearId(),
+                assignment.getSemesterId(), Set.of(schoolClass.getGradeLevel()));
+        int weeklyPeriods = planSources.weeklyPeriods(source,
+                schoolClass.getGradeLevel(), assignment.getSubjectId());
+        if (scheduled >= weeklyPeriods) {
+            throw ApiException.conflict("Môn học đã được xếp đủ " + weeklyPeriods + " tiết trong tuần");
+        }
     }
 
     private void checkConflicts(CreateSlotRequest r) {

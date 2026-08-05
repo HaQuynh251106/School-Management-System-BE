@@ -26,4 +26,11 @@ public final class CurrentUserHolder {
         }
         throw new ApiException(HttpStatus.FORBIDDEN, "Không đủ quyền");
     }
+
+    public static void requirePermission(String permission) {
+        if (!require().hasPermission(permission)) {
+            throw new ApiException(HttpStatus.FORBIDDEN,
+                    "Khong co quyen " + permission);
+        }
+    }
 }

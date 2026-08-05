@@ -113,6 +113,7 @@ public class DashboardService {
         );
         List<DashboardDatum> invoiceStatuses = List.of(
                 datum("Chờ thanh toán", invoices.stream().filter(i -> "PENDING".equals(i.status())).count()),
+                datum("Quá hạn", invoices.stream().filter(i -> "OVERDUE".equals(i.status())).count()),
                 datum("Thanh toán một phần", invoices.stream().filter(i -> "PARTIAL".equals(i.status())).count()),
                 datum("Đã thanh toán", invoices.stream().filter(i -> "PAID".equals(i.status())).count()),
                 datum("Tiết TKB", slots.size())

@@ -1,13 +1,10 @@
-name: CI
-
-# TODO (P1 - S1): hoàn thiện workflow.
-# Mục tiêu: trigger trên PR vào develop/main → build + test + spotless check.
+name: Backend CI
 
 on:
   pull_request:
-    branches: [develop, main]
+    branches: [develop, main, QUANG-THAIs]
   push:
-    branches: [develop, main]
+    branches: [develop, main, QUANG-THAIs]
 
 jobs:
   build:
@@ -22,11 +19,12 @@ jobs:
           java-version: 17
           cache: maven
 
-      - name: Build
-        run: mvn -T 1C -B -DskipTests clean install
+      - name: Compile and run all tests
+        run: mvn -B -T 1C clean verify
 
-      - name: Test
-        run: mvn -B test
-
-      # - name: Spotless check
-      #   run: mvn spotless:check
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: "**/target/surefire-reports/**"

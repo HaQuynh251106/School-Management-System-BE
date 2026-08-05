@@ -20,13 +20,13 @@ public class AuditController {
     @GetMapping
     public List<AuditLog> list(@RequestParam(required = false) String module,
                                @RequestParam(required = false) String action) {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requirePermission("AUDIT_READ");
         return audit.list(module, action);
     }
 
     @GetMapping("/stats")
     public Map<String, Object> stats() {
-        CurrentUserHolder.requireRole("ADMIN");
+        CurrentUserHolder.requirePermission("AUDIT_READ");
         return audit.stats();
     }
 }

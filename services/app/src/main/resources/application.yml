@@ -7,20 +7,22 @@ server:
   port: 4000
 
 spring:
+  config:
+    import: optional:file:.env.local[.properties]
   application:
     name: sse-app
 
-  # PostgreSQL dev Docker by default. Override bằng biến môi trường khi cần.
+  # Monolith-first local database managed in pgAdmin.
   datasource:
-    url: ${SSE_DB_URL:jdbc:postgresql://localhost:5441/identity_db}
-    username: ${SSE_DB_USER:sse}
-    password: ${SSE_DB_PASSWORD:sse_dev}
+    url: ${SSE_DB_URL:jdbc:postgresql://localhost:5432/sse_db}
+    username: ${SSE_DB_USER:postgres}
+    password: ${SSE_DB_PASSWORD:postgres}
     driver-class-name: org.postgresql.Driver
 
   jpa:
     hibernate:
       # Hibernate tự tạo/cập nhật schema từ entity (DEV). Production nên chuyển sang Flyway.
-      ddl-auto: update
+      ddl-auto: validate
     open-in-view: false
     show-sql: false
     properties:
@@ -28,12 +30,19 @@ spring:
         format_sql: false
         jdbc:
           time_zone: UTC
-    defer-datasource-initialization: true
+    defer-datasource-initialization: false
 
   sql:
     init:
-      mode: always
-      data-locations: classpath:db/structure-schema-patch.sql
+      mode: never
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    baseline-version: 1
+    validate-on-migrate: true
+    clean-disabled: true
 
   jackson:
     default-property-inclusion: always
@@ -62,7 +71,8 @@ sse:
     access-ttl-seconds: 900
     refresh-ttl-seconds: 604800
   seed:
-    enabled: true   # seed dữ liệu mẫu (khớp mock-server) nếu DB rỗng
+    enabled: true
+    dataset: ${SSE_SEED_DATASET:baseline}
   events:
     rabbitmq:
       enabled: ${SSE_EVENTS_RABBITMQ_ENABLED:true}
@@ -77,6 +87,35 @@ sse:
   notifications:
     worker:
       enabled: ${SSE_NOTIFICATION_WORKER_ENABLED:true}
+  payment:
+    public-base-url: ${SSE_PAYMENT_PUBLIC_BASE_URL:http://127.0.0.1:4000}
+    sandbox-secret: ${SSE_PAYMENT_SANDBOX_SECRET:dev-payment-secret-change-me}
+    vnpay:
+      enabled: ${SSE_VNPAY_ENABLED:false}
+      tmn-code: ${SSE_VNPAY_TMN_CODE:}
+      hash-secret: ${SSE_VNPAY_HASH_SECRET:}
+      payment-url: ${SSE_VNPAY_PAYMENT_URL:https://sandbox.vnpayment.vn/paymentv2/vpcpay.html}
+      return-url: ${SSE_VNPAY_RETURN_URL:http://127.0.0.1:5173/?paymentReturn=vnpay}
+      ipn-url: ${SSE_VNPAY_IPN_URL:http://127.0.0.1:4000/payments/vnpay/ipn}
+      expire-minutes: ${SSE_VNPAY_EXPIRE_MINUTES:15}
+    momo:
+      enabled: ${SSE_MOMO_ENABLED:false}
+      partner-code: ${SSE_MOMO_PARTNER_CODE:}
+      access-key: ${SSE_MOMO_ACCESS_KEY:}
+      secret-key: ${SSE_MOMO_SECRET_KEY:}
+      create-url: ${SSE_MOMO_CREATE_URL:https://test-payment.momo.vn/v2/gateway/api/create}
+      redirect-url: ${SSE_MOMO_REDIRECT_URL:http://127.0.0.1:5173/?paymentReturn=momo}
+      ipn-url: ${SSE_MOMO_IPN_URL:http://127.0.0.1:4000/payments/momo/ipn}
+      partner-name: ${SSE_MOMO_PARTNER_NAME:SSE School}
+      store-id: ${SSE_MOMO_STORE_ID:SSESchool}
+    bank-transfer:
+      enabled: ${SSE_MB_BANK_TRANSFER_ENABLED:false}
+      bank-id: ${SSE_MB_BANK_ID:MB}
+      bank-name: ${SSE_MB_BANK_NAME:MB Bank}
+      account-number: ${SSE_MB_ACCOUNT_NUMBER:}
+      account-name: ${SSE_MB_ACCOUNT_NAME:}
+      transfer-prefix: ${SSE_MB_TRANSFER_PREFIX:SSE}
+      qr-base-url: ${SSE_VIETQR_BASE_URL:https://img.vietqr.io/image}
   storage:
     minio:
       endpoint: ${SSE_MINIO_ENDPOINT:http://localhost:9000}

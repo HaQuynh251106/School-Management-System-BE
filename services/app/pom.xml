@@ -15,6 +15,7 @@
 
     <properties>
         <jjwt.version>0.12.6</jjwt.version>
+        <timefold.version>1.33.0</timefold.version>
     </properties>
 
     <dependencies>
@@ -28,6 +29,12 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+
+        <!-- Versioned database schema. Hibernate validates but never mutates it. -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
         </dependency>
 
         <!-- Bean validation (@NotBlank ...) -->
@@ -71,6 +78,20 @@
             <groupId>org.apache.poi</groupId>
             <artifactId>poi-ooxml</artifactId>
             <version>5.2.5</version>
+        </dependency>
+
+        <!-- Generate immutable payment receipt PDFs stored in MinIO -->
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>3.0.8</version>
+        </dependency>
+
+        <!-- Constraint solver for automatic school timetabling (Java 17 compatible). -->
+        <dependency>
+            <groupId>ai.timefold.solver</groupId>
+            <artifactId>timefold-solver-core</artifactId>
+            <version>${timefold.version}</version>
         </dependency>
 
         <!-- JWT (HS256) -->

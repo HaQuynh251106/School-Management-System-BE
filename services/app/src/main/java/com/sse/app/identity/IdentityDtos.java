@@ -1,12 +1,18 @@
 package com.sse.app.identity;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 
 /** Gom các request DTO của phân hệ identity. */
 public final class IdentityDtos {
     private IdentityDtos() {}
 
-    public record LoginRequest(@NotBlank String username, @NotBlank String password) {}
+    public record LoginRequest(
+            @NotBlank String username,
+            @NotBlank String password,
+            String deviceToken,
+            String platform,
+            String deviceName) {}
 
     public record RefreshRequest(@NotBlank String refreshToken) {}
 
@@ -29,7 +35,8 @@ public final class IdentityDtos {
             String mainSubject,
             String studentCode,
             String classId,
-            String className
+            String className,
+            String status
     ) {}
 
     public record UpdateUserRequest(
@@ -44,7 +51,41 @@ public final class IdentityDtos {
             String className
     ) {}
 
-    public record AdminResetPasswordRequest(String newPassword) {}
+    public record AdminResetPasswordRequest(
+            String newPassword,
+            @NotBlank @Size(min = 5, max = 500) String reason) {}
+
+    public record ChangePasswordRequest(
+            @NotBlank String currentPassword,
+            @NotBlank String newPassword) {}
+
+    public record DeleteUserRequest(
+            @NotBlank @Size(min = 5, max = 500) String reason) {}
+
+    public record RestoreUserRequest(
+            String status,
+            @NotBlank @Size(min = 5, max = 500) String reason) {}
+
+    public record PasswordResetResult(
+            boolean ok,
+            String temporaryPassword,
+            boolean passwordChangeRequired,
+            int revokedSessions) {}
 
     public record RegisterDeviceRequest(@NotBlank String deviceToken, @NotBlank String platform, String deviceName) {}
+
+    public record SessionResponse(
+            String id,
+            String ipAddress,
+            String userAgent,
+            String deviceId,
+            String deviceName,
+            String platform,
+            java.time.Instant createdAt,
+            java.time.Instant lastSeenAt,
+            java.time.Instant expiresAt,
+            boolean active,
+            boolean current) {}
+
+    public record SessionRotation(User user, String deviceId) {}
 }
