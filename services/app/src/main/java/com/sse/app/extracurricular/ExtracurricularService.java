@@ -4,7 +4,9 @@ import com.sse.app.common.ApiException;
 import com.sse.app.common.Ids;
 import com.sse.app.extracurricular.ExtracurricularDtos.*;
 import com.sse.app.identity.UserService;
+import com.sse.app.finance.FinanceService;
 import com.sse.app.notification.NotificationService;
+import com.sse.app.security.CurrentUser;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,13 +21,16 @@ public class ExtracurricularService {
     private final ClubRegistrationRepository registrations;
     private final UserService users;
     private final NotificationService notifications;
+    private final FinanceService finance;
 
     public ExtracurricularService(ClubRepository clubs, ClubRegistrationRepository registrations,
-                                  UserService users, NotificationService notifications) {
+                                  UserService users, NotificationService notifications,
+                                  FinanceService finance) {
         this.clubs = clubs;
         this.registrations = registrations;
         this.users = users;
         this.notifications = notifications;
+        this.finance = finance;
     }
 
     public List<Club> listClubs() { return clubs.findAll(); }
@@ -68,15 +73,30 @@ public class ExtracurricularService {
         reg.setRegisteredAt(Instant.now());
         registrations.save(reg);
 
+        if (club.getFee() > 0) {
+            FinanceService.ActivityInvoiceResult invoice = finance.createActivityInvoice(
+                    club.getId() + "-" + reg.getId(), club.getName(), studentId,
+                    club.getFee(), java.time.LocalDate.now().plusDays(7));
+            reg.setFeePeriodId(invoice.feePeriodId());
+            reg.setInvoiceId(invoice.invoiceId());
+            registrations.save(reg);
+        }
+
         notifications.notifyUser(studentId, "ANNOUNCEMENT", "Đăng ký ngoại khóa thành công",
                 "Bạn đã đăng ký CLB " + club.getName(), "CLUB", clubId);
         return reg;
     }
 
     @Transactional
-    public ClubRegistration cancel(String regId) {
+    public ClubRegistration cancel(String regId, CurrentUser actor) {
         ClubRegistration reg = registrations.findById(regId)
                 .orElseThrow(() -> ApiException.notFound("Đăng ký"));
+        if (!actor.isAdmin() && !actor.id().equals(reg.getStudentId())) {
+            if (!actor.isParent()) throw ApiException.forbidden("Bạn không có quyền hủy đăng ký này");
+            users.assertParentOf(actor.id(), reg.getStudentId());
+        }
+        if ("CANCELLED".equals(reg.getStatus())) return reg;
+        finance.cancelActivityInvoice(reg.getFeePeriodId());
         reg.setStatus("CANCELLED");
         return registrations.save(reg);
     }

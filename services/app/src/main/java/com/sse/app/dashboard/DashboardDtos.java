@@ -6,7 +6,12 @@ import java.util.List;
 public final class DashboardDtos {
     private DashboardDtos() {}
 
-    public record DashboardResponse(List<DashboardMetric> metrics, List<DashboardChart> charts) {}
+    public record DashboardResponse(List<DashboardMetric> metrics, List<DashboardChart> charts,
+                                    List<DashboardShortcut> shortcuts) {
+        public DashboardResponse(List<DashboardMetric> metrics, List<DashboardChart> charts) {
+            this(metrics, charts, List.of());
+        }
+    }
 
     public record DashboardMetric(String key, String label, double value, String format,
                                   String hint, String tone) {}
@@ -15,4 +20,6 @@ public final class DashboardDtos {
                                  String suffix, double max, List<DashboardDatum> data) {}
 
     public record DashboardDatum(String label, double value) {}
+    public record DashboardShortcut(String key, String label, long count,
+                                    String pageId, String filter, String tone) {}
 }

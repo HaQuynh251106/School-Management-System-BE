@@ -4,6 +4,7 @@ import com.sse.app.common.ApiException;
 import com.sse.app.security.CurrentUser;
 import com.sse.app.security.CurrentUserHolder;
 import com.sse.app.identity.UserService;
+import com.sse.app.identity.UserDto;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.web.bind.annotation.*;
 
@@ -30,9 +31,14 @@ public class ChatController {
         return chat.threads(CurrentUserHolder.require().id());
     }
 
+    @GetMapping("/contacts")
+    public List<UserDto> contacts() {
+        return chat.contacts(CurrentUserHolder.require());
+    }
+
     @GetMapping("/messages")
     public List<ChatMessage> messages(@RequestParam String withUserId) {
-        return chat.conversation(CurrentUserHolder.require().id(), withUserId);
+        return chat.conversation(CurrentUserHolder.require(), withUserId);
     }
 
     @PostMapping("/messages")
@@ -41,6 +47,6 @@ public class ChatController {
         if (req == null || req.toUserId() == null || req.body() == null)
             throw ApiException.badRequest("Thiếu người nhận hoặc nội dung");
         String meName = users.fullNameOf(me.id());
-        return chat.send(me.id(), meName, req.toUserId(), req.body());
+        return chat.send(me, meName, req.toUserId(), req.body());
     }
 }

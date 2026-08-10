@@ -10,6 +10,8 @@ import com.sse.app.academic.structure.SchoolClass;
 import com.sse.app.academic.structure.Semester;
 import com.sse.app.academic.structure.StructureService;
 import com.sse.app.academic.structure.Subject;
+import com.sse.app.academic.planning.TeacherStaffingDtos.TeacherStaffingAnalysis;
+import com.sse.app.academic.planning.TeacherStaffingService;
 import com.sse.app.academic.teaching.TeacherClassSubject;
 import com.sse.app.academic.teaching.TeachingAssignmentRepository;
 import com.sse.app.academic.timetable.TimetableDtos.GenerateScheduleRequest;
@@ -73,6 +75,7 @@ public class AutomaticTimetableService {
     private final UserService users;
     private final DomainEventPublisher events;
     private final TimetablePlanSourceService planSources;
+    private final TeacherStaffingService staffing;
 
     public AutomaticTimetableService(
             TimetableScheduleRepository schedules,
@@ -82,7 +85,8 @@ public class AutomaticTimetableService {
             StructureService structure,
             UserService users,
             DomainEventPublisher events,
-            TimetablePlanSourceService planSources) {
+            TimetablePlanSourceService planSources,
+            TeacherStaffingService staffing) {
         this.schedules = schedules;
         this.draftSlots = draftSlots;
         this.liveSlots = liveSlots;
@@ -91,6 +95,7 @@ public class AutomaticTimetableService {
         this.users = users;
         this.events = events;
         this.planSources = planSources;
+        this.staffing = staffing;
     }
 
     public List<TimetableSchedule> listSchedules(String semesterId) {
@@ -430,6 +435,27 @@ public class AutomaticTimetableService {
         Set<String> sourceGrades = sourceSnapshots.stream()
                 .map(TimetablePlanSourceService.PlanSnapshot::gradeLevel)
                 .collect(Collectors.toSet());
+        TeacherStaffingAnalysis staffingAnalysis = null;
+        if (sourceGrades.containsAll(targetGrades)) {
+            staffingAnalysis = staffing.analyze(year.getId(), semester.getId(), grade);
+            staffingAnalysis.subjects().stream()
+                    .filter(item -> item.shortage() > 0)
+                    .forEach(item -> issues.add(new ScheduleIssue(
+                            "ERROR", "TEACHER_STAFFING_SHORTAGE",
+                            item.subjectName() + " thiếu " + item.shortage()
+                                    + " giáo viên đúng chuyên môn để xếp đủ lịch (cần "
+                                    + item.minimumTeachersForYear() + ", hiện có "
+                                    + item.qualifiedTeacherCount() + ")",
+                            null, null, item.subjectId(), null, null)));
+            if (!staffingAnalysis.withinLegalCeiling()) {
+                issues.add(new ScheduleIssue(
+                        "WARNING", "TEACHER_STAFFING_CEILING",
+                        "Toàn trường hiện có " + staffingAnalysis.currentActiveTeacherCount()
+                                + " giáo viên, vượt trần nguyên người "
+                                + staffingAnalysis.maximumWholeTeachers() + " theo loại trường đã chọn",
+                        null, null, null, null, null));
+            }
+        }
         Map<String, Integer> classPeriods = new HashMap<>();
         Map<String, Integer> teacherPeriods = new HashMap<>();
         Map<String, String> teacherNames = new HashMap<>();
@@ -489,6 +515,8 @@ public class AutomaticTimetableService {
             }
         }
 
+        int weeklyTeachingNorm = staffingAnalysis == null
+                ? 17 : staffingAnalysis.policy().weeklyTeachingNorm();
         int weeklyTeacherCapacity = 25;
         teacherPeriods.forEach((teacherId, periods) -> {
             if (periods > weeklyTeacherCapacity) {
@@ -498,6 +526,13 @@ public class AutomaticTimetableService {
                                 + weeklyTeacherCapacity
                                 + " tiết (5 tiết/ngày và một ngày nghỉ)",
                         null, teacherId));
+            } else if (periods > weeklyTeachingNorm) {
+                issues.add(new ScheduleIssue(
+                        "WARNING", "TEACHER_NORM_EXCEEDED",
+                        teacherNames.getOrDefault(teacherId, teacherId) + " được phân "
+                                + periods + " tiết/tuần, vượt định mức "
+                                + weeklyTeachingNorm + " tiết/tuần",
+                        null, teacherId, null, null, null));
             }
         });
 

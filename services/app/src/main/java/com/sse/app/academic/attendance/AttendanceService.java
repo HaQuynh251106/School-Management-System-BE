@@ -162,6 +162,20 @@ public class AttendanceService {
         return excuseRequests.findByStudentIdOrderByRequestedAtDesc(studentId);
     }
 
+    public List<AttendanceExcuseRequest> excuseRequestsForTeacher(
+            String teacherId, String status) {
+        return excuseRequests(null, status).stream().filter(request -> {
+            try {
+                AttendanceRecord record = records.findById(request.getAttendanceRecordId())
+                        .orElse(null);
+                return record != null && canTeacherMark(
+                        teacherId, timetable.findSlot(record.getSlotId()));
+            } catch (RuntimeException ignored) {
+                return false;
+            }
+        }).toList();
+    }
+
     @Transactional
     public AttendanceExcuseRequest reviewExcuse(
             String requestId, String decision, String note,

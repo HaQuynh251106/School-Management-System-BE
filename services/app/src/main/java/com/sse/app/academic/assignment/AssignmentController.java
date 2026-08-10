@@ -193,4 +193,22 @@ public class AssignmentController {
         users.assertParentOf(me.id(), studentId);
         return assignments.submissionDownloadUrlForStudent(assignmentId, submissionId, studentId);
     }
+
+    @GetMapping("/me/children/{studentId}/submissions/{submissionId}/versions")
+    public List<AssignmentSubmissionVersion> childSubmissionVersions(
+            @PathVariable String studentId, @PathVariable String submissionId) {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("PARENT");
+        users.assertParentOf(me.id(), studentId);
+        return assignments.submissionVersions(submissionId, studentId, false);
+    }
+
+    @GetMapping("/me/children/{studentId}/submissions/{submissionId}/resubmission-requests")
+    public List<SubmissionResubmissionRequest> childResubmissionRequests(
+            @PathVariable String studentId, @PathVariable String submissionId) {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("PARENT");
+        users.assertParentOf(me.id(), studentId);
+        return assignments.resubmissionRequests(submissionId, studentId, false);
+    }
 }

@@ -2,6 +2,7 @@ package com.sse.app;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.mongo.MongoAutoConfiguration;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
@@ -12,7 +13,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * notification, extracurricular) được tổ chức thành các package độc lập trong cùng
  * một deployable. Đây là bản chạy nhanh cho GĐ1; có thể tách thành microservices sau.
  */
-@SpringBootApplication
+@SpringBootApplication(exclude = MongoAutoConfiguration.class)
 @EnableAsync
 @EnableScheduling
 public class SseAppApplication {

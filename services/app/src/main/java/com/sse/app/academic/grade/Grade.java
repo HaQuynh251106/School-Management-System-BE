@@ -1,5 +1,6 @@
 package com.sse.app.academic.grade;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -22,6 +23,9 @@ public class Grade {
     /** ORAL | 15M | MID | FINAL */
     private String category;
     private String categoryName;
+    /** 1-based occurrence when a category requires multiple grade entries. */
+    @JsonProperty("assessmentIndex")
+    private int entryIndex;
     private Double score;
     private String note;
     private Instant recordedAt;

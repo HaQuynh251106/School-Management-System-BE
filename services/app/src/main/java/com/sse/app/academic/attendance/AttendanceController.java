@@ -104,6 +104,9 @@ public class AttendanceController {
             }
             users.assertParentOf(me.id(), studentId);
         }
+        if (me.isTeacher()) {
+            return attendance.excuseRequestsForTeacher(me.id(), status);
+        }
         return attendance.excuseRequests(studentId, status);
     }
 

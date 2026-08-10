@@ -41,6 +41,8 @@ class ClubRegistration {
     private String studentId;
     private String studentName;
     private String registeredBy;
+    private String feePeriodId;
+    private String invoiceId;
     /** REGISTERED | CANCELLED */
     private String status;
     private Instant registeredAt;

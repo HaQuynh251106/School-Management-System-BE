@@ -16,6 +16,9 @@ public class NotificationDeliveryLog {
     @Column(nullable = false)
     private String notificationId;
 
+    private String channel;
+    private String provider;
+
     @Column(nullable = false)
     private int attemptNo;
 

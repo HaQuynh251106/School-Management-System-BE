@@ -45,6 +45,11 @@ interface TeacherSubjectCapabilityRepository
     Optional<TeacherSubjectCapability> findByTeacherIdAndSubjectId(String teacherId, String subjectId);
 }
 
+interface TeacherStaffingPolicyRepository
+        extends JpaRepository<TeacherStaffingPolicy, String> {
+    Optional<TeacherStaffingPolicy> findByAcademicYearId(String academicYearId);
+}
+
 interface AcademicTrainingPlanRepository
         extends JpaRepository<AcademicTrainingPlan, String> {
     List<AcademicTrainingPlan> findByAcademicYearIdOrderByGradeLevel(

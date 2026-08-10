@@ -19,6 +19,8 @@ import java.util.*;
 @Service
 public class FinanceService {
 
+    public record ActivityInvoiceResult(String feePeriodId, String invoiceId, String invoiceCode) {}
+
     private static final Set<String> TARGET_TYPES = Set.of("ALL", "GRADE", "CLASS", "STUDENT");
     private static final Set<String> FEE_TYPES = Set.of("TUITION", "MEAL", "TRANSPORT", "ACTIVITY", "OTHER");
     private static final int INVOICE_BATCH_SIZE = 100;
@@ -59,6 +61,39 @@ public class FinanceService {
                         Comparator.nullsLast(Comparator.reverseOrder())))
                 .map(this::hydratePeriodTargets)
                 .toList();
+    }
+
+    /** Creates and publishes a one-student activity fee atomically. */
+    @Transactional
+    public ActivityInvoiceResult createActivityInvoice(
+            String sourceCode, String activityName, String studentId, long amount, LocalDate dueDate) {
+        if (amount <= 0) return null;
+        String code = ("ACT-" + sourceCode).replaceAll("[^A-Za-z0-9-]", "-")
+                .toUpperCase(Locale.ROOT);
+        FeePeriod period = periods.findAll().stream()
+                .filter(item -> code.equalsIgnoreCase(item.getCode()))
+                .findFirst().orElse(null);
+        if (period == null) {
+            period = createPeriod(new CreateFeePeriodRequest(
+                    null, code, "Ngoại khóa: " + activityName, null, null,
+                    dueDate == null ? LocalDate.now().plusDays(7) : dueDate,
+                    "STUDENT", List.of(studentId), "ACTIVITY", null));
+        }
+        if (periodItems.findByFeePeriodId(period.getId()).isEmpty()) {
+            addItem(period.getId(), new AddFeeItemRequest(
+                    null, activityName, amount, null, "ALL", List.of()));
+        }
+        if ("DRAFT".equals(period.getStatus())) open(period.getId());
+        if ("OPEN".equals(getPeriod(period.getId()).getStatus())) generateInvoices(period.getId());
+        Invoice invoice = invoices.findByFeePeriodIdAndStudentId(period.getId(), studentId)
+                .orElseThrow(() -> ApiException.conflict("Không thể sinh hóa đơn ngoại khóa"));
+        return new ActivityInvoiceResult(period.getId(), invoice.getId(), invoice.getCode());
+    }
+
+    @Transactional
+    public void cancelActivityInvoice(String feePeriodId) {
+        if (feePeriodId == null || feePeriodId.isBlank()) return;
+        cancel(feePeriodId, "Học sinh hủy đăng ký ngoại khóa");
     }
 
     @Transactional

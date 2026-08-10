@@ -17,6 +17,8 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.never;
@@ -29,6 +31,7 @@ class NotificationServiceTest {
     @Mock private AnnouncementRepository announcements;
     @Mock private UserNotificationPreferenceRepository preferences;
     @Mock private UserService users;
+    @Mock private NotificationChannelDispatcher channelDispatcher;
 
     private NotificationService service;
 
@@ -36,7 +39,7 @@ class NotificationServiceTest {
     void setUp() {
         service = new NotificationService(
                 notifications, templates, deliveryLogs,
-                announcements, preferences, users);
+                announcements, preferences, users, channelDispatcher);
     }
 
     private void stubDeliverySaves() {
@@ -124,6 +127,29 @@ class NotificationServiceTest {
                 "GRADE", "grade-1");
 
         verify(notifications, never()).save(any());
+    }
+
+    @Test
+    void allPreferenceEnablesExternalChannel() {
+        stubDeliverySaves();
+        when(preferences.findByUserIdAndNotificationTypeAndChannel(
+                anyString(), anyString(), anyString())).thenReturn(Optional.empty());
+        doReturn(Optional.of(UserNotificationPreference.builder().enabled(true).build()))
+                .when(preferences).findByUserIdAndNotificationTypeAndChannel(
+                        "student-1", "ALL", "EMAIL");
+
+        service.notifyUser("student-1", "GRADE", "Có điểm", "9.0",
+                "GRADE", "grade-1");
+
+        verify(channelDispatcher).dispatch(
+                org.mockito.ArgumentMatchers.eq("student-1"),
+                org.mockito.ArgumentMatchers.eq("GRADE"),
+                org.mockito.ArgumentMatchers.eq("EMAIL"),
+                org.mockito.ArgumentMatchers.eq("Có điểm"),
+                org.mockito.ArgumentMatchers.eq("9.0"),
+                org.mockito.ArgumentMatchers.eq("GRADE"),
+                org.mockito.ArgumentMatchers.eq("grade-1"),
+                any(), any());
     }
 
     @Test

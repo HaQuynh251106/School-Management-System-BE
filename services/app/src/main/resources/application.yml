@@ -64,7 +64,20 @@ spring:
           max-interval: 5000
         default-requeue-rejected: false
 
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
+
 sse:
+  audit:
+    mongo:
+      enabled: ${SSE_AUDIT_MONGO_ENABLED:false}
+      uri: ${SSE_AUDIT_MONGO_URI:mongodb://sse:sse_dev@localhost:27017/?authSource=admin}
+      database: ${SSE_AUDIT_MONGO_DATABASE:sse_audit}
+      collection: ${SSE_AUDIT_MONGO_COLLECTION:audit_logs}
   jwt:
     # Đổi secret khi deploy. Tối thiểu 32 bytes cho HS256.
     secret: ${SSE_JWT_SECRET:dev-secret-do-not-use-in-prod-change-me-please-0123456789}
@@ -87,6 +100,14 @@ sse:
   notifications:
     worker:
       enabled: ${SSE_NOTIFICATION_WORKER_ENABLED:true}
+    provider-mode: ${SSE_NOTIFICATION_PROVIDER_MODE:mock}
+    max-attempts: ${SSE_NOTIFICATION_MAX_ATTEMPTS:3}
+    sendgrid:
+      api-key: ${SSE_SENDGRID_API_KEY:}
+      from-email: ${SSE_SENDGRID_FROM_EMAIL:no-reply@sse.local}
+    fcm:
+      access-token: ${SSE_FCM_ACCESS_TOKEN:}
+      send-url: ${SSE_FCM_SEND_URL:https://fcm.googleapis.com/v1/projects/PROJECT_ID/messages:send}
   payment:
     public-base-url: ${SSE_PAYMENT_PUBLIC_BASE_URL:http://127.0.0.1:4000}
     sandbox-secret: ${SSE_PAYMENT_SANDBOX_SECRET:dev-payment-secret-change-me}

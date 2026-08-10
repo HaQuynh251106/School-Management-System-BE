@@ -2,7 +2,14 @@ package com.sse.app.chat;
 
 import com.sse.app.common.Ids;
 import com.sse.app.identity.UserService;
+import com.sse.app.identity.UserDto;
+import com.sse.app.security.CurrentUser;
+import com.sse.app.common.ApiException;
+import com.sse.app.academic.structure.SchoolClass;
+import com.sse.app.academic.structure.StructureService;
+import com.sse.app.academic.teaching.TeachingAssignmentService;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.*;
@@ -13,10 +20,16 @@ public class ChatService {
 
     private final ChatRepository repo;
     private final UserService users;
+    private final StructureService structure;
+    private final TeachingAssignmentService teachingAssignments;
 
-    public ChatService(ChatRepository repo, UserService users) {
+    public ChatService(ChatRepository repo, UserService users,
+                       StructureService structure,
+                       TeachingAssignmentService teachingAssignments) {
         this.repo = repo;
         this.users = users;
+        this.structure = structure;
+        this.teachingAssignments = teachingAssignments;
     }
 
     private List<ChatMessage> involving(String meId) {
@@ -24,10 +37,15 @@ public class ChatService {
     }
 
     /** Tin nhắn giữa "tôi" và một người khác (theo thứ tự thời gian). */
-    public List<ChatMessage> conversation(String meId, String otherId) {
-        return involving(meId).stream()
-                .filter(m -> (meId.equals(m.getSenderId()) && otherId.equals(m.getRecipientId()))
-                        || (otherId.equals(m.getSenderId()) && meId.equals(m.getRecipientId())))
+    @Transactional
+    public List<ChatMessage> conversation(CurrentUser me, String otherId) {
+        assertCanContact(me, otherId);
+        List<ChatMessage> unread = repo.findBySenderIdAndRecipientIdAndReadFlagIsFalse(otherId, me.id());
+        unread.forEach(message -> message.setReadFlag(true));
+        repo.saveAll(unread);
+        return involving(me.id()).stream()
+                .filter(m -> (me.id().equals(m.getSenderId()) && otherId.equals(m.getRecipientId()))
+                        || (otherId.equals(m.getSenderId()) && me.id().equals(m.getRecipientId())))
                 .toList();
     }
 
@@ -58,11 +76,70 @@ public class ChatService {
         return out;
     }
 
-    public ChatMessage send(String meId, String meName, String toId, String body) {
+    public ChatMessage send(CurrentUser me, String meName, String toId, String body) {
+        assertCanContact(me, toId);
+        String normalized = body == null ? "" : body.trim();
+        if (normalized.isBlank()) throw ApiException.badRequest("Nội dung tin nhắn không được để trống");
+        if (normalized.length() > 2000) throw ApiException.badRequest("Tin nhắn không được vượt quá 2000 ký tự");
         return repo.save(ChatMessage.builder()
-                .id(Ids.gen("msg")).senderId(meId).senderName(meName)
+                .id(Ids.gen("msg")).senderId(me.id()).senderName(meName)
                 .recipientId(toId).recipientName(users.fullNameOf(toId))
-                .body(body).readFlag(false).createdAt(Instant.now()).build());
+                .body(normalized).readFlag(false).createdAt(Instant.now()).build());
+    }
+
+    public List<UserDto> contacts(CurrentUser me) {
+        LinkedHashSet<String> ids = contactIds(me);
+        ids.remove(me.id());
+        return ids.stream().map(users::dtoById)
+                .sorted(Comparator.comparing(UserDto::fullName, Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER)))
+                .toList();
+    }
+
+    private void assertCanContact(CurrentUser me, String otherId) {
+        if (otherId == null || otherId.isBlank() || !contactIds(me).contains(otherId)) {
+            throw ApiException.forbidden("Chỉ được nhắn tin trong phạm vi lớp và GVCN liên quan");
+        }
+    }
+
+    private LinkedHashSet<String> contactIds(CurrentUser me) {
+        LinkedHashSet<String> result = new LinkedHashSet<>();
+        if (me.isAdmin()) {
+            result.addAll(users.allUserIds());
+            return result;
+        }
+        if (me.isParent()) {
+            for (UserDto child : users.childrenOf(me.id())) {
+                if (child.classId() == null) continue;
+                SchoolClass schoolClass = structure.getClass(child.classId());
+                if (schoolClass.getHomeroomTeacherId() != null) result.add(schoolClass.getHomeroomTeacherId());
+            }
+            return result;
+        }
+        if (me.isStudent()) {
+            UserDto student = users.dtoById(me.id());
+            if (student.classId() == null) return result;
+            SchoolClass schoolClass = structure.getClass(student.classId());
+            if (schoolClass.getHomeroomTeacherId() != null) result.add(schoolClass.getHomeroomTeacherId());
+            teachingAssignments.list(null, student.classId(), null, null, "ACTIVE")
+                    .forEach(assignment -> result.add(assignment.teacherId()));
+            return result;
+        }
+        if (me.isTeacher()) {
+            LinkedHashSet<String> teachingClassIds = teachingAssignments
+                    .list(me.id(), null, null, null, "ACTIVE").stream()
+                    .map(assignment -> assignment.classId())
+                    .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+            LinkedHashSet<String> homeroomClassIds = structure.classesOfHomeroom(me.id()).stream()
+                    .map(SchoolClass::getId)
+                    .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+            teachingClassIds.forEach(classId -> users.list("STUDENT", null, classId)
+                    .forEach(student -> result.add(student.id())));
+            homeroomClassIds.forEach(classId -> users.list("STUDENT", null, classId).forEach(student -> {
+                    result.add(student.id());
+                    result.addAll(users.parentIdsOf(student.id()));
+                }));
+        }
+        return result;
     }
 
     public void seed(List<ChatMessage> list) {

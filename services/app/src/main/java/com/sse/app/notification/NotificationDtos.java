@@ -4,12 +4,21 @@ import jakarta.validation.constraints.NotBlank;
 
 import java.time.Instant;
 import java.util.Map;
+import java.util.List;
 
 public final class NotificationDtos {
     private NotificationDtos() {}
 
     public record CreateAnnouncementRequest(
             String id, @NotBlank String title, @NotBlank String body, String audience) {}
+
+    public record TeacherAnnouncementScope(
+            String classId,
+            String classCode,
+            int studentCount,
+            int parentCount,
+            List<String> subjects,
+            boolean homeroom) {}
 
     public record CreateTemplateRequest(
             String id, @NotBlank String code, String name, String channel,

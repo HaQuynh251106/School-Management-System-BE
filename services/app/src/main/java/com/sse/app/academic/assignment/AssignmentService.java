@@ -21,6 +21,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.ArrayList;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /** B5 + C4: vòng đời bài tập (flowchart 2.7). */
 @Service
@@ -74,8 +76,16 @@ public class AssignmentService {
         if (classId != null)        base = assignments.findByClassId(classId);
         else if (teacherId != null) base = assignments.findByTeacherId(teacherId);
         else base = assignments.findAll();
+        Set<String> needsGrading = "NEEDS_GRADING".equals(status)
+                ? submissions.findAll().stream()
+                    .filter(row -> "SUBMITTED".equals(row.getStatus()) || "LATE".equals(row.getStatus()))
+                    .map(AssignmentSubmission::getAssignmentId)
+                    .collect(Collectors.toSet())
+                : Set.of();
         return base.stream()
-                .filter(a -> status == null || status.equals(a.getStatus()))
+                .filter(a -> status == null
+                        || ("NEEDS_GRADING".equals(status) && needsGrading.contains(a.getId()))
+                        || status.equals(a.getStatus()))
                 .filter(a -> !onlyPublished || "PUBLISHED".equals(a.getStatus()))
                 .toList();
     }
@@ -434,6 +444,11 @@ public class AssignmentService {
 
     public List<AssignmentSubmission> submissionsOf(String assignmentId) {
         return submissions.findByAssignmentId(assignmentId);
+    }
+
+    /** Read-only bulk view for reporting and operational aggregation. */
+    public List<AssignmentSubmission> allSubmissions() {
+        return submissions.findAll();
     }
 
     public List<AssignmentSubmission> submissionsOf(String assignmentId, String teacherId, boolean isAdmin) {

@@ -31,19 +31,25 @@ public class ReportController {
     private final AuditService audit;
     private final UserService users;
     private final YearSummaryPreviewService yearSummaryPreview;
+    private final AcademicReportService academicReports;
+    private final AcademicReportExportService academicReportExports;
 
     public ReportController(ReportService reports,
                             FinanceReportService financeReports,
                             FinanceReportExportService financeExports,
                             AuditService audit,
                             UserService users,
-                            YearSummaryPreviewService yearSummaryPreview) {
+                            YearSummaryPreviewService yearSummaryPreview,
+                            AcademicReportService academicReports,
+                            AcademicReportExportService academicReportExports) {
         this.reports = reports;
         this.financeReports = financeReports;
         this.financeExports = financeExports;
         this.audit = audit;
         this.users = users;
         this.yearSummaryPreview = yearSummaryPreview;
+        this.academicReports = academicReports;
+        this.academicReportExports = academicReportExports;
     }
 
     @GetMapping("/overview")
@@ -78,6 +84,39 @@ public class ReportController {
     public Map<String, Object> revenue() {
         CurrentUserHolder.requireRole("ADMIN");
         return reports.revenue();
+    }
+
+    @GetMapping("/academic")
+    public AcademicReportDtos.AcademicReportResponse academic(
+            @RequestParam(required = false) String academicYearId,
+            @RequestParam(required = false) String semesterId,
+            @RequestParam(required = false) String gradeLevel,
+            @RequestParam(required = false) String classId,
+            @RequestParam(required = false) String subjectId) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return academicReports.report(new AcademicReportDtos.AcademicReportFilter(
+                academicYearId, semesterId, gradeLevel, classId, subjectId));
+    }
+
+    @GetMapping("/academic/export")
+    public ResponseEntity<byte[]> exportAcademic(
+            @RequestParam(defaultValue = "XLSX") String format,
+            @RequestParam(required = false) String academicYearId,
+            @RequestParam(required = false) String semesterId,
+            @RequestParam(required = false) String gradeLevel,
+            @RequestParam(required = false) String classId,
+            @RequestParam(required = false) String subjectId) {
+        CurrentUser actor = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("ADMIN");
+        AcademicReportDtos.AcademicReportFile file = academicReportExports.export(format,
+                new AcademicReportDtos.AcademicReportFilter(academicYearId, semesterId, gradeLevel, classId, subjectId));
+        audit.record(actor.id(), users.fullNameOf(actor.id()), actor.role(), "EXPORT",
+                "reports", "academic_report", file.filename(), "Xuất báo cáo học vụ " + format);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                        .filename(file.filename(), StandardCharsets.UTF_8).build().toString())
+                .header(HttpHeaders.CONTENT_TYPE, file.contentType())
+                .cacheControl(CacheControl.noStore()).body(file.content());
     }
 
     @GetMapping("/finance")

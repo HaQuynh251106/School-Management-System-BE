@@ -82,6 +82,22 @@ public class GradeController {
         return grades.createCategory(r);
     }
 
+    @GetMapping("/grade-configurations")
+    public List<GradeConfiguration> configurations(
+            @RequestParam String subjectId,
+            @RequestParam String semesterId) {
+        CurrentUserHolder.requireRole("ADMIN", "TEACHER");
+        return grades.listConfigurations(subjectId, semesterId);
+    }
+
+    @PutMapping("/grade-configurations")
+    public GradeConfiguration upsertConfiguration(
+            @Valid @RequestBody UpsertGradeConfigurationRequest request) {
+        CurrentUser actor = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("ADMIN");
+        return grades.upsertConfiguration(request, actor.id());
+    }
+
     @GetMapping("/grades/completeness")
     public GradeCompletenessResponse completeness(
             @RequestParam String classId,

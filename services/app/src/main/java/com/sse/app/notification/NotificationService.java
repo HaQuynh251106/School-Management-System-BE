@@ -9,6 +9,7 @@ import com.sse.app.notification.NotificationDtos.*;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.List;
 import java.util.Map;
@@ -25,19 +26,22 @@ public class NotificationService {
     private final AnnouncementRepository announcements;
     private final UserNotificationPreferenceRepository preferences;
     private final UserService users;
+    private final NotificationChannelDispatcher channelDispatcher;
 
     public NotificationService(NotificationRepository notifications,
                                NotificationTemplateRepository templates,
                                NotificationDeliveryLogRepository deliveryLogs,
                                AnnouncementRepository announcements,
                                UserNotificationPreferenceRepository preferences,
-                               UserService users) {
+                               UserService users,
+                               NotificationChannelDispatcher channelDispatcher) {
         this.notifications = notifications;
         this.templates = templates;
         this.deliveryLogs = deliveryLogs;
         this.announcements = announcements;
         this.preferences = preferences;
         this.users = users;
+        this.channelDispatcher = channelDispatcher;
     }
 
     // ---------- Phát thông báo in-app ----------
@@ -58,11 +62,14 @@ public class NotificationService {
         deliveryLogs.save(NotificationDeliveryLog.builder()
                 .id(Ids.gen("ndl"))
                 .notificationId(n.getId())
+                .channel("IN_APP")
+                .provider("DATABASE")
                 .attemptNo(1)
                 .status("SENT")
                 .providerResponse("IN_APP persisted")
                 .attemptedAt(Instant.now())
                 .build());
+        dispatchExternalIfEnabled(recipientId, type, title, body, refType, refId);
         return n;
     }
 
@@ -427,6 +434,9 @@ public class NotificationService {
         if (!"FAILED".equals(row.getStatus())) {
             throw ApiException.conflict("Chỉ thông báo FAILED mới được gửi lại");
         }
+        if (!"IN_APP".equals(row.getChannel())) {
+            return channelDispatcher.retry(row);
+        }
         int attempt = row.getAttemptCount() == null ? 1 : row.getAttemptCount() + 1;
         row.setStatus("SENT");
         row.setAttemptCount(attempt);
@@ -436,6 +446,8 @@ public class NotificationService {
         deliveryLogs.save(NotificationDeliveryLog.builder()
                 .id(Ids.gen("ndl"))
                 .notificationId(row.getId())
+                .channel("IN_APP")
+                .provider("DATABASE")
                 .attemptNo(attempt)
                 .status("SENT")
                 .providerResponse("Manual IN_APP retry")
@@ -449,8 +461,25 @@ public class NotificationService {
                         preferences.findByUserIdAndNotificationTypeAndChannel(
                                 recipientId, normalize(type), normalize(channel)))
                 .orElse(java.util.Optional.empty())
+                .or(() -> preferences.findByUserIdAndNotificationTypeAndChannel(
+                        recipientId, "ALL", normalize(channel)))
                 .map(UserNotificationPreference::isEnabled)
                 .orElse(true);
+    }
+
+    private void dispatchExternalIfEnabled(String recipientId, String type, String title,
+                                           String body, String refType, String refId) {
+        for (String channel : List.of("EMAIL", "PUSH")) {
+            boolean enabled = preferences.findByUserIdAndNotificationTypeAndChannel(
+                            recipientId, normalize(type), channel)
+                    .or(() -> preferences.findByUserIdAndNotificationTypeAndChannel(
+                            recipientId, "ALL", channel))
+                    .map(UserNotificationPreference::isEnabled).orElse(false);
+            if (enabled) {
+                channelDispatcher.dispatch(recipientId, normalize(type), channel,
+                        title, body, refType, refId, deepLink(refType, refId), groupKey(type));
+            }
+        }
     }
 
     private String groupKey(String type) {
@@ -500,8 +529,14 @@ public class NotificationService {
                 .toList();
     }
 
+    public List<Announcement> announcementsCreatedBy(String userId) {
+        return announcements.findAllByOrderByCreatedAtDesc().stream()
+                .filter(item -> userId.equals(item.getCreatedBy()))
+                .toList();
+    }
+
     public Announcement createAnnouncement(CreateAnnouncementRequest r, String createdBy) {
-        String audience = r.audience() == null ? "ALL" : r.audience().toUpperCase();
+        String audience = normalizeAudience(r.audience());
         Announcement a = announcements.save(Announcement.builder()
                 .id(r.id() == null || r.id().isBlank() ? Ids.gen("an") : r.id())
                 .title(r.title()).body(r.body()).audience(audience)
@@ -512,15 +547,45 @@ public class NotificationService {
         return a;
     }
 
+    public Map<String, Integer> announcementAudienceCounts() {
+        Map<String, Integer> result = new LinkedHashMap<>();
+        result.put("ALL", users.allUserIds().size());
+        result.put("TEACHER", users.userIdsByRole("TEACHER").size());
+        result.put("STUDENT", users.userIdsByRole("STUDENT").size());
+        result.put("PARENT", users.userIdsByRole("PARENT").size());
+        result.put("ADMIN", users.userIdsByRole("ADMIN").size());
+        return result;
+    }
+
     private List<String> resolveAudience(String audience) {
-        if (audience.startsWith("CLASS:")) {
-            String classId = audience.substring("CLASS:".length());
-            return users.list("STUDENT", null, classId).stream().map(UserDto::id).toList();
+        int separator = audience.indexOf(':');
+        if (separator > 0 && separator < audience.length() - 1) {
+            String target = audience.substring(0, separator).toUpperCase(Locale.ROOT);
+            String classId = audience.substring(separator + 1);
+            List<String> studentIds = users.list("STUDENT", null, classId).stream().map(UserDto::id).toList();
+            if ("CLASS".equals(target) || "CLASS_STUDENTS".equals(target)) return studentIds;
+            List<String> parentIds = studentIds.stream()
+                    .flatMap(studentId -> users.parentIdsOf(studentId).stream())
+                    .distinct().toList();
+            if ("CLASS_PARENTS".equals(target)) return parentIds;
+            if ("CLASS_ALL".equals(target)) {
+                return java.util.stream.Stream.concat(studentIds.stream(), parentIds.stream()).distinct().toList();
+            }
+            return List.of();
         }
         return switch (audience) {
             case "PARENT", "STUDENT", "TEACHER", "ADMIN" -> users.userIdsByRole(audience);
             default -> users.allUserIds();
         };
+    }
+
+    private String normalizeAudience(String value) {
+        if (value == null || value.isBlank()) return "ALL";
+        String audience = value.trim();
+        int separator = audience.indexOf(':');
+        if (separator < 0) return audience.toUpperCase(Locale.ROOT);
+        return audience.substring(0, separator).toUpperCase(Locale.ROOT)
+                + ":" + audience.substring(separator + 1).trim();
     }
 
     /** Seed raw, không fan-out. */

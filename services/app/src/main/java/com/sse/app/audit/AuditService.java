@@ -2,6 +2,7 @@ package com.sse.app.audit;
 
 import com.sse.app.common.Ids;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.ObjectProvider;
 
 import java.time.Instant;
 import java.util.*;
@@ -11,18 +12,24 @@ import java.util.*;
 public class AuditService {
 
     private final AuditLogRepository repo;
+    private final ObjectProvider<MongoAuditSink> mongo;
 
-    public AuditService(AuditLogRepository repo) {
+    public AuditService(AuditLogRepository repo, ObjectProvider<MongoAuditSink> mongo) {
         this.repo = repo;
+        this.mongo = mongo;
     }
 
     public void record(String actorId, String actorName, String role, String action,
                        String module, String entityType, String entityId, String detail) {
         try {
-            repo.save(AuditLog.builder()
+            AuditLog saved = repo.save(AuditLog.builder()
                     .id(Ids.gen("evt")).actorId(actorId).actorName(actorName).role(role)
                     .action(action).module(module).entityType(entityType).entityId(entityId)
                     .detail(detail).createdAt(Instant.now()).build());
+            MongoAuditSink sink = mongo.getIfAvailable();
+            if (sink != null) {
+                try { sink.append(saved); } catch (Exception ignored) { /* Postgres audit remains available. */ }
+            }
         } catch (Exception ignore) {
             // audit không được làm hỏng luồng nghiệp vụ chính
         }

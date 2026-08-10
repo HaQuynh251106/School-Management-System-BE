@@ -62,13 +62,75 @@ public class DashboardService {
     }
 
     public DashboardResponse forCurrentUser(CurrentUser me) {
-        return switch (me.role()) {
+        DashboardResponse response = switch (me.role()) {
             case "ADMIN" -> admin();
             case "TEACHER" -> teacher(me.id());
             case "STUDENT" -> student(me.id());
             case "PARENT" -> parent(me.id());
             default -> new DashboardResponse(List.of(), List.of());
         };
+        return new DashboardResponse(response.metrics(), response.charts(), shortcuts(me));
+    }
+
+    private List<DashboardShortcut> shortcuts(CurrentUser me) {
+        List<DashboardShortcut> rows = new ArrayList<>();
+        if (me.isAdmin()) {
+            List<SchoolClass> classes = structure.listClasses(null, null);
+            Set<String> assignedClassIds = teachingAssignments.findAll().stream()
+                    .filter(item -> "ACTIVE".equals(item.getStatus()))
+                    .map(TeacherClassSubject::getClassId)
+                    .collect(Collectors.toSet());
+            Set<String> studentsWithGrades = grades.allGrades().stream()
+                    .map(Grade::getStudentId)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toSet());
+            rows.add(shortcut("homeroom", "Lớp chưa có GVCN", classes.stream().filter(item -> item.getHomeroomTeacherId() == null).count(), "A2", "homeroom=missing", "red"));
+            rows.add(shortcut("assignment", "Lớp chưa có phân công giáo viên", classes.stream().filter(item -> !assignedClassIds.contains(item.getId())).count(), "A3", "assignment=missing", "orange"));
+            rows.add(shortcut("timetable", "Xung đột thời khóa biểu", timetableConflictCount(timetable.allSlots()), "A3", "conflict=true", "red"));
+            rows.add(shortcut("grades", "Học sinh chưa có điểm", users.findAll().stream().filter(item -> "STUDENT".equals(item.getRole())).filter(item -> !studentsWithGrades.contains(item.getId())).count(), "A8", "grades=missing", "orange"));
+            rows.add(shortcut("assignments", "Bài tập chưa chấm", ungradedSubmissions(null), "A8", "assignments=ungraded", "orange"));
+            rows.add(shortcut("invoices", "Hóa đơn quá hạn", finance.dashboardInvoices(null).stream().filter(item -> "OVERDUE".equals(item.status())).count(), "A7", "status=OVERDUE", "red"));
+            rows.add(shortcut("notifications", "Thông báo gửi thất bại", notifications.failedNotifications().size(), "A9", "status=FAILED", "red"));
+        } else if (me.isTeacher()) {
+            List<TimetableSlot> todaySlots = timetable.list(null, me.id(), null, null).stream().filter(slot -> dayCode(LocalDate.now().getDayOfWeek()).equals(slot.getDayOfWeek())).toList();
+            long markedSlots = attendance.allRecords().stream().filter(row -> LocalDate.now().equals(row.getDate())).map(AttendanceRecord::getSlotId).distinct().filter(id -> todaySlots.stream().anyMatch(slot -> slot.getId().equals(id))).count();
+            long incompleteGradeBooks = teachingAssignments.findByTeacherIdAndStatus(me.id(), "ACTIVE").stream()
+                    .collect(Collectors.toMap(
+                            scope -> scope.getClassId() + "|" + scope.getSubjectId() + "|" + scope.getSemesterId(),
+                            Function.identity(), (left, right) -> left))
+                    .values().stream()
+                    .mapToLong(scope -> grades.completeness(
+                            scope.getClassId(), scope.getSubjectId(), scope.getSemesterId(),
+                            me.id(), false).incompleteStudents())
+                    .sum();
+            rows.add(shortcut("attendance", "Tiết hôm nay chưa điểm danh", Math.max(0, todaySlots.size() - markedSlots), "B3", "date=today", "orange"));
+            rows.add(shortcut("assignments", "Bài tập chưa chấm", ungradedSubmissions(me.id()), "B5", "status=SUBMITTED", "orange"));
+            rows.add(shortcut("grades", "Học sinh còn thiếu đầu điểm", incompleteGradeBooks, "B4", "completeness=incomplete", "blue"));
+        } else if (me.isStudent()) {
+            User student = users.findById(me.id()).orElseThrow();
+            Map<String, AssignmentSubmission> submitted = assignments.submissionsByStudent(me.id()).stream().collect(Collectors.toMap(AssignmentSubmission::getAssignmentId, Function.identity(), (left, right) -> left));
+            long overdue = assignments.list(student.getClassId(), null, "PUBLISHED", true).stream().filter(item -> !submitted.containsKey(item.getId()) && item.getDeadline() != null && item.getDeadline().isBefore(Instant.now())).count();
+            rows.add(shortcut("assignments", "Bài tập quá hạn chưa nộp", overdue, "C4", "status=OVERDUE", "red"));
+        } else if (me.isParent()) {
+            Set<String> childIds = parentStudents.findByParentId(me.id()).stream().map(item -> item.getStudentId()).collect(Collectors.toSet());
+            rows.add(shortcut("invoices", "Hóa đơn quá hạn", finance.dashboardInvoices(childIds).stream().filter(item -> "OVERDUE".equals(item.status())).count(), "D4", "status=OVERDUE", "red"));
+            rows.add(shortcut("attendance", "Cảnh báo chuyên cần", attendance.allRecords().stream().filter(item -> childIds.contains(item.getStudentId())).filter(item -> "LATE".equals(item.getStatus()) || "ABSENT_UNEXCUSED".equals(item.getStatus())).count(), "D2", "attendance=alerts", "orange"));
+        }
+        return rows;
+    }
+
+    private long ungradedSubmissions(String teacherId) {
+        return assignments.list(null, teacherId, null, false).stream().flatMap(item -> assignments.submissionsOf(item.getId()).stream()).filter(item -> "SUBMITTED".equals(item.getStatus()) || "LATE".equals(item.getStatus())).count();
+    }
+
+    private long timetableConflictCount(List<TimetableSlot> slots) {
+        Map<String, Long> room = slots.stream().filter(slot -> slot.getRoomCode() != null).collect(Collectors.groupingBy(slot -> slot.getSemesterId() + "|" + slot.getDayOfWeek() + "|" + slot.getPeriodNo() + "|" + slot.getRoomCode(), Collectors.counting()));
+        Map<String, Long> teacher = slots.stream().filter(slot -> slot.getTeacherId() != null).collect(Collectors.groupingBy(slot -> slot.getSemesterId() + "|" + slot.getDayOfWeek() + "|" + slot.getPeriodNo() + "|" + slot.getTeacherId(), Collectors.counting()));
+        return java.util.stream.Stream.concat(room.values().stream(), teacher.values().stream()).filter(count -> count > 1).mapToLong(count -> count - 1).sum();
+    }
+
+    private DashboardShortcut shortcut(String key, String label, long count, String pageId, String filter, String tone) {
+        return new DashboardShortcut(key, label, count, pageId, filter, tone);
     }
 
     private DashboardResponse admin() {

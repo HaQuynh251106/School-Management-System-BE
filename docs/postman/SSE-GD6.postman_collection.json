@@ -1,0 +1,122 @@
+{
+  "info": {
+    "name": "SSE - Giai doan 6",
+    "description": "Contract and role-scope checks for all eight GD6 workstreams.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {"key": "baseUrl", "value": "http://127.0.0.1:4000"},
+    {"key": "token", "value": ""},
+    {"key": "subjectId", "value": "sj-math"},
+    {"key": "semesterId", "value": "sm-2027-1"},
+    {"key": "submissionId", "value": ""},
+    {"key": "clubId", "value": ""},
+    {"key": "contactId", "value": ""}
+  ],
+  "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{token}}", "type": "string"}]},
+  "item": [
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Login Admin",
+          "request": {
+            "auth": {"type": "noauth"},
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\"username\":\"admin\",\"password\":\"admin@123\"}"},
+            "url": "{{baseUrl}}/auth/login"
+          },
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Login succeeds', () => pm.response.to.have.status(200));",
+            "pm.collectionVariables.set('token', pm.response.json().accessToken);"
+          ]}}]
+        },
+        {"name": "Role Dashboard Shortcuts", "request": {"method": "GET", "url": "{{baseUrl}}/dashboard"}}
+      ]
+    },
+    {
+      "name": "1 - Grade Configuration",
+      "item": [
+        {"name": "List Grade Configurations", "request": {"method": "GET", "url": "{{baseUrl}}/grade-configurations?subjectId={{subjectId}}&semesterId={{semesterId}}"}},
+        {
+          "name": "Upsert Grade Configuration",
+          "request": {
+            "method": "PUT",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\"subjectId\":\"{{subjectId}}\",\"semesterId\":\"{{semesterId}}\",\"categoryCode\":\"15M\",\"categoryName\":\"15 phút\",\"requiredCount\":2,\"weight\":1,\"active\":true}"},
+            "url": "{{baseUrl}}/grade-configurations"
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 - Attendance Leave",
+      "item": [
+        {"name": "Pending Excuse Requests", "request": {"method": "GET", "url": "{{baseUrl}}/attendance/excuse-requests?status=PENDING"}}
+      ]
+    },
+    {
+      "name": "3 - Advanced Assignments",
+      "item": [
+        {"name": "Assignments", "request": {"method": "GET", "url": "{{baseUrl}}/assignments"}},
+        {"name": "Submission Versions", "request": {"method": "GET", "url": "{{baseUrl}}/submissions/{{submissionId}}/versions"}},
+        {"name": "Resubmission Requests", "request": {"method": "GET", "url": "{{baseUrl}}/submissions/{{submissionId}}/resubmission-requests"}},
+        {
+          "name": "Request Resubmission",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\"reason\":\"File chưa đúng yêu cầu, vui lòng nộp lại\"}"},
+            "url": "{{baseUrl}}/submissions/{{submissionId}}/request-resubmission"
+          }
+        }
+      ]
+    },
+    {
+      "name": "4 - Paid Extracurricular",
+      "item": [
+        {"name": "Club Catalog", "request": {"method": "GET", "url": "{{baseUrl}}/clubs"}},
+        {"name": "Club Registrations", "request": {"method": "GET", "url": "{{baseUrl}}/clubs/{{clubId}}/registrations"}}
+      ]
+    },
+    {
+      "name": "5 - Parent Homeroom Chat",
+      "item": [
+        {
+          "name": "Scoped Contacts",
+          "request": {"method": "GET", "url": "{{baseUrl}}/chat/contacts"},
+          "event": [{"listen": "test", "script": {"exec": [
+            "pm.test('Contacts load', () => pm.response.to.have.status(200));",
+            "const rows = pm.response.json(); if (rows.length) pm.collectionVariables.set('contactId', rows[0].id);"
+          ]}}]
+        },
+        {"name": "Conversation and Mark Read", "request": {"method": "GET", "url": "{{baseUrl}}/chat/messages?withUserId={{contactId}}"}}
+      ]
+    },
+    {
+      "name": "6 - Notification Delivery",
+      "item": [
+        {"name": "Operation Summary", "request": {"method": "GET", "url": "{{baseUrl}}/admin/notification-operations/summary"}},
+        {"name": "Provider Delivery Logs", "request": {"method": "GET", "url": "{{baseUrl}}/admin/notification-deliveries"}},
+        {"name": "Failed Notifications", "request": {"method": "GET", "url": "{{baseUrl}}/admin/notifications/failed"}}
+      ]
+    },
+    {
+      "name": "7 - Academic Reports",
+      "item": [
+        {"name": "Academic Report", "request": {"method": "GET", "url": "{{baseUrl}}/reports/academic"}},
+        {"name": "Export XLSX", "request": {"method": "GET", "url": "{{baseUrl}}/reports/academic/export?format=XLSX"}},
+        {"name": "Export PDF", "request": {"method": "GET", "url": "{{baseUrl}}/reports/academic/export?format=PDF"}}
+      ]
+    },
+    {
+      "name": "8 - Operations and Contract",
+      "item": [
+        {"name": "Audit Logs", "request": {"method": "GET", "url": "{{baseUrl}}/audit-logs"}},
+        {"name": "Audit Stats", "request": {"method": "GET", "url": "{{baseUrl}}/audit-logs/stats"}},
+        {"name": "OpenAPI Contract", "request": {"auth": {"type": "noauth"}, "method": "GET", "url": "{{baseUrl}}/v3/api-docs"}}
+      ]
+    }
+  ]
+}

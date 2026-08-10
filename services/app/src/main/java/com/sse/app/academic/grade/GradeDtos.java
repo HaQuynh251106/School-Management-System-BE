@@ -1,5 +1,6 @@
 package com.sse.app.academic.grade;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
@@ -15,12 +16,23 @@ public final class GradeDtos {
             @NotBlank String subjectId,
             @NotBlank String semesterId,
             @NotBlank String category,
+            @JsonAlias("assessmentIndex")
+            Integer entryIndex,
             String reason,
             @NotNull List<Entry> entries
     ) {}
 
     public record CreateExamCategoryRequest(
             String id, @NotBlank String code, @NotBlank String name, Double weight) {}
+
+    public record UpsertGradeConfigurationRequest(
+            @NotBlank String subjectId,
+            @NotBlank String semesterId,
+            @NotBlank String categoryCode,
+            String categoryName,
+            Integer requiredCount,
+            Double weight,
+            Boolean active) {}
 
     public record GradeCompletenessStudent(
             String studentId,

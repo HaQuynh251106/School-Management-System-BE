@@ -16,6 +16,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.Comparator;
@@ -28,6 +29,7 @@ public class GradeService {
     private final GradeRepository grades;
     private final GradeChangeLogRepository logs;
     private final ExamCategoryRepository categories;
+    private final GradeConfigurationRepository configurations;
     private final StructureService structure;
     private final TimetableService timetable;
     private final TeachingAssignmentService teachingAssignments;
@@ -36,13 +38,15 @@ public class GradeService {
     private final AcademicResultLockService resultLocks;
 
     public GradeService(GradeRepository grades, GradeChangeLogRepository logs,
-                        ExamCategoryRepository categories, StructureService structure,
+                        ExamCategoryRepository categories, GradeConfigurationRepository configurations,
+                        StructureService structure,
                         TimetableService timetable, TeachingAssignmentService teachingAssignments,
                         UserService users, DomainEventPublisher events,
                         AcademicResultLockService resultLocks) {
         this.grades = grades;
         this.logs = logs;
         this.categories = categories;
+        this.configurations = configurations;
         this.structure = structure;
         this.timetable = timetable;
         this.teachingAssignments = teachingAssignments;
@@ -71,6 +75,16 @@ public class GradeService {
         String subjectName = structure.subjectName(req.subjectId());
         String categoryName = categories.findByCode(req.category())
                 .map(ExamCategory::getName).orElse(req.category());
+        int entryIndex = req.entryIndex() == null ? 1 : req.entryIndex();
+        if (entryIndex < 1) throw ApiException.badRequest("Vị trí đầu điểm phải từ 1 trở lên");
+        GradeConfiguration config = configurationFor(req.subjectId(), req.semesterId(), req.category());
+        if (config != null) {
+            if (!config.isActive()) throw ApiException.conflict("Loại điểm này đang bị tắt cho môn/học kỳ đã chọn");
+            if (entryIndex > config.getRequiredCount()) {
+                throw ApiException.badRequest("Vị trí đầu điểm vượt quá số lượng đã cấu hình");
+            }
+            categoryName = config.getCategoryName();
+        }
 
         List<Grade> result = new ArrayList<>();
         for (Entry e : req.entries()) {
@@ -84,14 +98,15 @@ public class GradeService {
             if (e.score() == null || e.score() < 0 || e.score() > 10) {
                 throw ApiException.badRequest("Điểm phải trong khoảng 0..10 (HS " + e.studentId() + ")");
             }
-            Grade existing = grades.findByStudentIdAndSubjectIdAndSemesterIdAndCategory(
-                    e.studentId(), req.subjectId(), req.semesterId(), req.category()).orElse(null);
+            Grade existing = grades.findByStudentIdAndSubjectIdAndSemesterIdAndCategoryAndEntryIndex(
+                    e.studentId(), req.subjectId(), req.semesterId(), req.category(), entryIndex).orElse(null);
 
             if (existing == null) {
                 Grade g = grades.save(Grade.builder()
                         .id(Ids.gen("g")).studentId(e.studentId())
                         .subjectId(req.subjectId()).subjectName(subjectName)
                         .semesterId(req.semesterId()).category(req.category()).categoryName(categoryName)
+                        .entryIndex(entryIndex)
                         .score(e.score()).note(e.note()).recordedAt(Instant.now()).build());
                 result.add(g);
                 publishGradeEvent("academic.grade.published", g.getId(), e.studentId(), subjectName, categoryName, e.score());
@@ -155,6 +170,46 @@ public class GradeService {
         return a != null && b != null && Math.abs(a - b) < 1e-9;
     }
 
+    public List<GradeConfiguration> listConfigurations(String subjectId, String semesterId) {
+        if (subjectId == null || subjectId.isBlank() || semesterId == null || semesterId.isBlank()) {
+            throw ApiException.badRequest("Bắt buộc subjectId và semesterId");
+        }
+        return configurations.findBySubjectIdAndSemesterIdOrderByCategoryCodeAsc(subjectId, semesterId);
+    }
+
+    @Transactional
+    public GradeConfiguration upsertConfiguration(UpsertGradeConfigurationRequest request, String actorId) {
+        String code = request.categoryCode().trim().toUpperCase(Locale.ROOT);
+        ExamCategory fallback = categories.findByCode(code).orElse(null);
+        int requiredCount = request.requiredCount() == null ? 1 : request.requiredCount();
+        double weight = request.weight() == null
+                ? fallback == null ? 1.0 : fallback.getWeight() : request.weight();
+        if (requiredCount < 1 || requiredCount > 20) {
+            throw ApiException.badRequest("Số đầu điểm bắt buộc phải từ 1 đến 20");
+        }
+        if (weight <= 0 || weight > 10) {
+            throw ApiException.badRequest("Hệ số điểm phải lớn hơn 0 và không vượt quá 10");
+        }
+        GradeConfiguration row = configurations
+                .findBySubjectIdAndSemesterIdAndCategoryCode(
+                        request.subjectId(), request.semesterId(), code)
+                .orElseGet(() -> GradeConfiguration.builder()
+                        .id(Ids.gen("gcfg"))
+                        .subjectId(request.subjectId())
+                        .semesterId(request.semesterId())
+                        .categoryCode(code)
+                        .build());
+        row.setCategoryName(request.categoryName() == null || request.categoryName().isBlank()
+                ? fallback == null ? code : fallback.getName()
+                : request.categoryName().trim());
+        row.setRequiredCount(requiredCount);
+        row.setWeight(weight);
+        row.setActive(request.active() == null || request.active());
+        row.setUpdatedBy(actorId);
+        row.setUpdatedAt(Instant.now());
+        return configurations.save(row);
+    }
+
     public GradeCompletenessResponse completeness(
             String classId, String subjectId, String semesterId,
             String actorId, boolean enforceTeacherAssignment) {
@@ -169,15 +224,12 @@ public class GradeService {
             throw ApiException.forbidden(
                     "Giáo viên chưa được phân công lớp/môn/học kỳ này");
         }
-        List<String> expected = categories.findAll().stream()
-                .map(ExamCategory::getCode)
-                .filter(code -> code != null && !code.isBlank())
-                .distinct().sorted().toList();
+        List<String> expected = expectedSlots(subjectId, semesterId);
         Map<String, Set<String>> enteredByStudent =
                 grades.findBySubjectIdAndSemesterId(subjectId, semesterId).stream()
                         .filter(grade -> grade.getStudentId() != null)
                         .collect(Collectors.groupingBy(Grade::getStudentId,
-                                Collectors.mapping(Grade::getCategory,
+                                Collectors.mapping(this::slotKey,
                                         Collectors.toSet())));
         List<GradeCompletenessStudent> rows = users
                 .list("STUDENT", null, classId).stream()
@@ -210,5 +262,36 @@ public class GradeService {
 
     private boolean changed(String a, String b) {
         return a == null ? b != null : !a.equals(b);
+    }
+
+    private GradeConfiguration configurationFor(String subjectId, String semesterId, String category) {
+        return configurations.findBySubjectIdAndSemesterIdAndCategoryCode(
+                subjectId, semesterId, category.trim().toUpperCase(Locale.ROOT)).orElse(null);
+    }
+
+    private List<String> expectedSlots(String subjectId, String semesterId) {
+        List<GradeConfiguration> configured = configurations
+                .findBySubjectIdAndSemesterIdOrderByCategoryCodeAsc(subjectId, semesterId)
+                .stream().filter(GradeConfiguration::isActive).toList();
+        if (configured.isEmpty()) {
+            return categories.findAll().stream().map(ExamCategory::getCode)
+                    .filter(code -> code != null && !code.isBlank())
+                    .distinct().sorted().toList();
+        }
+        List<String> slots = new ArrayList<>();
+        configured.forEach(config -> {
+            for (int index = 1; index <= config.getRequiredCount(); index++) {
+                slots.add(config.getCategoryCode() + (config.getRequiredCount() == 1 ? "" : "#" + index));
+            }
+        });
+        return slots;
+    }
+
+    private String slotKey(Grade grade) {
+        int index = grade.getEntryIndex() < 1 ? 1 : grade.getEntryIndex();
+        GradeConfiguration config = configurationFor(
+                grade.getSubjectId(), grade.getSemesterId(), grade.getCategory());
+        return config != null && config.getRequiredCount() > 1
+                ? grade.getCategory() + "#" + index : grade.getCategory();
     }
 }

@@ -72,7 +72,7 @@ public class ExtracurricularController {
 
     @PostMapping("/club-registrations/{id}/cancel")
     public ClubRegistration cancel(@PathVariable String id) {
-        CurrentUserHolder.require();
-        return clubs.cancel(id);
+        CurrentUser me = CurrentUserHolder.require();
+        return clubs.cancel(id, me);
     }
 }
