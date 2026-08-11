@@ -29,8 +29,23 @@ interface InvoiceItemRepository extends JpaRepository<InvoiceItem, String> {
 }
 
 interface PaymentRepository extends JpaRepository<Payment, String> {
-    List<Payment> findByInvoiceId(String invoiceId);
+    List<Payment> findByInvoiceIdOrderByCreatedAtAsc(String invoiceId);
     Optional<Payment> findFirstByInvoiceIdAndStatusOrderByCreatedAtDesc(String invoiceId, String status);
+}
+
+interface FeePeriodRecipientRepository extends JpaRepository<FeePeriodRecipient, String> {
+    List<FeePeriodRecipient> findByFeePeriodId(String feePeriodId);
+    void deleteByFeePeriodId(String feePeriodId);
+}
+
+interface FeePeriodAdjustmentRepository extends JpaRepository<FeePeriodAdjustment, String> {
+    List<FeePeriodAdjustment> findByFeePeriodId(String feePeriodId);
+    Optional<FeePeriodAdjustment> findByFeePeriodIdAndStudentId(String feePeriodId, String studentId);
+    void deleteByFeePeriodId(String feePeriodId);
+}
+
+interface InvoiceRefundRepository extends JpaRepository<InvoiceRefund, String> {
+    List<InvoiceRefund> findByInvoiceIdOrderByCreatedAtAsc(String invoiceId);
 }
 
 interface PaymentGatewayTransactionRepository extends JpaRepository<PaymentGatewayTransaction, String> {

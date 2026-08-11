@@ -20,7 +20,17 @@ public final class NotificationDtos {
                     message = "Loại thông báo không hợp lệ") String category,
             @Pattern(regexp = "NORMAL|IMPORTANT|URGENT", message = "Mức độ thông báo không hợp lệ") String priority,
             LocalDate holidayStartDate,
-            LocalDate holidayEndDate) {}
+            LocalDate holidayEndDate,
+            @Size(max = 100) @Pattern(regexp = "[A-Za-z0-9._:-]+",
+                    message = "Khóa chống gửi trùng không hợp lệ") String idempotencyKey) {}
+
+    public record AnnouncementPreviewRequest(
+            @Pattern(regexp = "ALL|PARENT|STUDENT|TEACHER|CLASS:[A-Za-z0-9._-]+|CLASS_(STUDENTS|PARENTS|ALL):[A-Za-z0-9._-]+",
+                    message = "Phạm vi nhận thông báo không hợp lệ") String audience,
+            @Pattern(regexp = "GENERAL|HOLIDAY|GRADE|EVENT|STUDENT_STATUS|ATTENDANCE|PARENT_MEETING",
+                    message = "Loại thông báo không hợp lệ") String category) {}
+
+    public record AnnouncementPreview(String audience, int recipientCount) {}
 
     public record TeacherAnnouncementScope(
             String classId,

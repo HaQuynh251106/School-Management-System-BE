@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -35,7 +36,7 @@ public class DashboardService {
             case "TEACHER" -> teacher(user.id());
             case "STUDENT" -> student(user.id());
             case "PARENT" -> parent(user.id(), childId);
-            default -> new DashboardDtos.Response(List.of(), List.of());
+            default -> response(user.role(), "USER", List.of(user.id()), List.of(), List.of(), List.of());
         };
     }
 
@@ -63,7 +64,7 @@ public class DashboardService {
                         group by c.id,c.code order by c.code limit 12
                         """))
         );
-        return new DashboardDtos.Response(metrics, charts);
+        return response("ACADEMIC_STAFF", "SCHOOL", List.of(), metrics, charts, academicShortcuts());
     }
 
     private DashboardDtos.Response accountant() {
@@ -90,7 +91,7 @@ public class DashboardService {
                         order by metric_value desc limit 10
                         """))
         );
-        return new DashboardDtos.Response(metrics, charts);
+        return response("ACCOUNTANT", "SCHOOL", List.of(), metrics, charts, accountantShortcuts());
     }
 
     private DashboardDtos.Response admin() {
@@ -101,7 +102,7 @@ public class DashboardService {
                 from attendance_records where date = current_date
                 """);
         double attendanceRecords = number("select count(*) from attendance_records where date = current_date");
-        double openDebts = number("select count(*) from invoices where status in ('PENDING', 'PARTIAL', 'OVERDUE')");
+        double openDebts = number("select count(*) from invoices where status in ('UNPAID', 'PARTIAL', 'OVERDUE')");
         double attendanceAlerts = number("""
                 select count(*) from attendance_records where date = current_date
                 and status in ('ABSENT_EXCUSED', 'ABSENT_UNEXCUSED', 'LATE')
@@ -131,7 +132,7 @@ public class DashboardService {
                         group by c.id, c.code order by metric_value desc, c.code limit 8
                         """))
         );
-        return new DashboardDtos.Response(metrics, charts);
+        return response("ADMIN", "SCHOOL", List.of(), metrics, charts, adminShortcuts());
     }
 
     private DashboardDtos.Response teacher(String teacherId) {
@@ -167,7 +168,7 @@ public class DashboardService {
                         where a.teacher_id = ? group by coalesce(c.code, a.class_id) order by metric_value desc limit 8
                         """, teacherId))
         );
-        return new DashboardDtos.Response(metrics, charts);
+        return response("TEACHER", "TEACHER", List.of(teacherId), metrics, charts, teacherShortcuts());
     }
 
     private DashboardDtos.Response student(String studentId) {
@@ -199,7 +200,7 @@ public class DashboardService {
                         from attendance_records where student_id = ? group by status order by metric_value desc
                         """, studentId))
         );
-        return new DashboardDtos.Response(metrics, charts);
+        return response("STUDENT", "STUDENT", List.of(studentId), metrics, charts, studentShortcuts());
     }
 
     private DashboardDtos.Response parent(String parentId, String childId) {
@@ -211,10 +212,10 @@ public class DashboardService {
         double children = childRows.size();
         double average = valueOrZero(gradeCalculations.overallAverage(childIds));
         double unpaid = childId == null || childId.isBlank() ? number("""
-                select count(*) from invoices i where i.status in ('PENDING', 'PARTIAL', 'OVERDUE')
+                select count(*) from invoices i where i.status in ('UNPAID', 'PARTIAL', 'OVERDUE')
                   and (i.parent_id = ? or i.student_id in (select student_id from parent_student where parent_id = ?))
                 """, parentId, parentId) : number("""
-                select count(*) from invoices i where i.status in ('PENDING', 'PARTIAL', 'OVERDUE')
+                select count(*) from invoices i where i.status in ('UNPAID', 'PARTIAL', 'OVERDUE')
                   and i.student_id = ?
                 """, childId);
         double unread = unread(parentId);
@@ -242,7 +243,82 @@ public class DashboardService {
                         from invoices i where i.student_id = ? group by i.status order by metric_value desc
                         """, childId))
         );
-        return new DashboardDtos.Response(metrics, charts);
+        return response("PARENT", "STUDENT", childIds, metrics, charts, parentShortcuts(childId));
+    }
+
+    private DashboardDtos.Response response(String role, String objectType, List<String> objectIds,
+                                             List<DashboardDtos.Metric> metrics,
+                                             List<DashboardDtos.Chart> charts,
+                                             List<DashboardDtos.Shortcut> shortcuts) {
+        return new DashboardDtos.Response(
+                Instant.now(),
+                new DashboardDtos.Scope(role, objectType, objectIds),
+                metrics,
+                charts,
+                shortcuts,
+                List.of()
+        );
+    }
+
+    private List<DashboardDtos.Shortcut> adminShortcuts() {
+        return List.of(
+                shortcut("active-students", "Học sinh đang hoạt động", "users", Map.of("role", "STUDENT", "status", "ACTIVE")),
+                shortcut("timetable-conflicts", "Xung đột thời khóa biểu", "timetable", Map.of("conflicts", "true")),
+                shortcut("overdue-invoices", "Hóa đơn quá hạn", "finance", Map.of("status", "OVERDUE")),
+                shortcut("open-debt", "Công nợ cần xử lý", "finance", Map.of("status", "OPEN"))
+        );
+    }
+
+    private List<DashboardDtos.Shortcut> academicShortcuts() {
+        return List.of(
+                shortcut("classes", "Danh sách lớp", "classes", Map.of()),
+                shortcut("timetable", "Thời khóa biểu", "timetable", Map.of()),
+                shortcut("exams", "Kỳ thi sắp tới", "exams", Map.of("status", "UPCOMING"))
+        );
+    }
+
+    private List<DashboardDtos.Shortcut> accountantShortcuts() {
+        return List.of(
+                shortcut("overdue-invoices", "Hóa đơn quá hạn", "finance", Map.of("status", "OVERDUE")),
+                shortcut("open-debt", "Công nợ cần xử lý", "finance", Map.of("status", "OPEN")),
+                shortcut("reconciliation", "Đối soát chờ xử lý", "reconciliation", Map.of("status", "PENDING"))
+        );
+    }
+
+    private List<DashboardDtos.Shortcut> teacherShortcuts() {
+        return List.of(
+                shortcut("today-periods", "Tiết dạy hôm nay", "timetable", Map.of("range", "TODAY")),
+                shortcut("attendance-pending", "Điểm danh cần hoàn tất", "attendance", Map.of("status", "PENDING")),
+                shortcut("ungraded-assignments", "Bài nộp chưa chấm", "assignments", Map.of("grading", "PENDING")),
+                shortcut("invigilation", "Lịch coi thi sắp tới", "exams", Map.of("task", "INVIGILATION"))
+        );
+    }
+
+    private List<DashboardDtos.Shortcut> studentShortcuts() {
+        return List.of(
+                shortcut("nearest-class", "Tiết học gần nhất", "timetable", Map.of("range", "NEXT")),
+                shortcut("upcoming-assignment", "Bài tập sắp đến hạn", "assignments", Map.of("status", "OPEN")),
+                shortcut("unread-notifications", "Thông báo chưa đọc", "notifications", Map.of("read", "false")),
+                shortcut("absences", "Lịch sử vắng học", "attendance", Map.of("status", "ABSENT"))
+        );
+    }
+
+    private List<DashboardDtos.Shortcut> parentShortcuts(String childId) {
+        Map<String, String> childFilter = childId == null || childId.isBlank()
+                ? Map.of()
+                : Map.of("childId", childId);
+        return List.of(
+                shortcut("nearest-exam", "Kỳ thi gần nhất", "exams", childFilter),
+                shortcut("attendance", "Chuyên cần của con", "attendance", childFilter),
+                shortcut("open-invoices", "Khoản thu chưa hoàn tất", "finance",
+                        childId == null || childId.isBlank()
+                                ? Map.of("status", "OPEN")
+                                : Map.of("status", "OPEN", "childId", childId))
+        );
+    }
+
+    private DashboardDtos.Shortcut shortcut(String key, String label, String target, Map<String, String> filters) {
+        return new DashboardDtos.Shortcut(key, label, target, filters);
     }
 
     private double unread(String userId) {

@@ -2,6 +2,7 @@ package com.sse.app.file;
 
 import com.sse.app.academic.assignment.AssignmentService;
 import com.sse.app.chat.ChatService;
+import com.sse.app.file.FileDtos.FileMetadata;
 import com.sse.app.security.CurrentUserHolder;
 import org.springframework.core.io.Resource;
 import org.springframework.http.ContentDisposition;
@@ -32,15 +33,15 @@ public class FileController {
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public StoredFile upload(@RequestPart("file") MultipartFile file) {
-        return storage.store(file, CurrentUserHolder.require().id());
+    public FileMetadata upload(@RequestPart("file") MultipartFile file) {
+        return FileMetadata.from(storage.store(file, CurrentUserHolder.require().id()));
     }
 
     @GetMapping("/{id}")
-    public StoredFile metadata(@PathVariable String id) {
+    public FileMetadata metadata(@PathVariable String id) {
         StoredFile file = storage.metadata(id);
         if (!chat.canAccessFile(id, CurrentUserHolder.require())) assignments.assertCanAccessFile(file, CurrentUserHolder.require());
-        return file;
+        return FileMetadata.from(file);
     }
 
     @GetMapping("/{id}/content")

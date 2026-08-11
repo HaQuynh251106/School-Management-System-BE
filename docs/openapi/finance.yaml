@@ -1,0 +1,399 @@
+openapi: 3.1.0
+info:
+  title: School Management Finance API
+  version: 1.0.0
+  description: Contract for F17 cash collection, VietQR reconciliation, receipts and refunds, including the S01 invoice state machine.
+servers:
+  - url: http://localhost:4000
+tags:
+  - name: FinancePayments
+security:
+  - bearerAuth: []
+paths:
+  /invoices/{invoiceId}:
+    get:
+      tags: [FinancePayments]
+      operationId: getInvoiceDetail
+      summary: Get an invoice with items, payments and refunds
+      x-roles: [ADMIN, ACCOUNTANT, PARENT, STUDENT]
+      x-object-permission: Parent or student may only read an invoice linked to their account.
+      x-idempotency: Safe read operation.
+      x-owners: { backend: P4, frontend: Mobile, test: P4 }
+      parameters:
+        - $ref: '#/components/parameters/InvoiceId'
+      responses:
+        '200':
+          description: Invoice detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InvoiceDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /payments:
+    post:
+      tags: [FinancePayments]
+      operationId: createVietQrPayment
+      summary: Create or reuse a pending VietQR transaction
+      x-roles: [ADMIN, ACCOUNTANT, PARENT]
+      x-object-permission: Parent may only pay an invoice linked to their account.
+      x-idempotency: Reuses the latest pending VietQR payment for the invoice.
+      x-owners: { backend: P4, frontend: Mobile, test: P4 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PayRequest' }
+      responses:
+        '200':
+          description: VietQR transaction ready for transfer
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VietQrPaymentResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    get:
+      tags: [FinancePayments]
+      operationId: listInvoicePayments
+      summary: List payments of one invoice
+      x-roles: [ADMIN, ACCOUNTANT, PARENT, STUDENT]
+      x-object-permission: Parent or student may only read payments of their invoice.
+      x-idempotency: Safe read operation.
+      x-owners: { backend: P4, frontend: Mobile, test: P4 }
+      parameters:
+        - name: invoiceId
+          in: query
+          required: true
+          schema: { type: string, minLength: 1 }
+      responses:
+        '200':
+          description: Payment history
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Payment' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /payments/cash:
+    post:
+      tags: [FinancePayments]
+      operationId: recordCashPayment
+      summary: Record a cash payment and issue a receipt
+      x-roles: [ADMIN, ACCOUNTANT]
+      x-object-permission: Office roles may collect against an existing collectable invoice.
+      x-idempotency: Not idempotent; each accepted request creates a new receipt.
+      x-owners: { backend: P4, frontend: Mobile, test: P4 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CashPaymentRequest' }
+      responses:
+        '200':
+          description: Cash payment recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaymentMutationResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /payments/{paymentId}/submitted:
+    post:
+      tags: [FinancePayments]
+      operationId: markVietQrSubmitted
+      summary: Mark that the payer has submitted a VietQR transfer
+      x-roles: [ADMIN, ACCOUNTANT, PARENT]
+      x-object-permission: Parent may only submit a payment linked to their invoice.
+      x-idempotency: Repeating while pending preserves the same payment and invoice totals.
+      x-owners: { backend: P4, frontend: Mobile, test: P4 }
+      parameters:
+        - $ref: '#/components/parameters/PaymentId'
+      responses:
+        '200':
+          description: Transaction awaiting reconciliation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VietQrCallbackResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /payments/vietqr/pending:
+    get:
+      tags: [FinancePayments]
+      operationId: listPendingVietQrPayments
+      summary: List VietQR transfers awaiting reconciliation
+      x-roles: [ADMIN, ACCOUNTANT]
+      x-object-permission: Office-wide reconciliation queue.
+      x-idempotency: Safe read operation.
+      x-owners: { backend: P4, frontend: Mobile, test: P4 }
+      responses:
+        '200':
+          description: Pending VietQR transactions
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/VietQrPaymentResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /payments/{paymentId}/confirm-vietqr:
+    post:
+      tags: [FinancePayments]
+      operationId: confirmVietQrPayment
+      summary: Reconcile a VietQR transfer and issue a receipt
+      x-roles: [ADMIN, ACCOUNTANT]
+      x-object-permission: Office-wide reconciliation permission.
+      x-idempotency: Confirming an already successful payment returns the original result without adding paidAmount again.
+      x-owners: { backend: P4, frontend: Mobile, test: P4 }
+      parameters:
+        - $ref: '#/components/parameters/PaymentId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VietQrConfirmationRequest' }
+      responses:
+        '200':
+          description: Payment reconciled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VietQrCallbackResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /payments/{paymentId}/reject-vietqr:
+    post:
+      tags: [FinancePayments]
+      operationId: rejectVietQrPayment
+      summary: Reject an invalid pending VietQR transfer
+      x-roles: [ADMIN, ACCOUNTANT]
+      x-object-permission: Office-wide reconciliation permission.
+      x-idempotency: Not repeatable after the transaction leaves pending state.
+      x-owners: { backend: P4, frontend: Mobile, test: P4 }
+      parameters:
+        - $ref: '#/components/parameters/PaymentId'
+      responses:
+        '200':
+          description: Payment rejected
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VietQrCallbackResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /invoices/{invoiceId}/refund:
+    post:
+      tags: [FinancePayments]
+      operationId: refundInvoice
+      summary: Refund part or all of a paid invoice
+      x-roles: [ADMIN, ACCOUNTANT]
+      x-object-permission: Office roles may refund an existing paid invoice.
+      x-idempotency: Not idempotent; refundable balance prevents refunding more than paidAmount.
+      x-owners: { backend: P4, frontend: Mobile, test: P4 }
+      parameters:
+        - $ref: '#/components/parameters/InvoiceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RefundInvoiceRequest' }
+      responses:
+        '200':
+          description: Refund recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RefundMutationResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    InvoiceId:
+      name: invoiceId
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+    PaymentId:
+      name: paymentId
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+  responses:
+    BadRequest:
+      description: Invalid request or state
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+    Unauthorized:
+      description: Missing or invalid access token
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+    Forbidden:
+      description: Role or object permission denied
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+    NotFound:
+      description: Invoice or payment not found
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+    Conflict:
+      description: Business state conflict
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+    ServiceUnavailable:
+      description: VietQR payment mode is disabled
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+  schemas:
+    PayRequest:
+      type: object
+      required: [invoiceId]
+      properties:
+        invoiceId: { type: string, minLength: 1 }
+        method: { type: [string, 'null'], enum: [VIETQR, null], default: VIETQR }
+    CashPaymentRequest:
+      type: object
+      required: [invoiceId]
+      properties:
+        invoiceId: { type: string, minLength: 1 }
+        amount: { type: [integer, 'null'], format: int64, minimum: 1, description: Null collects the full remaining balance. }
+        payerName: { type: [string, 'null'] }
+        note: { type: [string, 'null'] }
+    RefundInvoiceRequest:
+      type: object
+      required: [amount, reason]
+      properties:
+        amount: { type: integer, format: int64, minimum: 1 }
+        reason: { type: string, minLength: 1 }
+    VietQrConfirmationRequest:
+      type: object
+      properties:
+        bankTransactionRef: { type: [string, 'null'] }
+    Invoice:
+      type: object
+      required: [id, code, studentId, totalAmount, paidAmount, refundedAmount, status, version]
+      properties:
+        id: { type: string }
+        code: { type: string }
+        studentId: { type: string }
+        studentName: { type: [string, 'null'] }
+        classId: { type: [string, 'null'] }
+        classCode: { type: [string, 'null'] }
+        gradeLevel: { type: [string, 'null'] }
+        parentId: { type: [string, 'null'] }
+        parentName: { type: [string, 'null'] }
+        feePeriodId: { type: [string, 'null'] }
+        totalAmount: { type: integer, format: int64, minimum: 0 }
+        paidAmount: { type: integer, format: int64, minimum: 0 }
+        refundedAmount: { type: integer, format: int64, minimum: 0 }
+        status:
+          type: string
+          enum: [UNPAID, PARTIAL, PAID, OVERDUE, CANCELLED, PARTIALLY_REFUNDED, REFUNDED]
+          x-state-transitions:
+            UNPAID: [PARTIAL, PAID, OVERDUE, CANCELLED]
+            OVERDUE: [PARTIAL, PAID, CANCELLED]
+            PARTIAL: [PAID, CANCELLED]
+            PAID: [PARTIALLY_REFUNDED, REFUNDED]
+            PARTIALLY_REFUNDED: [REFUNDED]
+            REFUNDED: []
+            CANCELLED: []
+        issuedAt: { type: [string, 'null'], format: date-time }
+        dueDate: { type: [string, 'null'], format: date }
+        version: { type: integer, format: int64, minimum: 0 }
+    InvoiceItem:
+      type: object
+      required: [id, invoiceId, name, amount]
+      properties:
+        id: { type: string }
+        invoiceId: { type: string }
+        name: { type: string }
+        amount: { type: integer, format: int64, minimum: 0 }
+    Payment:
+      type: object
+      required: [id, invoiceId, amount, method, status, txnRef, createdAt]
+      properties:
+        id: { type: string }
+        invoiceId: { type: string }
+        amount: { type: integer, format: int64, minimum: 1 }
+        method: { type: string, enum: [VIETQR, CASH] }
+        status: { type: string, enum: [PENDING, SUCCESS, FAILED] }
+        txnRef: { type: string }
+        receiptCode: { type: [string, 'null'] }
+        payerName: { type: [string, 'null'] }
+        note: { type: [string, 'null'] }
+        recordedBy: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+        paidAt: { type: [string, 'null'], format: date-time }
+    InvoiceRefund:
+      type: object
+      required: [id, invoiceId, amount, method, reason, status, createdBy, createdAt]
+      properties:
+        id: { type: string }
+        invoiceId: { type: string }
+        amount: { type: integer, format: int64, minimum: 1 }
+        method: { type: string }
+        reason: { type: string }
+        status: { type: string, enum: [SUCCESS] }
+        createdBy: { type: string }
+        createdAt: { type: string, format: date-time }
+    InvoiceDetail:
+      type: object
+      required: [invoice, items, payments, refunds]
+      properties:
+        invoice: { $ref: '#/components/schemas/Invoice' }
+        items: { type: array, items: { $ref: '#/components/schemas/InvoiceItem' } }
+        payments: { type: array, items: { $ref: '#/components/schemas/Payment' } }
+        refunds: { type: array, items: { $ref: '#/components/schemas/InvoiceRefund' } }
+    PaymentMutationResult:
+      type: object
+      required: [payment, invoice]
+      properties:
+        payment: { $ref: '#/components/schemas/Payment' }
+        invoice: { $ref: '#/components/schemas/Invoice' }
+    RefundMutationResult:
+      type: object
+      required: [refund, invoice]
+      properties:
+        refund: { $ref: '#/components/schemas/InvoiceRefund' }
+        invoice: { $ref: '#/components/schemas/Invoice' }
+    VietQrPaymentResult:
+      allOf:
+        - $ref: '#/components/schemas/PaymentMutationResult'
+        - type: object
+          required: [gateway, gatewayStatus, qrImageUrl, transferContent]
+          properties:
+            gateway: { type: string, const: VIETQR }
+            gatewayStatus: { type: string }
+            qrImageUrl: { type: string, format: uri }
+            transferContent: { type: string }
+    VietQrCallbackResult:
+      type: object
+      required: [payment, invoice, gatewayStatus]
+      properties:
+        payment: { $ref: '#/components/schemas/Payment' }
+        invoice: { $ref: '#/components/schemas/Invoice' }
+        gatewayStatus: { type: string }
+    ApiError:
+      type: object
+      required: [timestamp, status, code, error, path, requestId, fieldErrors]
+      properties:
+        timestamp: { type: string, format: date-time }
+        status: { type: integer }
+        code: { type: string }
+        error: { type: string }
+        path: { type: string }
+        requestId: { type: string }
+        fieldErrors:
+          type: object
+          additionalProperties: { type: string }

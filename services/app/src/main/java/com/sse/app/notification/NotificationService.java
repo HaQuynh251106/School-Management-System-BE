@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Stream;
 
@@ -364,6 +365,26 @@ public class NotificationService {
         String audience = normalizeAudience(r.audience());
         String category = r.category() == null ? "GENERAL" : r.category().toUpperCase();
         String priority = r.priority() == null ? "NORMAL" : r.priority().toUpperCase();
+        String idempotencyKey = r.idempotencyKey() == null || r.idempotencyKey().isBlank()
+                ? null : r.idempotencyKey().trim();
+        if (idempotencyKey != null) {
+            Optional<Announcement> existing = announcements.findByCreatedByAndIdempotencyKey(
+                    createdBy, idempotencyKey);
+            if (existing.isPresent()) {
+                Announcement item = existing.get();
+                boolean sameRequest = Objects.equals(item.getTitle(), r.title().trim())
+                        && Objects.equals(item.getBody(), r.body().trim())
+                        && Objects.equals(item.getAudience(), audience)
+                        && Objects.equals(item.getCategory(), category)
+                        && Objects.equals(item.getPriority(), priority)
+                        && Objects.equals(item.getHolidayStartDate(), r.holidayStartDate())
+                        && Objects.equals(item.getHolidayEndDate(), r.holidayEndDate());
+                if (!sameRequest) {
+                    throw ApiException.conflict("Khóa chống gửi trùng đã được dùng cho nội dung khác");
+                }
+                return item;
+            }
+        }
         LocalDate holidayStartDate = null;
         LocalDate holidayEndDate = null;
         if ("HOLIDAY".equals(category)) {
@@ -385,12 +406,19 @@ public class NotificationService {
                 .title(r.title().trim()).body(r.body().trim()).audience(audience)
                 .category(category).priority(priority).status("SENT")
                 .recipientCount(recipients.size())
+                .idempotencyKey(idempotencyKey)
                 .holidayStartDate(holidayStartDate).holidayEndDate(holidayEndDate)
                 .createdBy(createdBy).createdAt(Instant.now()).build());
 
         // Fan-out in-app cho đối tượng nhận (đồng bộ — bản RabbitMQ sẽ async hoá).
         notifyUsers(recipients, category, priority, a.getTitle(), a.getBody(), "ANNOUNCEMENT", a.getId());
         return a;
+    }
+
+    public AnnouncementPreview previewAnnouncement(String requestedAudience) {
+        String audience = normalizeAudience(requestedAudience);
+        int recipientCount = (int) resolveAudience(audience).stream().distinct().count();
+        return new AnnouncementPreview(audience, recipientCount);
     }
 
     public Optional<Announcement> schoolHolidayOn(LocalDate date) {

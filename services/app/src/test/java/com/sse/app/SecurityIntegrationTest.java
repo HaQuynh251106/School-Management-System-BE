@@ -96,9 +96,48 @@ class SecurityIntegrationTest {
         mvc.perform(get("/dashboard")
                         .header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.asOf").isString())
+                .andExpect(jsonPath("$.scope.role").value("ADMIN"))
+                .andExpect(jsonPath("$.scope.objectType").value("SCHOOL"))
                 .andExpect(jsonPath("$.metrics.length()").value(4))
+                .andExpect(jsonPath("$.metrics[0].trend.direction").value("NONE"))
                 .andExpect(jsonPath("$.charts.length()").value(2))
-                .andExpect(jsonPath("$.charts[0].data.length()", greaterThanOrEqualTo(1)));
+                .andExpect(jsonPath("$.charts[0].data.length()", greaterThanOrEqualTo(1)))
+                .andExpect(jsonPath("$.shortcuts.length()", greaterThanOrEqualTo(1)))
+                .andExpect(jsonPath("$.errors.length()").value(0));
+    }
+
+    @Test
+    void dashboardUsesRoleAndObjectScopeWithoutLeakingAnotherStudent() throws Exception {
+        String teacher = login("gv.hoa", "teacher@123");
+        String student = login("hs.an", "student@123");
+        String parent = login("ph.pham", "parent@123");
+
+        mvc.perform(get("/dashboard").header("Authorization", "Bearer " + teacher))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.scope.role").value("TEACHER"))
+                .andExpect(jsonPath("$.scope.objectIds[0]").value("u-teacher-1"))
+                .andExpect(jsonPath("$.shortcuts[0].target").value("timetable"));
+
+        mvc.perform(get("/dashboard").header("Authorization", "Bearer " + student))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.scope.role").value("STUDENT"))
+                .andExpect(jsonPath("$.scope.objectIds[0]").value("u-student-1"))
+                .andExpect(jsonPath("$.shortcuts[1].target").value("assignments"));
+
+        mvc.perform(get("/dashboard")
+                        .queryParam("childId", "u-student-1")
+                        .header("Authorization", "Bearer " + parent))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.scope.role").value("PARENT"))
+                .andExpect(jsonPath("$.scope.objectIds.length()").value(1))
+                .andExpect(jsonPath("$.scope.objectIds[0]").value("u-student-1"))
+                .andExpect(jsonPath("$.shortcuts[0].filters.childId").value("u-student-1"));
+
+        mvc.perform(get("/dashboard")
+                        .queryParam("childId", "u-teacher-2")
+                        .header("Authorization", "Bearer " + parent))
+                .andExpect(status().isForbidden());
     }
 
     @Test
@@ -614,8 +653,18 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.originalName").value("homework.pdf"))
+                .andExpect(jsonPath("$.storageName").doesNotExist())
+                .andExpect(jsonPath("$.uploadedBy").doesNotExist())
                 .andReturn().getResponse().getContentAsString();
         String id = body(response).path("id").asText();
+
+        String otherStudent = login("hs.binh", "student@123");
+        mvc.perform(get("/files/{id}", id)
+                        .header("Authorization", "Bearer " + otherStudent))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/files/{id}/content", id)
+                        .header("Authorization", "Bearer " + otherStudent))
+                .andExpect(status().isForbidden());
 
         mvc.perform(get("/files/{id}/content", id)
                         .header("Authorization", "Bearer " + token))
@@ -977,6 +1026,112 @@ class SecurityIntegrationTest {
     }
 
     @Test
+    void scopedFeePeriodPreviewAndBatchGenerationFollowF16() throws Exception {
+        String admin = login("admin", "admin@123");
+        JsonNode period = body(mvc.perform(post("/fee-periods")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"code":"F16-STUDENT-2026","name":"Đợt thu F16","dueDate":"2026-09-30",
+                                 "scopeType":"STUDENTS","studentIds":["u-student-1"]}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("DRAFT"))
+                .andExpect(jsonPath("$.scopeType").value("STUDENTS"))
+                .andReturn().getResponse().getContentAsString());
+        String periodId = period.path("id").asText();
+
+        mvc.perform(get("/fee-periods/" + periodId + "/preview")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.valid").value(false))
+                .andExpect(jsonPath("$.errors[0]").isNotEmpty());
+
+        mvc.perform(post("/fee-periods/" + periodId + "/items")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Học phí F16\",\"amount\":1000000}"))
+                .andExpect(status().isOk());
+        mvc.perform(post("/fee-periods/" + periodId + "/adjustments")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"studentId":"u-student-1","type":"DISCOUNT","amount":100000,
+                                 "reason":"Khuyến học"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.type").value("DISCOUNT"));
+
+        mvc.perform(get("/fee-periods/" + periodId + "/preview")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.valid").value(true))
+                .andExpect(jsonPath("$.recipientCount").value(1))
+                .andExpect(jsonPath("$.totalAmount").value(900000))
+                .andExpect(jsonPath("$.recipients[0].studentId").value("u-student-1"));
+
+        mvc.perform(post("/fee-periods/" + periodId + "/open")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("OPEN"));
+        mvc.perform(post("/fee-periods/" + periodId + "/adjustments")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"studentId\":\"u-student-1\",\"type\":\"EXCLUDE\"}"))
+                .andExpect(status().isConflict());
+
+        JsonNode first = body(mvc.perform(post("/fee-periods/" + periodId + "/generate-invoices")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].totalAmount").value(900000))
+                .andReturn().getResponse().getContentAsString());
+        JsonNode second = body(mvc.perform(post("/fee-periods/" + periodId + "/generate-invoices")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+        org.junit.jupiter.api.Assertions.assertEquals(first.get(0).path("id").asText(),
+                second.get(0).path("id").asText());
+    }
+
+    @Test
+    void assignmentQueriesEnforceRoleAndTeacherObjectScope() throws Exception {
+        String admin = login("admin", "admin@123");
+        String teacher = login("gv.hoa", "teacher@123");
+        String parent = login("ph.pham", "parent@123");
+
+        String foreignDraftResponse = mvc.perform(post("/assignments")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"classId":"c-10a1","subjectId":"sj-math",
+                                 "title":"F18 scope regression draft","publishNow":false}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("DRAFT"))
+                .andReturn().getResponse().getContentAsString();
+        String foreignDraftId = body(foreignDraftResponse).path("id").asText();
+
+        mvc.perform(get("/assignments")
+                        .queryParam("classId", "c-10a1")
+                        .header("Authorization", "Bearer " + teacher))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[*].id").value(org.hamcrest.Matchers.not(hasItem(foreignDraftId))))
+                .andExpect(jsonPath("$[*].teacherId").value(everyItem(is("u-teacher-1"))));
+
+        mvc.perform(get("/assignments").header("Authorization", "Bearer " + parent))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/me/assignments").header("Authorization", "Bearer " + parent))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/me/submissions").header("Authorization", "Bearer " + parent))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(get("/children/u-student-1/assignments")
+                        .header("Authorization", "Bearer " + parent))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[*].id").value(org.hamcrest.Matchers.not(hasItem(foreignDraftId))));
+    }
+
+    @Test
     void invoiceGenerationAndSignedPaymentCallbackAreIdempotent() throws Exception {
         String admin = login("admin", "admin@123");
         mvc.perform(post("/fee-periods/fp-hk1/generate-invoices")
@@ -1004,7 +1159,11 @@ class SecurityIntegrationTest {
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
         JsonNode invoice = null;
         for (JsonNode item : parentInvoices) {
-            if (!"PAID".equals(item.path("status").asText())) { invoice = item; break; }
+            if (java.util.Set.of("UNPAID", "PARTIAL", "OVERDUE")
+                    .contains(item.path("status").asText())) {
+                invoice = item;
+                break;
+            }
         }
         if (invoice == null) throw new AssertionError("A pending parent invoice is required");
 
@@ -1029,6 +1188,8 @@ class SecurityIntegrationTest {
                         .content("{\"bankTransactionRef\":\"BANK-TEST-001\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.payment.status").value("SUCCESS"))
+                .andExpect(jsonPath("$.payment.receiptCode").value(org.hamcrest.Matchers.startsWith("REC-")))
+                .andExpect(jsonPath("$.payment.recordedBy").value("u-admin-1"))
                 .andExpect(jsonPath("$.invoice.status").value("PAID"));
         mvc.perform(post("/payments/" + paymentId + "/confirm-vietqr")
                         .header("Authorization", "Bearer " + admin)
@@ -1087,6 +1248,7 @@ class SecurityIntegrationTest {
                 .andReturn().getResponse().getContentAsString());
         assertTrue(generated.size() > 0);
         JsonNode invoice = generated.get(0);
+        assertEquals("UNPAID", invoice.path("status").asText());
         assertTrue(invoice.path("classId").isTextual());
         assertTrue(invoice.path("classCode").isTextual());
         assertTrue(invoice.path("gradeLevel").isTextual());
@@ -1095,11 +1257,23 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"invoiceId":"%s","amount":%d}
+                                {"invoiceId":"%s","amount":%d,
+                                 "payerName":"Nguyễn Văn Hùng","note":"Thu tại văn phòng"}
                                 """.formatted(invoice.path("id").asText(), partialAmount)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.invoice.status").value("PARTIAL"))
-                .andExpect(jsonPath("$.invoice.paidAmount").value(partialAmount));
+                .andExpect(jsonPath("$.invoice.paidAmount").value(partialAmount))
+                .andExpect(jsonPath("$.payment.receiptCode").value(
+                        org.hamcrest.Matchers.startsWith("REC-")))
+                .andExpect(jsonPath("$.payment.payerName").value("Nguyễn Văn Hùng"))
+                .andExpect(jsonPath("$.payment.note").value("Thu tại văn phòng"))
+                .andExpect(jsonPath("$.payment.recordedBy").isNotEmpty());
+
+        mvc.perform(get("/invoices/{id}", invoice.path("id").asText())
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.payments[0].receiptCode").value(
+                        org.hamcrest.Matchers.startsWith("REC-")));
 
         mvc.perform(get("/finance/overview").header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk())
@@ -1206,6 +1380,32 @@ class SecurityIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].type").value("FINANCE_CLASS_COMPLETE"))
                 .andExpect(jsonPath("$[0].title").value(org.hamcrest.Matchers.containsString("10A1")));
+
+        String invoiceId = invoice.path("id").asText();
+        mvc.perform(post("/invoices/{id}/refund", invoiceId)
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"amount\":300000,\"reason\":\"Điều chỉnh khoản thu\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.invoice.status").value("PARTIALLY_REFUNDED"))
+                .andExpect(jsonPath("$.invoice.refundedAmount").value(300000));
+        mvc.perform(post("/payments/cash")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"invoiceId\":\"%s\",\"amount\":1}".formatted(invoiceId)))
+                .andExpect(status().isConflict());
+        mvc.perform(post("/invoices/{id}/refund", invoiceId)
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"amount\":900000,\"reason\":\"Hoàn phần còn lại\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.invoice.status").value("REFUNDED"))
+                .andExpect(jsonPath("$.invoice.refundedAmount").value(1200000));
+        mvc.perform(get("/invoices/{id}", invoiceId)
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.refunds.length()").value(2));
+
         mvc.perform(post("/fee-periods/{id}/close", periodId)
                         .header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk())
@@ -1328,6 +1528,30 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk())
                 .andExpect(header().string("Content-Type", "text/csv;charset=UTF-8"));
+
+        mvc.perform(get("/reports/export")
+                        .queryParam("type", "grades")
+                        .queryParam("format", "xlsx")
+                        .queryParam("classId", "c-10a1")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Type",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .andExpect(header().string("Content-Disposition",
+                        org.hamcrest.Matchers.matchesPattern("attachment; filename=bao-cao-grades-.*\\.xlsx")))
+                .andExpect(header().exists("X-Report-As-Of"))
+                .andExpect(result -> assertTrue(result.getResponse().getContentAsByteArray().length > 1000))
+                .andExpect(result -> assertEquals((byte) 'P', result.getResponse().getContentAsByteArray()[0]));
+
+        mvc.perform(get("/reports/export")
+                        .queryParam("type", "attendance")
+                        .queryParam("format", "pdf")
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Type", "application/pdf"))
+                .andExpect(header().exists("X-Report-As-Of"))
+                .andExpect(result -> assertTrue(result.getResponse().getContentAsByteArray().length > 500))
+                .andExpect(result -> assertEquals((byte) '%', result.getResponse().getContentAsByteArray()[0]));
     }
 
     @Test
@@ -1726,6 +1950,53 @@ class SecurityIntegrationTest {
     }
 
     @Test
+    void announcementPreviewAndIdempotencyPreventDuplicateDelivery() throws Exception {
+        String teacher = login("gv.hoa", "teacher@123");
+
+        mvc.perform(post("/announcements/preview")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"audience":"CLASS_ALL:c-10a1","category":"STUDENT_STATUS"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.audience").value("CLASS_ALL:c-10a1"))
+                .andExpect(jsonPath("$.recipientCount").value(greaterThanOrEqualTo(2)));
+
+        String request = """
+                {"audience":"CLASS_ALL:c-10a1","category":"STUDENT_STATUS","priority":"IMPORTANT",
+                 "title":"Thông báo chống gửi trùng","body":"Nội dung chỉ được phát một lần.",
+                 "idempotencyKey":"f12-integration-idempotency"}
+                """;
+        JsonNode first = body(mvc.perform(post("/announcements")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(request))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+        String announcementId = first.path("id").asText();
+        int deliveredAfterFirst = jdbc.queryForObject(
+                "select count(*) from notifications where ref_type = 'ANNOUNCEMENT' and ref_id = ?",
+                Integer.class, announcementId);
+
+        mvc.perform(post("/announcements")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(request))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(announcementId));
+        assertEquals(deliveredAfterFirst, jdbc.queryForObject(
+                "select count(*) from notifications where ref_type = 'ANNOUNCEMENT' and ref_id = ?",
+                Integer.class, announcementId));
+
+        mvc.perform(post("/announcements")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(request.replace("Nội dung chỉ được phát một lần.", "Nội dung khác.")))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
     void chatAndTimetableQueriesAreRestrictedToTheUsersSchoolScope() throws Exception {
         String student = login("hs.an", "student@123");
         mvc.perform(post("/chat/messages")
@@ -1771,7 +2042,9 @@ class SecurityIntegrationTest {
                         .queryParam("withUserId", "u-student-1")
                         .header("Authorization", "Bearer " + teacher))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].senderId").exists());
+                .andExpect(jsonPath("$[0].senderId").exists())
+                .andExpect(jsonPath("$[0].readFlag").value(true))
+                .andExpect(jsonPath("$[0].readAt").exists());
 
         JsonNode readThreads = body(mvc.perform(get("/chat/threads")
                         .header("Authorization", "Bearer " + teacher))
@@ -1837,8 +2110,14 @@ class SecurityIntegrationTest {
                 .andExpect(status().isOk());
         mvc.perform(post("/chat/messages").header("Authorization", "Bearer " + parent)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"toUserId\":\"u-teacher-2\",\"body\":\"Không hợp lệ\"}"))
-                .andExpect(status().isForbidden());
+                        .content("{\"toUserId\":\"u-teacher-2\",\"body\":\"Trao đổi với giáo viên bộ môn\"}"))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/chat/contacts").header("Authorization", "Bearer " + parent))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[*].id").value(hasItem("u-teacher-1")))
+                .andExpect(jsonPath("$[*].id").value(hasItem("u-teacher-2")))
+                .andExpect(jsonPath("$[*].id").value(org.hamcrest.Matchers.not(hasItem("u-admin-1"))));
 
         mvc.perform(post("/chat/messages").header("Authorization", "Bearer " + homeroomTeacher)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -1851,7 +2130,15 @@ class SecurityIntegrationTest {
 
         mvc.perform(post("/chat/messages").header("Authorization", "Bearer " + subjectTeacher)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"toUserId\":\"u-student-1\",\"body\":\"Không hợp lệ\"}"))
+                        .content("{\"toUserId\":\"u-student-1\",\"body\":\"Trao đổi môn học\"}"))
+                .andExpect(status().isOk());
+        mvc.perform(post("/chat/messages").header("Authorization", "Bearer " + subjectTeacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"toUserId\":\"u-parent-1\",\"body\":\"Trao đổi với phụ huynh lớp đang dạy\"}"))
+                .andExpect(status().isOk());
+        mvc.perform(post("/chat/messages").header("Authorization", "Bearer " + subjectTeacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"toUserId\":\"u-admin-1\",\"body\":\"Ngoài quan hệ giảng dạy\"}"))
                 .andExpect(status().isForbidden());
         mvc.perform(post("/chat/messages").header("Authorization", "Bearer " + subjectTeacher)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -2222,20 +2509,107 @@ class SecurityIntegrationTest {
     }
 
     @Test
-    void removedFeatureEndpointsReturnNotFound() throws Exception {
+    void removedHolidayEndpointReturnsNotFound() throws Exception {
         String admin = login("admin", "admin@123");
-
-        mvc.perform(get("/clubs")
-                        .header("Authorization", "Bearer " + admin))
-                .andExpect(status().isNotFound());
-
-        mvc.perform(get("/me/club-registrations")
-                        .header("Authorization", "Bearer " + admin))
-                .andExpect(status().isNotFound());
 
         mvc.perform(get("/school-holidays")
                         .header("Authorization", "Bearer " + admin))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void clubRegistrationFlowValidatesOwnershipCapacityApprovalInvoiceAndPromotion() throws Exception {
+        String admin = login("admin", "admin@123");
+        String studentOne = login("hs.an", "student@123");
+        String parent = login("ph.pham", "parent@123");
+
+        mvc.perform(post("/clubs")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"id":"club-f13-core","code":"F13-CORE","name":"CLB Robotics",
+                                 "description":"Luồng kiểm thử F13","schedule":"Thứ Bảy 08:00",
+                                 "capacity":1,"feeAmount":350000,"approvalRequired":false,
+                                 "registrationStart":"2020-01-01","registrationEnd":"2030-12-31"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.availableSlots").value(1));
+
+        JsonNode first = body(mvc.perform(post("/clubs/club-f13-core/registrations")
+                        .header("Authorization", "Bearer " + studentOne)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPROVED"))
+                .andExpect(jsonPath("$.invoiceId").isString())
+                .andReturn().getResponse().getContentAsString());
+
+        mvc.perform(post("/clubs/club-f13-core/registrations")
+                        .header("Authorization", "Bearer " + studentOne)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isConflict());
+
+        mvc.perform(post("/clubs/club-f13-core/registrations")
+                        .header("Authorization", "Bearer " + parent)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"studentId\":\"u-teacher-1\"}"))
+                .andExpect(status().isForbidden());
+
+        JsonNode waiting = body(mvc.perform(post("/clubs/club-f13-core/registrations")
+                        .header("Authorization", "Bearer " + parent)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"studentId\":\"u-student-2\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("WAITLIST"))
+                .andExpect(jsonPath("$.waitlistPosition").value(1))
+                .andReturn().getResponse().getContentAsString());
+
+        mvc.perform(post("/club-registrations/" + first.path("id").asText() + "/cancel")
+                        .header("Authorization", "Bearer " + studentOne)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"Đổi lịch học\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CANCELLED"));
+
+        mvc.perform(get("/children/u-student-2/club-registrations")
+                        .header("Authorization", "Bearer " + parent))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(waiting.path("id").asText()))
+                .andExpect(jsonPath("$[0].status").value("APPROVED"))
+                .andExpect(jsonPath("$[0].invoiceId").isString());
+
+        mvc.perform(get("/invoices/" + first.path("invoiceId").asText())
+                        .header("Authorization", "Bearer " + parent))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.invoice.status").value("CANCELLED"));
+
+        mvc.perform(post("/clubs")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"id":"club-f13-approval","code":"F13-APPROVAL","name":"CLB Tranh biện",
+                                 "schedule":"Thứ Tư 16:30","capacity":10,"feeAmount":0,
+                                 "approvalRequired":true,"registrationStart":"2020-01-01",
+                                 "registrationEnd":"2030-12-31"}
+                                """))
+                .andExpect(status().isOk());
+
+        JsonNode pending = body(mvc.perform(post("/clubs/club-f13-approval/registrations")
+                        .header("Authorization", "Bearer " + studentOne)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PENDING"))
+                .andReturn().getResponse().getContentAsString());
+
+        mvc.perform(post("/club-registrations/" + pending.path("id").asText() + "/approve")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"Đủ điều kiện\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPROVED"))
+                .andExpect(jsonPath("$.invoiceId").value(nullValue()));
     }
 
     private String login(String username, String password) throws Exception {

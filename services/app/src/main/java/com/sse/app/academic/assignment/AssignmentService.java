@@ -58,6 +58,7 @@ public class AssignmentService {
 
         Map<String, Integer> classSizes = new HashMap<>();
         return base.stream()
+                .filter(a -> teacherId == null || teacherId.equals(a.getTeacherId()))
                 .filter(a -> status == null || status.equals(a.getStatus()))
                 .filter(a -> !onlyPublished || !"DRAFT".equals(a.getStatus()))
                 .peek(a -> {
@@ -247,11 +248,15 @@ public class AssignmentService {
         if (!"STUDENT".equals(student.getRole()) || !Objects.equals(student.getClassId(), assignment.getClassId())) {
             throw ApiException.forbidden("Bài tập không thuộc lớp của học sinh");
         }
-        if (!"PUBLISHED".equals(assignment.getStatus())) throw ApiException.badRequest("Bài tập chưa mở nộp");
+        if (!"PUBLISHED".equals(assignment.getStatus())) {
+            throw ApiException.conflict("SUBMISSION_CLOSED: Bài tập chưa mở nộp");
+        }
 
         String status = "SUBMITTED";
         if (assignment.getDeadline() != null && Instant.now().isAfter(assignment.getDeadline())) {
-            if (!assignment.isAllowLate()) throw ApiException.badRequest("Đã quá hạn nộp bài");
+            if (!assignment.isAllowLate()) {
+                throw ApiException.conflict("SUBMISSION_CLOSED: Đã quá hạn nộp bài");
+            }
             status = "LATE";
         }
 

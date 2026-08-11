@@ -23,6 +23,8 @@ public class Announcement {
     private String priority;    // NORMAL | IMPORTANT | URGENT
     private String status;      // SENT
     private int recipientCount;
+    @Column(length = 100)
+    private String idempotencyKey;
     private LocalDate holidayStartDate;
     private LocalDate holidayEndDate;
 }

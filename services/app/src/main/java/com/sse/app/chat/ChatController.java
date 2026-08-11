@@ -49,7 +49,7 @@ public class ChatController {
 
     @GetMapping("/unread-count")
     public Map<String, Long> unreadCount() {
-        return Map.of("count", chat.unreadCount(CurrentUserHolder.require().id()));
+        return Map.of("count", chat.unreadCount(CurrentUserHolder.require()));
     }
 
     @GetMapping("/messages")

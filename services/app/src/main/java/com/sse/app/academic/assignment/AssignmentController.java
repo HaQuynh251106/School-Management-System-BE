@@ -27,17 +27,19 @@ public class AssignmentController {
                                  @RequestParam(required = false) String teacherId,
                                  @RequestParam(required = false) String status) {
         CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("ADMIN", "TEACHER", "STUDENT");
         if (me.isStudent()) {
             User u = users.getById(me.id());
             return assignments.list(u.getClassId(), null, status, true);
         }
-        if (me.isTeacher() && teacherId == null && classId == null) teacherId = me.id();
+        if (me.isTeacher()) teacherId = me.id();
         return assignments.list(classId, teacherId, status, false);
     }
 
     @GetMapping("/me/assignments")
     public List<Assignment> mine() {
         CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("TEACHER", "STUDENT");
         if (me.isTeacher()) return assignments.list(null, me.id(), null, false);
         User u = users.getById(me.id());
         return assignments.list(u.getClassId(), null, null, true);
@@ -140,6 +142,7 @@ public class AssignmentController {
     @GetMapping("/me/submissions")
     public List<AssignmentSubmission> mySubmissions() {
         CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("STUDENT");
         return assignments.submissionsByStudent(me.id());
     }
 

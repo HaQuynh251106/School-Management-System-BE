@@ -1,0 +1,157 @@
+openapi: 3.1.0
+info:
+  title: School Management Chat API
+  version: 1.0.0
+  description: F12 contract for relationship-scoped one-to-one chat and realtime receipts.
+servers: [{ url: / }]
+security: [{ bearerAuth: [] }]
+paths:
+  /chat/contacts:
+    get:
+      operationId: listChatContacts
+      x-roles: &chatRoles [ADMIN, TEACHER, STUDENT, PARENT]
+      x-object-permission: Returns only contacts allowed by current class, teaching assignment, homeroom, and parent-child relationships; never the global directory.
+      x-idempotency: Safe and idempotent.
+      x-owners: &chatOwners { backend: BE-Chat, mobile: Mobile }
+      responses:
+        '200': { description: Allowed contacts, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/UserSummary' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /chat/contact-scopes:
+    get:
+      operationId: listChatContactScopes
+      x-roles: *chatRoles
+      x-object-permission: Contains only class relationships visible to the current user.
+      x-idempotency: Safe and idempotent.
+      x-owners: *chatOwners
+      responses:
+        '200': { description: Contact IDs mapped to visible class scopes, content: { application/json: { schema: { type: object, additionalProperties: { type: array, items: { $ref: '#/components/schemas/ContactScope' } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /chat/threads:
+    get:
+      operationId: listChatThreads
+      x-roles: *chatRoles
+      x-object-permission: Threads are filtered to contacts still permitted for the current user.
+      x-idempotency: Safe and idempotent.
+      x-owners: *chatOwners
+      responses:
+        '200': { description: Latest message and unread count per contact, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/ChatThread' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /chat/unread-count:
+    get:
+      operationId: getChatUnreadCount
+      x-roles: *chatRoles
+      x-object-permission: Counts unread incoming messages only from contacts currently permitted.
+      x-idempotency: Safe and idempotent.
+      x-owners: *chatOwners
+      responses:
+        '200': { description: Current unread count, content: { application/json: { schema: { $ref: '#/components/schemas/Count' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /chat/messages:
+    get:
+      operationId: listChatMessages
+      x-roles: *chatRoles
+      x-object-permission: Both participants must have a currently valid contact relationship; opening marks received messages read.
+      x-idempotency: Repeated reads are idempotent after the first read transition.
+      x-owners: *chatOwners
+      parameters:
+        - { name: withUserId, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Conversation in chronological order, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/ChatMessage' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: sendChatMessage
+      x-roles: *chatRoles
+      x-object-permission: Recipient must be in the sender's current contact policy; an attachment must be owned by the sender.
+      x-idempotency: Not idempotent; every accepted request creates one message.
+      x-owners: *chatOwners
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SendMessageRequest' } } }
+      responses:
+        '200': { description: Stored unread message, content: { application/json: { schema: { $ref: '#/components/schemas/ChatMessage' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /chat/messages/page:
+    get:
+      operationId: listChatMessagePage
+      x-roles: *chatRoles
+      x-object-permission: Same relationship check as the chronological conversation endpoint.
+      x-idempotency: Repeated reads are idempotent after the first read transition.
+      x-owners: *chatOwners
+      parameters:
+        - { name: withUserId, in: query, required: true, schema: { type: string } }
+        - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200': { description: Newest-first message page, content: { application/json: { schema: { type: object } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /realtime/events:
+    get:
+      operationId: subscribeRealtimeEvents
+      x-roles: [ADMIN, ACADEMIC_AFFAIRS, ACCOUNTANT, TEACHER, STUDENT, PARENT]
+      x-object-permission: The authenticated SSE stream receives events addressed only to that user ID.
+      x-idempotency: Reconnecting creates a new stream; events are state hints and clients must refresh REST state.
+      x-owners: { backend: Platform, mobile: Mobile }
+      responses:
+        '200':
+          description: text/event-stream containing CHAT, CHAT_READ, and NOTIFICATION events
+          content: { text/event-stream: { schema: { type: string } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  schemas:
+    UserSummary:
+      type: object
+      required: [id, fullName, role]
+      properties: { id: { type: string }, fullName: { type: string }, role: { type: string } }
+    ContactScope:
+      type: object
+      required: [classId, classCode, relation]
+      properties: { classId: { type: string }, classCode: { type: string }, relation: { type: string } }
+    ChatThread:
+      type: object
+      required: [userId, name, lastMessage, lastTime, unread]
+      properties:
+        userId: { type: string }
+        name: { type: string }
+        lastMessage: { type: string }
+        lastTime: { type: string, format: date-time }
+        unread: { type: integer, minimum: 0 }
+    SendMessageRequest:
+      type: object
+      required: [toUserId]
+      properties:
+        toUserId: { type: string }
+        body: { type: [string, 'null'], maxLength: 2000 }
+        attachmentFileId: { type: [string, 'null'] }
+    ChatMessage:
+      type: object
+      required: [id, senderId, recipientId, readFlag, createdAt]
+      properties:
+        id: { type: string }
+        senderId: { type: string }
+        senderName: { type: string }
+        recipientId: { type: string }
+        recipientName: { type: string }
+        body: { type: [string, 'null'] }
+        attachmentFileId: { type: [string, 'null'] }
+        attachmentName: { type: [string, 'null'] }
+        readFlag: { type: boolean }
+        readAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+    Count:
+      type: object
+      required: [count]
+      properties: { count: { type: integer, format: int64, minimum: 0 } }
+    ApiError:
+      type: object
+      required: [status, code, error]
+      properties: { status: { type: integer }, code: { type: string }, error: { type: string } }
+  responses:
+    BadRequest: { description: Invalid recipient or empty/oversized message, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+    Unauthorized: { description: Missing or invalid access token, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+    Forbidden: { description: Contact relationship or attachment ownership is not valid, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }

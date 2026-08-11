@@ -28,9 +28,12 @@ public class FinanceService {
 
     private final FeePeriodRepository periods;
     private final FeePeriodItemRepository periodItems;
+    private final FeePeriodRecipientRepository periodRecipients;
+    private final FeePeriodAdjustmentRepository periodAdjustments;
     private final InvoiceRepository invoices;
     private final InvoiceItemRepository invoiceItems;
     private final PaymentRepository payments;
+    private final InvoiceRefundRepository refunds;
     private final PaymentGatewayTransactionRepository gatewayTransactions;
     private final StructureService structure;
     private final UserService users;
@@ -39,16 +42,22 @@ public class FinanceService {
     private final String paymentMode;
 
     public FinanceService(FeePeriodRepository periods, FeePeriodItemRepository periodItems,
+                          FeePeriodRecipientRepository periodRecipients,
+                          FeePeriodAdjustmentRepository periodAdjustments,
                           InvoiceRepository invoices, InvoiceItemRepository invoiceItems,
-                          PaymentRepository payments, PaymentGatewayTransactionRepository gatewayTransactions,
+                          PaymentRepository payments, InvoiceRefundRepository refunds,
+                          PaymentGatewayTransactionRepository gatewayTransactions,
                           StructureService structure,
                           UserService users, NotificationService notifications, VietQrGateway vietQrGateway,
                           @Value("${sse.payments.mode:disabled}") String paymentMode) {
         this.periods = periods;
         this.periodItems = periodItems;
+        this.periodRecipients = periodRecipients;
+        this.periodAdjustments = periodAdjustments;
         this.invoices = invoices;
         this.invoiceItems = invoiceItems;
         this.payments = payments;
+        this.refunds = refunds;
         this.gatewayTransactions = gatewayTransactions;
         this.structure = structure;
         this.users = users;
@@ -60,17 +69,23 @@ public class FinanceService {
     // ---------- Đợt thu ----------
     public List<FeePeriod> listPeriods() { return periods.findAll(); }
 
+    public FeePeriod period(String id) { return getPeriod(id); }
+
+    @Transactional
     public FeePeriod createPeriod(CreateFeePeriodRequest r) {
         String code = r.code().trim();
         if (periods.findByCode(code).isPresent()) throw ApiException.conflict("Mã đợt thu đã tồn tại");
         if (r.academicYearId() != null && !r.academicYearId().isBlank()) structure.getYear(r.academicYearId());
-        return periods.save(FeePeriod.builder()
+        FeePeriod period = periods.save(FeePeriod.builder()
                 .id(r.id() == null || r.id().isBlank() ? Ids.gen("fp") : r.id())
                 .code(code).name(r.name()).status("DRAFT")
                 .academicYearId(r.academicYearId()).applyToGrades(r.applyToGrades())
                 .dueDate(r.dueDate()).createdAt(Instant.now()).build());
+        applyScope(period, r.scopeType(), r.scopeGradeLevel(), r.scopeClassId(), r.studentIds());
+        return periods.save(period);
     }
 
+    @Transactional
     public FeePeriod updatePeriod(String periodId, UpdateFeePeriodRequest r) {
         FeePeriod period = getPeriod(periodId);
         requireDraft(period);
@@ -81,6 +96,7 @@ public class FinanceService {
         period.setAcademicYearId(blankToNull(r.academicYearId()));
         period.setApplyToGrades(blankToNull(r.applyToGrades()));
         period.setDueDate(r.dueDate());
+        applyScope(period, r.scopeType(), r.scopeGradeLevel(), r.scopeClassId(), r.studentIds());
         return periods.save(period);
     }
 
@@ -92,6 +108,8 @@ public class FinanceService {
             throw ApiException.conflict("Không thể xóa đợt thu đã phát sinh hóa đơn");
         }
         periodItems.deleteByFeePeriodId(periodId);
+        periodRecipients.deleteByFeePeriodId(periodId);
+        periodAdjustments.deleteByFeePeriodId(periodId);
         periods.delete(period);
     }
 
@@ -116,9 +134,107 @@ public class FinanceService {
         periodItems.delete(item);
     }
 
+    public List<FeePeriodAdjustment> adjustmentsOf(String periodId) {
+        getPeriod(periodId);
+        return periodAdjustments.findByFeePeriodId(periodId);
+    }
+
+    public List<String> recipientIdsOf(String periodId) {
+        getPeriod(periodId);
+        return periodRecipients.findByFeePeriodId(periodId).stream()
+                .map(FeePeriodRecipient::getStudentId).toList();
+    }
+
+    public FeePeriodAdjustment saveAdjustment(String periodId, FeePeriodAdjustmentRequest request) {
+        FeePeriod period = getPeriod(periodId);
+        requireDraft(period);
+        UserDto student = users.dtoById(request.studentId());
+        if (!"STUDENT".equals(student.role())) {
+            throw ApiException.badRequest("Đối tượng miễn giảm phải là học sinh");
+        }
+        String type = request.type().trim().toUpperCase(Locale.ROOT);
+        if (!Set.of("EXCLUDE", "DISCOUNT").contains(type)) {
+            throw ApiException.badRequest("Loại ngoại lệ phải là EXCLUDE hoặc DISCOUNT");
+        }
+        long amount = request.amount() == null ? 0 : request.amount();
+        if ("DISCOUNT".equals(type) && amount <= 0) {
+            throw ApiException.badRequest("Số tiền miễn giảm phải lớn hơn 0");
+        }
+        FeePeriodAdjustment adjustment = periodAdjustments
+                .findByFeePeriodIdAndStudentId(periodId, request.studentId())
+                .orElseGet(() -> FeePeriodAdjustment.builder().id(Ids.gen("fpa"))
+                        .feePeriodId(periodId).studentId(request.studentId()).build());
+        adjustment.setType(type);
+        adjustment.setAmount("EXCLUDE".equals(type) ? 0 : amount);
+        adjustment.setReason(blankToNull(request.reason()));
+        return periodAdjustments.save(adjustment);
+    }
+
+    public void deleteAdjustment(String periodId, String adjustmentId) {
+        FeePeriod period = getPeriod(periodId);
+        requireDraft(period);
+        FeePeriodAdjustment adjustment = periodAdjustments.findById(adjustmentId)
+                .orElseThrow(() -> ApiException.notFound("Miễn giảm"));
+        if (!periodId.equals(adjustment.getFeePeriodId())) {
+            throw ApiException.badRequest("Miễn giảm không thuộc đợt thu đã chọn");
+        }
+        periodAdjustments.delete(adjustment);
+    }
+
+    public FeePeriodPreview preview(String periodId) {
+        FeePeriod period = getPeriod(periodId);
+        List<FeePeriodItem> items = itemsOf(periodId);
+        Map<String, FeePeriodAdjustment> adjustments = periodAdjustments.findByFeePeriodId(periodId).stream()
+                .collect(java.util.stream.Collectors.toMap(FeePeriodAdjustment::getStudentId, item -> item));
+        List<UserDto> students = scopedStudents(period);
+        Set<String> errors = new LinkedHashSet<>();
+        if (items.isEmpty()) errors.add("Đợt thu chưa có khoản thu");
+        if (students.isEmpty()) errors.add("Phạm vi áp dụng không có học sinh");
+        List<FeePeriodRecipientPreview> rows = new ArrayList<>();
+        long grandTotal = 0;
+        int invoiceCount = 0;
+        for (UserDto student : students) {
+            String gradeLevel = structure.gradeLevelOf(student.classId());
+            List<FeePeriodItem> applicable = items.stream()
+                    .filter(item -> item.getGradeLevel() == null || item.getGradeLevel().equals(gradeLevel))
+                    .toList();
+            long baseAmount = applicable.stream().mapToLong(FeePeriodItem::getAmount).sum();
+            FeePeriodAdjustment adjustment = adjustments.get(student.id());
+            boolean excluded = adjustment != null && "EXCLUDE".equals(adjustment.getType());
+            long discount = adjustment != null && "DISCOUNT".equals(adjustment.getType())
+                    ? adjustment.getAmount() : 0;
+            long total = excluded ? 0 : baseAmount - discount;
+            boolean invoiceExists = invoices.findByFeePeriodIdAndStudentId(periodId, student.id()).isPresent();
+            List<String> parentIds = users.parentIdsOf(student.id()).stream().distinct().toList();
+            if (!excluded && applicable.isEmpty()) {
+                errors.add("Học sinh " + student.fullName() + " không có khoản thu phù hợp");
+            }
+            if (!excluded && total <= 0) {
+                errors.add("Số tiền của học sinh " + student.fullName() + " không hợp lệ");
+            }
+            if (period.getScopeType() != null && !excluded && !invoiceExists && parentIds.isEmpty()) {
+                errors.add("Học sinh " + student.fullName() + " chưa liên kết phụ huynh");
+            }
+            SchoolClass schoolClass = student.classId() == null ? null : structure.getClass(student.classId());
+            if (!excluded && total > 0) grandTotal += total;
+            if (invoiceExists) invoiceCount++;
+            rows.add(new FeePeriodRecipientPreview(student.id(), student.fullName(), student.classId(),
+                    schoolClass == null ? student.className() : schoolClass.getCode(), gradeLevel,
+                    !parentIds.isEmpty(), excluded, discount, total, invoiceExists));
+        }
+        int recipientCount = (int) rows.stream()
+                .filter(row -> !row.excluded() && row.totalAmount() > 0).count();
+        return new FeePeriodPreview(periodId, period.getStatus(), recipientCount, invoiceCount,
+                grandTotal, errors.isEmpty(), List.copyOf(errors), rows);
+    }
+
     public FeePeriod open(String periodId) {
         FeePeriod p = getPeriod(periodId);
         if ("OPEN".equals(p.getStatus())) return p;
+        FeePeriodPreview periodPreview = preview(periodId);
+        if (!periodPreview.valid()) {
+            throw ApiException.badRequest(String.join("; ", periodPreview.errors()));
+        }
         if (!"DRAFT".equals(p.getStatus())) throw ApiException.conflict("Đợt thu không còn ở trạng thái nháp");
         if (periodItems.findByFeePeriodId(periodId).isEmpty()) {
             throw ApiException.badRequest(
@@ -152,20 +268,98 @@ public class FinanceService {
         return value == null || value.isBlank() ? null : value.trim();
     }
 
+    private void applyScope(FeePeriod period, String requestedType, String gradeLevel,
+                            String classId, List<String> studentIds) {
+        periodRecipients.deleteByFeePeriodId(period.getId());
+        if (requestedType == null || requestedType.isBlank()) {
+            period.setScopeType(null);
+            period.setScopeGradeLevel(null);
+            period.setScopeClassId(null);
+            return;
+        }
+        String type = requestedType.trim().toUpperCase(Locale.ROOT);
+        if (!Set.of("SCHOOL", "GRADE", "CLASS", "STUDENTS").contains(type)) {
+            throw ApiException.badRequest("Phạm vi phải là SCHOOL, GRADE, CLASS hoặc STUDENTS");
+        }
+        String normalizedGrade = blankToNull(gradeLevel);
+        String normalizedClass = blankToNull(classId);
+        if ("GRADE".equals(type) && normalizedGrade == null) {
+            normalizedGrade = blankToNull(period.getApplyToGrades());
+        }
+        if ("GRADE".equals(type) && normalizedGrade == null) {
+            throw ApiException.badRequest("Vui lòng chọn khối áp dụng");
+        }
+        if ("CLASS".equals(type) && normalizedClass == null) {
+            throw ApiException.badRequest("Vui lòng chọn lớp áp dụng");
+        }
+        if (normalizedClass != null) structure.getClass(normalizedClass);
+        List<String> ids = studentIds == null ? List.of() : studentIds.stream()
+                .filter(Objects::nonNull).map(String::trim)
+                .filter(value -> !value.isBlank()).distinct().toList();
+        if ("STUDENTS".equals(type) && ids.isEmpty()) {
+            throw ApiException.badRequest("Vui lòng chọn ít nhất một học sinh");
+        }
+        period.setScopeType(type);
+        period.setScopeGradeLevel("GRADE".equals(type) ? normalizedGrade : null);
+        period.setScopeClassId("CLASS".equals(type) ? normalizedClass : null);
+        if ("STUDENTS".equals(type)) {
+            for (String studentId : ids) {
+                UserDto student = users.dtoById(studentId);
+                if (!"STUDENT".equals(student.role())) {
+                    throw ApiException.badRequest("Phạm vi chứa tài khoản không phải học sinh");
+                }
+                periodRecipients.save(FeePeriodRecipient.builder().id(Ids.gen("fpr"))
+                        .feePeriodId(period.getId()).studentId(studentId).build());
+            }
+        }
+    }
+
+    private List<UserDto> scopedStudents(FeePeriod period) {
+        List<UserDto> all = users.list("STUDENT", null, null);
+        String type = period.getScopeType();
+        if (type == null || type.isBlank()) {
+            Set<String> grades = parseGrades(period.getApplyToGrades());
+            return grades == null ? all : all.stream()
+                    .filter(student -> grades.contains(structure.gradeLevelOf(student.classId()))).toList();
+        }
+        return switch (type) {
+            case "GRADE" -> {
+                Set<String> grades = parseGrades(period.getScopeGradeLevel());
+                yield all.stream().filter(student -> grades != null
+                        && grades.contains(structure.gradeLevelOf(student.classId()))).toList();
+            }
+            case "CLASS" -> all.stream().filter(student ->
+                    Objects.equals(period.getScopeClassId(), student.classId())).toList();
+            case "STUDENTS" -> {
+                Set<String> ids = periodRecipients.findByFeePeriodId(period.getId()).stream()
+                        .map(FeePeriodRecipient::getStudentId)
+                        .collect(java.util.stream.Collectors.toSet());
+                yield all.stream().filter(student -> ids.contains(student.id())).toList();
+            }
+            default -> all;
+        };
+    }
+
     // ---------- Sinh hóa đơn (flowchart 2.8) ----------
     @Transactional
     public List<Invoice> generateInvoices(String periodId) {
         FeePeriod p = getPeriod(periodId);
+        FeePeriodPreview generationPreview = preview(periodId);
+        if (!generationPreview.valid()) {
+            throw ApiException.badRequest(String.join("; ", generationPreview.errors()));
+        }
         if (!"OPEN".equals(p.getStatus())) throw ApiException.badRequest("Đợt thu phải ở trạng thái OPEN");
 
-        Set<String> gradeFilter = parseGrades(p.getApplyToGrades());
         List<FeePeriodItem> items = itemsOf(periodId);
         if (items.isEmpty()) throw ApiException.badRequest("Đợt thu chưa có khoản thu");
         List<Invoice> created = new ArrayList<>();
 
-        for (UserDto s : users.list("STUDENT", null, null)) {
+        Map<String, FeePeriodAdjustment> adjustments = periodAdjustments.findByFeePeriodId(periodId).stream()
+                .collect(java.util.stream.Collectors.toMap(FeePeriodAdjustment::getStudentId, item -> item));
+        for (UserDto s : scopedStudents(p)) {
             String gl = structure.gradeLevelOf(s.classId());
-            if (gradeFilter != null && (gl == null || !gradeFilter.contains(gl))) continue;
+            FeePeriodAdjustment adjustment = adjustments.get(s.id());
+            if (adjustment != null && "EXCLUDE".equals(adjustment.getType())) continue;
 
             List<FeePeriodItem> applicable = items.stream()
                     .filter(it -> it.getGradeLevel() == null || it.getGradeLevel().equals(gl))
@@ -178,7 +372,12 @@ public class FinanceService {
                 continue;
             }
 
-            long total = applicable.stream().mapToLong(FeePeriodItem::getAmount).sum();
+            long discount = adjustment != null && "DISCOUNT".equals(adjustment.getType())
+                    ? adjustment.getAmount() : 0;
+            long total = applicable.stream().mapToLong(FeePeriodItem::getAmount).sum() - discount;
+            if (total <= 0) {
+                throw ApiException.badRequest("Số tiền hóa đơn sau miễn giảm phải lớn hơn 0");
+            }
             List<String> parentIds = users.parentIdsOf(s.id()).stream().distinct().toList();
             String parentId = parentIds.stream().findFirst().orElse(null);
             SchoolClass schoolClass = s.classId() == null ? null : structure.getClass(s.classId());
@@ -189,12 +388,16 @@ public class FinanceService {
                     .classId(s.classId())
                     .classCode(schoolClass == null ? s.className() : schoolClass.getCode())
                     .gradeLevel(schoolClass == null ? gl : schoolClass.getGradeLevel())
-                    .feePeriodId(periodId).totalAmount(total).paidAmount(0).status("PENDING")
+                    .feePeriodId(periodId).totalAmount(total).paidAmount(0).refundedAmount(0).status("UNPAID")
                     .issuedAt(Instant.now()).dueDate(p.getDueDate()).build());
 
             for (FeePeriodItem it : applicable) {
                 invoiceItems.save(InvoiceItem.builder().id(Ids.gen("ii"))
                         .invoiceId(inv.getId()).name(it.getName()).amount(it.getAmount()).build());
+            }
+            if (discount > 0) {
+                invoiceItems.save(InvoiceItem.builder().id(Ids.gen("ii"))
+                        .invoiceId(inv.getId()).name("Miễn giảm").amount(-discount).build());
             }
             created.add(inv);
 
@@ -222,6 +425,7 @@ public class FinanceService {
     // ---------- Hóa đơn ----------
     public List<Invoice> listInvoices(String studentId, String parentId, String status,
                                       String periodId, String query, String classId, String gradeLevel) {
+        refreshOverdueStatuses();
         List<Invoice> base;
         if (studentId != null)     base = invoices.findByStudentId(studentId);
         else if (parentId != null) base = invoices.findByParentId(parentId);
@@ -248,6 +452,7 @@ public class FinanceService {
     public PageResponse<Invoice> pageInvoices(String studentId, String parentId, String status,
                                               String periodId, String query, String classId,
                                               String gradeLevel, int page, int size) {
+        refreshOverdueStatuses();
         Specification<Invoice> specification = Specification.where(null);
         if (studentId != null && !studentId.isBlank()) {
             specification = specification.and((root, ignored, builder) ->
@@ -317,7 +522,13 @@ public class FinanceService {
     }
 
     public Invoice getInvoice(String id) {
-        return invoices.findById(id).orElseThrow(() -> ApiException.notFound("Hóa đơn"));
+        Invoice invoice = invoices.findById(id).orElseThrow(() -> ApiException.notFound("Hóa đơn"));
+        String expected = collectionStatus(invoice, LocalDate.now());
+        if (!expected.equals(invoice.getStatus())) {
+            invoice.setStatus(expected);
+            return invoices.save(invoice);
+        }
+        return invoice;
     }
 
     public Map<String, Object> invoiceDetail(String id) {
@@ -325,7 +536,8 @@ public class FinanceService {
         Map<String, Object> m = new HashMap<>();
         m.put("invoice", inv);
         m.put("items", invoiceItems.findByInvoiceId(id));
-        m.put("payments", payments.findByInvoiceId(id));
+        m.put("payments", payments.findByInvoiceIdOrderByCreatedAtAsc(id));
+        m.put("refunds", refunds.findByInvoiceIdOrderByCreatedAtAsc(id));
         return m;
     }
 
@@ -342,6 +554,7 @@ public class FinanceService {
                     "Thanh toán VietQR chưa được bật. Không có giao dịch nào được tạo.");
         }
         Invoice inv = getInvoice(r.invoiceId());
+        assertCollectable(inv);
         long remaining = inv.getTotalAmount() - inv.getPaidAmount();
         if (remaining <= 0) throw ApiException.badRequest("Hóa đơn đã thanh toán đủ");
 
@@ -375,20 +588,29 @@ public class FinanceService {
     }
 
     @Transactional
-    public Map<String, Object> recordCashPayment(String invoiceId, Long requestedAmount) {
+    public Map<String, Object> recordCashPayment(String invoiceId, Long requestedAmount,
+                                                 String payerName, String note, String actorId) {
         Invoice invoice = getInvoice(invoiceId);
+        assertCollectable(invoice);
         long remaining = invoice.getTotalAmount() - invoice.getPaidAmount();
         if (remaining <= 0) throw ApiException.badRequest("Hóa đơn đã thanh toán đủ");
         long amount = requestedAmount == null ? remaining : requestedAmount;
         if (amount <= 0 || amount > remaining) {
             throw ApiException.badRequest("Số tiền thu phải lớn hơn 0 và không vượt quá công nợ còn lại");
         }
+        String resolvedPayer = blankToNull(payerName);
+        if (resolvedPayer == null && invoice.getParentId() != null) {
+            resolvedPayer = users.fullNameOf(invoice.getParentId());
+        }
         Payment payment = payments.save(Payment.builder()
                 .id(Ids.gen("pay")).invoiceId(invoice.getId()).amount(amount).method("CASH")
                 .status("SUCCESS").txnRef("CASH-" + Ids.gen("tx"))
+                .receiptCode("REC-" + UUID.randomUUID().toString().replace("-", "")
+                        .substring(0, 12).toUpperCase(Locale.ROOT))
+                .payerName(resolvedPayer).note(blankToNull(note)).recordedBy(actorId)
                 .createdAt(Instant.now()).paidAt(Instant.now()).build());
         invoice.setPaidAmount(invoice.getPaidAmount() + amount);
-        invoice.setStatus(invoice.getPaidAmount() >= invoice.getTotalAmount() ? "PAID" : "PARTIAL");
+        invoice.setStatus(collectionStatus(invoice, LocalDate.now()));
         invoices.save(invoice);
         if (invoice.getParentId() != null) {
             notifications.notifyUserWithTransactionalEmail(invoice.getParentId(), "INVOICE", "Biên nhận thanh toán học phí",
@@ -400,6 +622,117 @@ public class FinanceService {
         result.put("payment", payment);
         result.put("invoice", invoice);
         return result;
+    }
+
+    /** Sinh đúng một hóa đơn sau khi đăng ký CLB được duyệt. */
+    @Transactional
+    public String createClubInvoice(String clubId, String registrationId, String clubName,
+                                    String studentId, long amount) {
+        String sourceId = "CLUB:" + clubId + ":" + registrationId;
+        Optional<Invoice> existing = invoices.findByFeePeriodIdAndStudentId(sourceId, studentId);
+        if (existing.isPresent()) return existing.get().getId();
+        UserDto student = users.dtoById(studentId);
+        List<String> parentIds = users.parentIdsOf(studentId).stream().distinct().toList();
+        String parentId = parentIds.stream().findFirst().orElse(null);
+        SchoolClass schoolClass = student.classId() == null ? null : structure.getClass(student.classId());
+        Invoice invoice = invoices.save(Invoice.builder()
+                .id(Ids.gen("inv"))
+                .code("INV-CLUB-" + registrationId)
+                .studentId(studentId).studentName(student.fullName()).parentId(parentId)
+                .classId(student.classId())
+                .classCode(schoolClass == null ? student.className() : schoolClass.getCode())
+                .gradeLevel(schoolClass == null ? structure.gradeLevelOf(student.classId()) : schoolClass.getGradeLevel())
+                .feePeriodId(sourceId).totalAmount(amount).paidAmount(0).refundedAmount(0)
+                .status("UNPAID").issuedAt(Instant.now()).dueDate(LocalDate.now().plusDays(7)).build());
+        invoiceItems.save(InvoiceItem.builder().id(Ids.gen("ii")).invoiceId(invoice.getId())
+                .name("Phí câu lạc bộ " + clubName).amount(amount).build());
+        if (!parentIds.isEmpty()) {
+            notifications.notifyUsers(parentIds, "FEE", "IMPORTANT", "Phí câu lạc bộ",
+                    String.format("%s - %s: %,d₫", student.fullName(), clubName, amount),
+                    "INVOICE", invoice.getId());
+        }
+        return invoice.getId();
+    }
+
+    /** Đóng hóa đơn chưa thu hoặc hoàn toàn bộ số tiền đã thu khi hủy CLB. */
+    @Transactional
+    public void cancelOrRefundClubInvoice(String invoiceId, String reason, String actorId) {
+        Invoice invoice = getInvoice(invoiceId);
+        if ("CANCELLED".equals(invoice.getStatus()) || "REFUNDED".equals(invoice.getStatus())) return;
+        if (invoice.getPaidAmount() > invoice.getRefundedAmount()) {
+            long amount = invoice.getPaidAmount() - invoice.getRefundedAmount();
+            InvoiceRefund refund = refunds.save(InvoiceRefund.builder()
+                    .id(Ids.gen("rf")).invoiceId(invoiceId).amount(amount).method("MANUAL")
+                    .reason(reason).status("SUCCESS").createdBy(actorId).createdAt(Instant.now()).build());
+            invoice.setRefundedAmount(invoice.getPaidAmount());
+            invoice.setStatus("REFUNDED");
+            if (invoice.getParentId() != null) {
+                notifications.notifyUserWithTransactionalEmail(invoice.getParentId(), "INVOICE",
+                        "Hoàn phí câu lạc bộ", String.format("Hóa đơn %s đã hoàn %,d₫. Lý do: %s",
+                                invoice.getCode(), amount, reason), "INVOICE_REFUND", refund.getId());
+            }
+        } else {
+            invoice.setStatus("CANCELLED");
+        }
+        invoices.save(invoice);
+    }
+
+    @Transactional
+    public Map<String, Object> refundInvoice(String invoiceId, Long requestedAmount,
+                                             String reason, String actorId) {
+        Invoice invoice = getInvoice(invoiceId);
+        if (!Set.of("PAID", "PARTIALLY_REFUNDED").contains(invoice.getStatus())) {
+            throw ApiException.conflict("Chỉ có thể hoàn tiền hóa đơn đã thanh toán đủ");
+        }
+        long refundable = invoice.getPaidAmount() - invoice.getRefundedAmount();
+        long amount = requestedAmount == null ? refundable : requestedAmount;
+        if (amount <= 0 || amount > refundable) {
+            throw ApiException.badRequest("Số tiền hoàn phải lớn hơn 0 và không vượt quá số tiền còn có thể hoàn");
+        }
+        InvoiceRefund refund = refunds.save(InvoiceRefund.builder()
+                .id(Ids.gen("rf")).invoiceId(invoice.getId()).amount(amount)
+                .method("MANUAL").reason(reason.trim()).status("SUCCESS")
+                .createdBy(actorId).createdAt(Instant.now()).build());
+        invoice.setRefundedAmount(invoice.getRefundedAmount() + amount);
+        invoice.setStatus(invoice.getRefundedAmount() >= invoice.getPaidAmount()
+                ? "REFUNDED" : "PARTIALLY_REFUNDED");
+        invoices.save(invoice);
+        if (invoice.getParentId() != null) {
+            notifications.notifyUserWithTransactionalEmail(invoice.getParentId(), "INVOICE", "Hoàn tiền học phí",
+                    String.format("Hóa đơn %s đã hoàn %,d₫. Lý do: %s",
+                            invoice.getCode(), amount, reason.trim()),
+                    "INVOICE_REFUND", refund.getId());
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("refund", refund);
+        result.put("invoice", invoice);
+        return result;
+    }
+
+    private void assertCollectable(Invoice invoice) {
+        if (!InvoiceStateMachine.isCollectable(invoice.getStatus())) {
+            throw ApiException.conflict("Hóa đơn không còn ở trạng thái có thể thu tiền");
+        }
+    }
+
+    private String collectionStatus(Invoice invoice, LocalDate today) {
+        return InvoiceStateMachine.resolve(invoice.getTotalAmount(), invoice.getPaidAmount(),
+                invoice.getRefundedAmount(), invoice.getDueDate(), invoice.getStatus(), today);
+    }
+
+    @Scheduled(cron = "0 5 0 * * *")
+    @Transactional
+    public void refreshOverdueStatuses() {
+        LocalDate today = LocalDate.now();
+        List<Invoice> changed = new ArrayList<>();
+        for (Invoice invoice : invoices.findAll()) {
+            String expected = collectionStatus(invoice, today);
+            if (!expected.equals(invoice.getStatus())) {
+                invoice.setStatus(expected);
+                changed.add(invoice);
+            }
+        }
+        if (!changed.isEmpty()) invoices.saveAll(changed);
     }
 
     public void remindInvoice(String invoiceId) {
@@ -659,7 +992,8 @@ public class FinanceService {
     }
 
     @Transactional
-    public Map<String, Object> confirmVietQrPayment(String paymentId, String bankTransactionRef) {
+    public Map<String, Object> confirmVietQrPayment(String paymentId, String bankTransactionRef,
+                                                    String actorId) {
         Payment payment = getVietQrPayment(paymentId);
         PaymentGatewayTransaction transaction = gatewayTransactions.findByPaymentId(paymentId)
                 .orElseThrow(() -> ApiException.notFound("Giao dịch VietQR"));
@@ -671,6 +1005,10 @@ public class FinanceService {
 
         payment.setStatus("SUCCESS");
         payment.setPaidAt(Instant.now());
+        payment.setReceiptCode("REC-" + UUID.randomUUID().toString().replace("-", "")
+                .substring(0, 12).toUpperCase(Locale.ROOT));
+        payment.setPayerName(invoice.getParentId() == null ? null : users.fullNameOf(invoice.getParentId()));
+        payment.setRecordedBy(actorId);
         transaction.setStatus("SUCCESS");
         transaction.setSignatureValid(true);
         transaction.setCallbackPayload("ADMIN_CONFIRMED:"
@@ -678,7 +1016,7 @@ public class FinanceService {
                 ? payment.getTxnRef() : bankTransactionRef.trim()));
         transaction.setUpdatedAt(Instant.now());
         invoice.setPaidAmount(Math.min(invoice.getTotalAmount(), invoice.getPaidAmount() + payment.getAmount()));
-        invoice.setStatus(invoice.getPaidAmount() >= invoice.getTotalAmount() ? "PAID" : "PARTIAL");
+        invoice.setStatus(collectionStatus(invoice, LocalDate.now()));
 
         payments.save(payment);
         gatewayTransactions.save(transaction);
@@ -726,7 +1064,9 @@ public class FinanceService {
         }
     }
 
-    public List<Payment> paymentsOf(String invoiceId) { return payments.findByInvoiceId(invoiceId); }
+    public List<Payment> paymentsOf(String invoiceId) {
+        return payments.findByInvoiceIdOrderByCreatedAtAsc(invoiceId);
+    }
 
     public Payment getPayment(String paymentId) {
         return payments.findById(paymentId).orElseThrow(() -> ApiException.notFound("Thanh toán"));

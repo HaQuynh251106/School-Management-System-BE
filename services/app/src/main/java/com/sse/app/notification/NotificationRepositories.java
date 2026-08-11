@@ -21,6 +21,7 @@ interface NotificationTemplateRepository extends JpaRepository<NotificationTempl
 
 interface AnnouncementRepository extends JpaRepository<Announcement, String> {
     List<Announcement> findAllByOrderByCreatedAtDesc();
+    Optional<Announcement> findByCreatedByAndIdempotencyKey(String createdBy, String idempotencyKey);
     Optional<Announcement> findFirstByCategoryAndAudienceAndHolidayStartDateLessThanEqualAndHolidayEndDateGreaterThanEqualOrderByCreatedAtDesc(
             String category, String audience, LocalDate dateAtOrAfterStart, LocalDate dateAtOrBeforeEnd);
 }

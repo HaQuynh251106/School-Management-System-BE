@@ -52,7 +52,8 @@ public class ChatService {
     /** Tin nhắn giữa "tôi" và một người khác (theo thứ tự thời gian). */
     @Transactional
     public List<ChatMessage> conversation(String meId, String otherId) {
-        repo.markConversationRead(meId, otherId, Instant.now());
+        publishReadReceiptAfterCommit(meId, otherId,
+                repo.markConversationRead(meId, otherId, Instant.now()));
         List<ChatMessage> newest = repo.findConversation(meId, otherId,
                 Paging.request(0, 200, Sort.by(Sort.Direction.DESC, "createdAt"))).getContent();
         List<ChatMessage> chronological = new ArrayList<>(newest);
@@ -64,14 +65,7 @@ public class ChatService {
     @Transactional
     public PageResponse<ChatMessage> conversationPage(String meId, String otherId, int page, int size) {
         int marked = repo.markConversationRead(meId, otherId, Instant.now());
-        if (marked > 0) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    realtime.publish(otherId, "CHAT_READ", Map.of("readByUserId", meId));
-                }
-            });
-        }
+        publishReadReceiptAfterCommit(meId, otherId, marked);
         return PageResponse.from(repo.findConversation(meId, otherId,
                 Paging.request(page, size, Sort.by(Sort.Direction.DESC, "createdAt"))));
     }
@@ -108,8 +102,13 @@ public class ChatService {
     }
 
     /** Tổng số tin nhắn người dùng chưa đọc, dùng cho huy hiệu điều hướng toàn hệ thống. */
-    public long unreadCount(String userId) {
-        return repo.countByRecipientIdAndReadFlagFalse(userId);
+    public long unreadCount(CurrentUser current) {
+        Set<String> allowedContactIds = contactIds(current);
+        return involving(current.id()).stream()
+                .filter(message -> current.id().equals(message.getRecipientId()))
+                .filter(message -> !message.isReadFlag())
+                .filter(message -> allowedContactIds.contains(message.getSenderId()))
+                .count();
     }
 
     public ChatMessage send(String meId, String meName, String toId, String body, String attachmentFileId) {
@@ -128,9 +127,9 @@ public class ChatService {
                 .attachmentName(attachment == null ? null : attachment.getOriginalName())
                 .readFlag(false).createdAt(Instant.now()).build());
         realtime.publish(toId, "CHAT", Map.of(
-                "messageId", saved.getId(), "fromUserId", meId));
+                "messageId", saved.getId(), "fromUserId", meId, "toUserId", toId));
         realtime.publish(meId, "CHAT", Map.of(
-                "messageId", saved.getId(), "toUserId", toId));
+                "messageId", saved.getId(), "fromUserId", meId, "toUserId", toId));
         return saved;
     }
 
@@ -148,6 +147,8 @@ public class ChatService {
                 if (child.classId() != null) {
                     String homeroom = structure.getClass(child.classId()).getHomeroomTeacherId();
                     if (homeroom != null) ids.add(homeroom);
+                    teachingAssignments.assignmentsOfClass(child.classId(), null)
+                            .forEach(item -> ids.add(item.getTeacherId()));
                 }
             });
         } else if (current.isStudent()) {
@@ -171,8 +172,13 @@ public class ChatService {
                 }
             }
             teachingAssignments.assignmentsOfTeacher(current.id()).forEach(item -> {
-                String homeroom = structure.getClass(item.getClassId()).getHomeroomTeacherId();
+                String classId = item.getClassId();
+                String homeroom = structure.getClass(classId).getHomeroomTeacherId();
                 if (homeroom != null) ids.add(homeroom);
+                for (UserDto student : users.listSummaries("STUDENT", null, classId)) {
+                    ids.add(student.id());
+                    ids.addAll(users.parentIdsOf(student.id()));
+                }
             });
         }
         ids.remove(current.id());
@@ -232,6 +238,18 @@ public class ChatService {
         }
         boolean allowed = contactIds(current).contains(otherId);
         if (!allowed) throw ApiException.forbidden("Bạn không thể nhắn tin với người dùng này theo phạm vi liên lạc được phân công");
+    }
+
+    private void publishReadReceiptAfterCommit(String readByUserId, String otherId, int marked) {
+        if (marked <= 0) return;
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                realtime.publish(otherId, "CHAT_READ", Map.of(
+                        "readByUserId", readByUserId,
+                        "withUserId", otherId));
+            }
+        });
     }
 
     public void seed(List<ChatMessage> list) {

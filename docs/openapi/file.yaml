@@ -1,0 +1,135 @@
+openapi: 3.1.0
+info:
+  title: School Management Private File API
+  version: 1.0.0
+  description: Contract for authenticated upload and object-scoped file access used by F11 assignments and chat.
+servers:
+  - url: /
+security:
+  - bearerAuth: []
+paths:
+  /files:
+    post:
+      operationId: uploadPrivateFile
+      summary: Upload a private file
+      x-roles: [ADMIN, ACADEMIC_AFFAIRS, ACCOUNTANT, TEACHER, STUDENT, PARENT]
+      x-object-permission: The authenticated uploader owns the new file; other users cannot read it until a supported domain object references it.
+      x-idempotency: Not idempotent; each successful request creates a new file identifier.
+      x-owners: { backend: P4, mobile: Mobile }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: File stored privately
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FileMetadata' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /files/{fileId}:
+    get:
+      operationId: getPrivateFileMetadata
+      summary: Read metadata for an accessible private file
+      x-roles: [ADMIN, ACADEMIC_AFFAIRS, ACCOUNTANT, TEACHER, STUDENT, PARENT]
+      x-object-permission: Admin, uploader, chat participants, or users authorized for the linked assignment/submission may read metadata.
+      x-idempotency: Safe and idempotent.
+      x-owners: { backend: P4, mobile: Mobile }
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '200':
+          description: Public file metadata without storage path or uploader identity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FileMetadata' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /files/{fileId}/content:
+    get:
+      operationId: downloadPrivateFile
+      summary: Download accessible private file content
+      x-roles: [ADMIN, ACADEMIC_AFFAIRS, ACCOUNTANT, TEACHER, STUDENT, PARENT]
+      x-object-permission: Uses the same uploader, chat participant, assignment, submission, and parent-child checks as metadata.
+      x-idempotency: Safe and idempotent.
+      x-owners: { backend: P4, mobile: Mobile }
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '200':
+          description: File bytes with the stored content type and attachment filename
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    FileId:
+      name: fileId
+      in: path
+      required: true
+      schema: { type: string }
+  schemas:
+    FileMetadata:
+      type: object
+      additionalProperties: false
+      required: [id, originalName, contentType, sizeBytes, createdAt]
+      properties:
+        id: { type: string }
+        originalName: { type: string, maxLength: 255 }
+        contentType: { type: string }
+        sizeBytes: { type: integer, format: int64, minimum: 1, maximum: 10485760 }
+        createdAt: { type: string, format: date-time }
+    ApiError:
+      type: object
+      required: [status, code, error]
+      properties:
+        timestamp: { type: [string, 'null'], format: date-time }
+        status: { type: integer }
+        code: { type: string }
+        error: { type: string }
+        path: { type: [string, 'null'] }
+        requestId: { type: [string, 'null'] }
+        fieldErrors:
+          type: object
+          additionalProperties: { type: string }
+  responses:
+    BadRequest:
+      description: Empty, unsupported, mismatched, over-quota, or otherwise invalid file
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+    Unauthorized:
+      description: Missing or invalid access token
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+    Forbidden:
+      description: Authenticated user has no object-level permission for the file
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+    NotFound:
+      description: File metadata or content does not exist
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+    PayloadTooLarge:
+      description: Multipart request exceeds the HTTP upload limit
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+    ServiceUnavailable:
+      description: File storage is temporarily unavailable
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }

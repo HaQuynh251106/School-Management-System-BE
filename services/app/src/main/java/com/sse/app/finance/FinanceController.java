@@ -41,6 +41,18 @@ public class FinanceController {
         return finance.createPeriod(r);
     }
 
+    @GetMapping("/fee-periods/{id}")
+    public Map<String, Object> period(@PathVariable String id) {
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("period", finance.period(id));
+        result.put("items", finance.itemsOf(id));
+        result.put("adjustments", finance.adjustmentsOf(id));
+        result.put("studentIds", finance.recipientIdsOf(id));
+        result.put("preview", finance.preview(id));
+        return result;
+    }
+
     @PutMapping("/fee-periods/{id}")
     public FeePeriod updatePeriod(@PathVariable String id,
                                   @Valid @RequestBody UpdateFeePeriodRequest request) {
@@ -76,6 +88,31 @@ public class FinanceController {
     public FeePeriod open(@PathVariable String id) {
         CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
         return finance.open(id);
+    }
+
+    @GetMapping("/fee-periods/{id}/preview")
+    public FeePeriodPreview preview(@PathVariable String id) {
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
+        return finance.preview(id);
+    }
+
+    @GetMapping("/fee-periods/{id}/adjustments")
+    public List<FeePeriodAdjustment> adjustments(@PathVariable String id) {
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
+        return finance.adjustmentsOf(id);
+    }
+
+    @PostMapping("/fee-periods/{id}/adjustments")
+    public FeePeriodAdjustment saveAdjustment(@PathVariable String id,
+                                               @Valid @RequestBody FeePeriodAdjustmentRequest request) {
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
+        return finance.saveAdjustment(id, request);
+    }
+
+    @DeleteMapping("/fee-periods/{periodId}/adjustments/{adjustmentId}")
+    public void deleteAdjustment(@PathVariable String periodId, @PathVariable String adjustmentId) {
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
+        finance.deleteAdjustment(periodId, adjustmentId);
     }
 
     @PostMapping("/fee-periods/{id}/close")
@@ -220,8 +257,18 @@ public class FinanceController {
 
     @PostMapping("/payments/cash")
     public Map<String, Object> recordCash(@Valid @RequestBody CashPaymentRequest request) {
+        CurrentUser me = CurrentUserHolder.require();
         CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
-        return finance.recordCashPayment(request.invoiceId(), request.amount());
+        return finance.recordCashPayment(request.invoiceId(), request.amount(),
+                request.payerName(), request.note(), me.id());
+    }
+
+    @PostMapping("/invoices/{id}/refund")
+    public Map<String, Object> refund(@PathVariable String id,
+                                      @Valid @RequestBody RefundInvoiceRequest request) {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
+        return finance.refundInvoice(id, request.amount(), request.reason(), me.id());
     }
 
     @PostMapping("/invoices/{id}/remind")
@@ -251,8 +298,10 @@ public class FinanceController {
     @PostMapping("/payments/{paymentId}/confirm-vietqr")
     public Map<String, Object> confirmVietQr(@PathVariable String paymentId,
                                              @RequestBody(required = false) VietQrConfirmationRequest request) {
+        CurrentUser me = CurrentUserHolder.require();
         CurrentUserHolder.requireRole("ADMIN", "ACCOUNTANT");
-        return finance.confirmVietQrPayment(paymentId, request == null ? null : request.bankTransactionRef());
+        return finance.confirmVietQrPayment(paymentId,
+                request == null ? null : request.bankTransactionRef(), me.id());
     }
 
     @PostMapping("/payments/{paymentId}/reject-vietqr")

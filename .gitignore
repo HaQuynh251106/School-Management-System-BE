@@ -31,6 +31,10 @@ logs/
 
 # Docker volumes
 infrastructure/docker/**/data/
+infrastructure/docker/postgres/academic/
+infrastructure/docker/postgres/finance/
+infrastructure/docker/postgres/identity/
+infrastructure/docker/postgres/notification/
 data/
 
 # Maven

@@ -12,16 +12,22 @@ COPY services/file-service/pom.xml services/file-service/pom.xml
 RUN mvn -B -pl services/app -am dependency:go-offline
 COPY common/src common/src
 COPY services/app/src services/app/src
+COPY docs/openapi docs/openapi
 RUN mvn -B -pl services/app -am clean package
 
 FROM eclipse-temurin:17-jre-jammy
 RUN groupadd --system sse \
     && useradd --system --gid sse --home-dir /app sse \
     && apt-get update \
-    && apt-get install -y --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends curl gosu \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /app/logs /app/data/uploads \
+    && chown -R sse:sse /app
 WORKDIR /app
 COPY --from=build /workspace/services/app/target/sse-app.jar app.jar
-USER sse
+COPY infrastructure/docker/backend-entrypoint.sh /usr/local/bin/backend-entrypoint
+RUN chmod +x /usr/local/bin/backend-entrypoint
+USER root
 EXPOSE 4000
-ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "/app/app.jar"]
+ENTRYPOINT ["backend-entrypoint"]
+CMD ["java", "-XX:MaxRAMPercentage=75", "-jar", "/app/app.jar"]

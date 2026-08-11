@@ -129,6 +129,18 @@ public class NotificationController {
         return notifications.createAnnouncement(r, me.id());
     }
 
+    @PostMapping("/announcements/preview")
+    public AnnouncementPreview previewAnnouncement(@Valid @RequestBody AnnouncementPreviewRequest request) {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("ADMIN", "TEACHER");
+        if (me.isTeacher()) {
+            assertTeacherAnnouncement(me.id(), request.audience(), request.category());
+        } else {
+            assertAdminAnnouncement(request.audience(), request.category());
+        }
+        return notifications.previewAnnouncement(request.audience());
+    }
+
     @GetMapping("/admin/announcements")
     public List<Announcement> adminAnnouncements() {
         CurrentUserHolder.requireRole("ADMIN");
@@ -169,22 +181,30 @@ public class NotificationController {
     }
 
     private void assertAdminAnnouncement(CreateAnnouncementRequest request) {
-        String category = request.category() == null ? "GENERAL" : request.category().toUpperCase();
+        assertAdminAnnouncement(request.audience(), request.category());
+    }
+
+    private void assertAdminAnnouncement(String requestedAudience, String requestedCategory) {
+        String category = requestedCategory == null ? "GENERAL" : requestedCategory.toUpperCase();
         if (!Set.of("GENERAL", "HOLIDAY", "EVENT", "PARENT_MEETING").contains(category)) {
             throw ApiException.forbidden("Quản trị viên chỉ gửi thông báo chung, nghỉ lễ, sự kiện và họp phụ huynh");
         }
-        String audience = normalizeAudience(request.audience());
+        String audience = normalizeAudience(requestedAudience);
         if (audience.startsWith("CLASS")) {
             throw ApiException.forbidden("Thông báo theo lớp thuộc trách nhiệm của giáo viên phụ trách");
         }
     }
 
     private void assertTeacherAnnouncement(String teacherId, CreateAnnouncementRequest request) {
-        String category = request.category() == null ? "GENERAL" : request.category().toUpperCase();
+        assertTeacherAnnouncement(teacherId, request.audience(), request.category());
+    }
+
+    private void assertTeacherAnnouncement(String teacherId, String requestedAudience, String requestedCategory) {
+        String category = requestedCategory == null ? "GENERAL" : requestedCategory.toUpperCase();
         if (!"STUDENT_STATUS".equals(category)) {
             throw ApiException.forbidden("Điểm số và điểm danh được hệ thống thông báo tự động; giáo viên chỉ cần gửi thủ công tình hình lớp học");
         }
-        String audience = normalizeAudience(request.audience());
+        String audience = normalizeAudience(requestedAudience);
         if (!(audience.startsWith("CLASS:") || audience.startsWith("CLASS_STUDENTS:")
                 || audience.startsWith("CLASS_PARENTS:") || audience.startsWith("CLASS_ALL:"))) {
             throw ApiException.forbidden("Giáo viên chỉ được gửi thông báo tới học sinh và phụ huynh của lớp mình phụ trách");

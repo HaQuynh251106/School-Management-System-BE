@@ -13,17 +13,37 @@ public final class FinanceDtos {
 
     public record CreateFeePeriodRequest(
             String id, @NotBlank String code, String name, String academicYearId,
-            String applyToGrades, LocalDate dueDate) {}
+            String applyToGrades, LocalDate dueDate, String scopeType,
+            String scopeGradeLevel, String scopeClassId, List<String> studentIds) {}
 
     public record UpdateFeePeriodRequest(
             @NotBlank String name, String academicYearId,
-            String applyToGrades, LocalDate dueDate) {}
+            String applyToGrades, LocalDate dueDate, String scopeType,
+            String scopeGradeLevel, String scopeClassId, List<String> studentIds) {}
 
     public record AddFeeItemRequest(String id, @NotBlank String name, @NotNull @Positive Long amount, String gradeLevel) {}
 
+    public record FeePeriodAdjustmentRequest(
+            @NotBlank String studentId, @NotBlank String type,
+            Long amount, String reason) {}
+
+    public record FeePeriodRecipientPreview(
+            String studentId, String studentName, String classId, String classCode,
+            String gradeLevel, boolean parentLinked, boolean excluded,
+            long discountAmount, long totalAmount, boolean invoiceExists) {}
+
+    public record FeePeriodPreview(
+            String feePeriodId, String status, int recipientCount,
+            int invoiceCount, long totalAmount, boolean valid,
+            List<String> errors, List<FeePeriodRecipientPreview> recipients) {}
+
     public record PayRequest(@NotBlank String invoiceId, String method) {}
 
-    public record CashPaymentRequest(@NotBlank String invoiceId, @Positive Long amount) {}
+    public record CashPaymentRequest(
+            @NotBlank String invoiceId, @Positive Long amount,
+            String payerName, String note) {}
+
+    public record RefundInvoiceRequest(@NotNull @Positive Long amount, @NotBlank String reason) {}
 
     public record VietQrConfirmationRequest(String bankTransactionRef) {}
 

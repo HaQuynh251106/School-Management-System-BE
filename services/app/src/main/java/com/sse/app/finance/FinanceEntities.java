@@ -26,6 +26,10 @@ class FeePeriod {
     private String academicYearId;
     /** CSV khối áp dụng (vd "K10,K11"); null = mọi khối. */
     private String applyToGrades;
+    /** SCHOOL | GRADE | CLASS | STUDENTS. */
+    private String scopeType;
+    private String scopeGradeLevel;
+    private String scopeClassId;
     private LocalDate dueDate;
     private Instant createdAt;
 }
@@ -68,8 +72,9 @@ class Invoice {
     private String feePeriodId;
     private long totalAmount;
     private long paidAmount;
-    /** PENDING | PARTIAL | PAID */
+    /** UNPAID | PARTIAL | PAID | OVERDUE | PARTIALLY_REFUNDED | REFUNDED | CANCELLED */
     private String status;
+    private long refundedAmount;
     private Instant issuedAt;
     private LocalDate dueDate;
     @Version
@@ -101,8 +106,59 @@ class Payment {
     /** PENDING | SUCCESS | FAILED */
     private String status;
     private String txnRef;
+    /** Mã biên nhận hiển thị cho phụ huynh và kế toán. */
+    private String receiptCode;
+    private String payerName;
+    private String note;
+    private String recordedBy;
     private Instant createdAt;
     private Instant paidAt;
+}
+
+@Entity
+@Table(name = "fee_period_recipients", uniqueConstraints =
+        @UniqueConstraint(name = "uk_fee_period_recipient", columnNames = {"fee_period_id", "student_id"}))
+@Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
+class FeePeriodRecipient {
+    @Id
+    private String id;
+    @Column(name = "fee_period_id")
+    private String feePeriodId;
+    @Column(name = "student_id")
+    private String studentId;
+}
+
+@Entity
+@Table(name = "fee_period_adjustments", uniqueConstraints =
+        @UniqueConstraint(name = "uk_fee_period_adjustment", columnNames = {"fee_period_id", "student_id"}))
+@Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
+class FeePeriodAdjustment {
+    @Id
+    private String id;
+    @Column(name = "fee_period_id")
+    private String feePeriodId;
+    @Column(name = "student_id")
+    private String studentId;
+    /** EXCLUDE | DISCOUNT. */
+    private String type;
+    private long amount;
+    private String reason;
+}
+
+/** Lịch sử hoàn tiền được Kế toán/Admin xác nhận. */
+@Entity
+@Table(name = "invoice_refunds", indexes = @Index(name = "idx_refund_invoice", columnList = "invoiceId"))
+@Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
+class InvoiceRefund {
+    @Id
+    private String id;
+    private String invoiceId;
+    private long amount;
+    private String method;
+    private String reason;
+    private String status;
+    private String createdBy;
+    private Instant createdAt;
 }
 
 /** Trạng thái trao đổi độc lập với cổng thanh toán, phục vụ callback và đối soát. */

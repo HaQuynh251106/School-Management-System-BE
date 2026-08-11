@@ -1,0 +1,210 @@
+openapi: 3.1.0
+info:
+  title: School Management Notification and Announcement API
+  version: 1.0.0
+  description: F12 contract for in-app inbox, preferences, audience preview, and idempotent announcements.
+servers: [{ url: / }]
+security: [{ bearerAuth: [] }]
+paths:
+  /notifications:
+    get:
+      operationId: listNotifications
+      x-roles: &allRoles [ADMIN, ACADEMIC_AFFAIRS, ACCOUNTANT, TEACHER, STUDENT, PARENT]
+      x-object-permission: Returns notifications owned by the authenticated recipient only.
+      x-idempotency: Safe and idempotent.
+      x-owners: &notificationOwners { backend: P5, mobile: Mobile }
+      parameters:
+        - { name: unread, in: query, schema: { type: boolean, default: false } }
+      responses:
+        '200': { description: Recipient inbox, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Notification' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /notifications/unread-count:
+    get:
+      operationId: getNotificationUnreadCount
+      x-roles: *allRoles
+      x-object-permission: Counts unread notifications owned by the authenticated recipient.
+      x-idempotency: Safe and idempotent.
+      x-owners: *notificationOwners
+      responses:
+        '200': { description: Unread count, content: { application/json: { schema: { $ref: '#/components/schemas/Count' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /notifications/{notificationId}/read:
+    post:
+      operationId: markNotificationRead
+      x-roles: *allRoles
+      x-object-permission: Notification must belong to the authenticated recipient.
+      x-idempotency: Repeated calls retain the read state and return the same notification.
+      x-owners: *notificationOwners
+      parameters: [{ $ref: '#/components/parameters/NotificationId' }]
+      responses:
+        '200': { description: Read notification, content: { application/json: { schema: { $ref: '#/components/schemas/Notification' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /notifications/read-all:
+    post:
+      operationId: markAllNotificationsRead
+      x-roles: *allRoles
+      x-object-permission: Updates only notifications owned by the authenticated recipient.
+      x-idempotency: Repeated calls retain all notifications as read.
+      x-owners: *notificationOwners
+      responses:
+        '200': { description: All recipient notifications marked read, content: { application/json: { schema: { type: object } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /notification-preferences:
+    get:
+      operationId: listNotificationPreferences
+      x-roles: *allRoles
+      x-object-permission: Returns preferences owned by the authenticated user.
+      x-idempotency: Safe and idempotent.
+      x-owners: *notificationOwners
+      responses:
+        '200': { description: Channel preferences, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Preference' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    put:
+      operationId: updateNotificationPreference
+      x-roles: *allRoles
+      x-object-permission: Updates only the authenticated user's channel preference; in-app announcement delivery remains mandatory.
+      x-idempotency: Setting the same channel value repeatedly has no additional effect.
+      x-owners: *notificationOwners
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/UpdatePreferenceRequest' } } }
+      responses:
+        '200': { description: Updated preference, content: { application/json: { schema: { $ref: '#/components/schemas/Preference' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /announcements:
+    post:
+      operationId: sendAnnouncement
+      x-roles: [ADMIN, TEACHER]
+      x-object-permission: Admin uses approved role-wide categories; Teacher uses only assigned CLASS scopes and STUDENT_STATUS category.
+      x-idempotency: The same creator and idempotencyKey returns the original announcement; different content with that key returns 409.
+      x-owners: &announcementOwners { backend: P5, mobile: Mobile }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateAnnouncementRequest' } } }
+      responses:
+        '200': { description: Sent or idempotently reused announcement, content: { application/json: { schema: { $ref: '#/components/schemas/Announcement' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /announcements/preview:
+    post:
+      operationId: previewAnnouncementAudience
+      x-roles: [ADMIN, TEACHER]
+      x-object-permission: Uses the same category and audience authorization as sending, without creating deliveries.
+      x-idempotency: Safe preview with no persistent mutation.
+      x-owners: *announcementOwners
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/AnnouncementPreviewRequest' } } }
+      responses:
+        '200': { description: Deduplicated recipient count, content: { application/json: { schema: { $ref: '#/components/schemas/AnnouncementPreview' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /teacher/announcements/scopes:
+    get:
+      operationId: listTeacherAnnouncementScopes
+      x-roles: [TEACHER]
+      x-object-permission: Returns only homeroom or active teaching-assignment classes for the authenticated teacher.
+      x-idempotency: Safe and idempotent.
+      x-owners: *announcementOwners
+      responses:
+        '200': { description: Allowed class scopes with recipient counts, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/TeacherScope' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /teacher/announcements:
+    get:
+      operationId: listTeacherAnnouncementHistory
+      x-roles: [TEACHER]
+      x-object-permission: Returns only announcements created by the authenticated teacher.
+      x-idempotency: Safe and idempotent.
+      x-owners: *announcementOwners
+      responses:
+        '200': { description: Teacher announcement history, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Announcement' } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    NotificationId: { name: notificationId, in: path, required: true, schema: { type: string } }
+  schemas:
+    Notification:
+      type: object
+      required: [id, recipientId, type, priority, title, read, createdAt]
+      properties:
+        id: { type: string }
+        recipientId: { type: string }
+        type: { type: string }
+        priority: { type: string, enum: [NORMAL, IMPORTANT, URGENT] }
+        title: { type: string }
+        body: { type: [string, 'null'] }
+        read: { type: boolean }
+        refType: { type: [string, 'null'] }
+        refId: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+    Count: { type: object, required: [count], properties: { count: { type: integer, format: int64, minimum: 0 } } }
+    Preference:
+      type: object
+      required: [id, userId, channel, enabled]
+      properties: { id: { type: string }, userId: { type: string }, channel: { type: string }, enabled: { type: boolean } }
+    UpdatePreferenceRequest:
+      type: object
+      required: [channel]
+      properties: { channel: { type: string, enum: [IN_APP, EMAIL, PUSH] }, enabled: { type: [boolean, 'null'] } }
+    CreateAnnouncementRequest:
+      type: object
+      required: [title, body]
+      properties:
+        id: { type: [string, 'null'] }
+        title: { type: string, maxLength: 255 }
+        body: { type: string, maxLength: 4000 }
+        audience: { type: [string, 'null'] }
+        category: { type: [string, 'null'] }
+        priority: { type: [string, 'null'], enum: [NORMAL, IMPORTANT, URGENT, null] }
+        idempotencyKey: { type: [string, 'null'], maxLength: 100 }
+    AnnouncementPreviewRequest:
+      type: object
+      properties: { audience: { type: [string, 'null'] }, category: { type: [string, 'null'] } }
+    AnnouncementPreview:
+      type: object
+      required: [audience, recipientCount]
+      properties: { audience: { type: string }, recipientCount: { type: integer, minimum: 0 } }
+    Announcement:
+      type: object
+      required: [id, title, body, audience, category, priority, status, recipientCount, createdBy, createdAt]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        body: { type: string }
+        audience: { type: string }
+        category: { type: string }
+        priority: { type: string }
+        status: { type: string, enum: [SENT] }
+        recipientCount: { type: integer, minimum: 0 }
+        createdBy: { type: string }
+        createdAt: { type: string, format: date-time }
+    TeacherScope:
+      type: object
+      required: [classId, classCode, studentCount, parentCount, subjects, homeroom]
+      properties:
+        classId: { type: string }
+        classCode: { type: string }
+        studentCount: { type: integer, minimum: 0 }
+        parentCount: { type: integer, minimum: 0 }
+        subjects: { type: array, items: { type: string } }
+        homeroom: { type: boolean }
+    ApiError:
+      type: object
+      required: [status, code, error]
+      properties: { status: { type: integer }, code: { type: string }, error: { type: string } }
+  responses:
+    BadRequest: { description: Invalid request fields or announcement rules, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+    Unauthorized: { description: Missing or invalid access token, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+    Forbidden: { description: Object, role, class, or audience permission denied, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+    NotFound: { description: Notification does not exist, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+    Conflict: { description: Idempotency key reused with different content, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
