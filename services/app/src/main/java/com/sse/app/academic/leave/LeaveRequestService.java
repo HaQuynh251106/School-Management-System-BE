@@ -1,6 +1,7 @@
 package com.sse.app.academic.leave;
 
 import com.sse.app.academic.leave.LeaveRequestDtos.CreateLeaveRequest;
+import com.sse.app.academic.leave.LeaveRequestDtos.CreateChildLeaveRequest;
 import com.sse.app.academic.attendance.ApprovedLeaveAttendanceService;
 import com.sse.app.academic.structure.SchoolClass;
 import com.sse.app.academic.structure.StructureService;
@@ -75,6 +76,16 @@ public class LeaveRequestService {
                 "Cần xác nhận đơn xin nghỉ", student.getFullName() + " xin nghỉ từ " + input.startDate() + " đến " + input.endDate(),
                 "LEAVE_REQUEST", request.getId());
         return request;
+    }
+
+    @Transactional
+    public LeaveRequest createForChild(CreateChildLeaveRequest input, String parentId) {
+        users.assertParentOf(parentId, input.studentId());
+        LeaveRequest request = create(
+                new CreateLeaveRequest(input.startDate(), input.endDate(), input.reason()),
+                input.studentId());
+        // Đơn do phụ huynh lập đã được xác nhận danh tính ngay khi tạo.
+        return parentDecision(request.getId(), parentId, true, "Phụ huynh tạo và xác nhận đơn");
     }
 
     @Transactional

@@ -22,8 +22,11 @@ RUN groupadd --system sse \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /workspace/services/app/target/sse-app.jar app.jar
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN mkdir -p /app/logs \
-    && chown -R sse:sse /app
-USER sse
+    && chown -R sse:sse /app \
+    && sed -i 's/\r$//' /app/docker-entrypoint.sh \
+    && chmod 0755 /app/docker-entrypoint.sh
 EXPOSE 4000
-ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "/app/app.jar"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["java", "-XX:MaxRAMPercentage=75", "-jar", "/app/app.jar"]

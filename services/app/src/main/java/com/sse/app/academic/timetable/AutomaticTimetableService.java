@@ -1,6 +1,8 @@
 package com.sse.app.academic.timetable;
 
 import com.sse.app.academic.structure.SchoolClass;
+import com.sse.app.academic.structure.Semester;
+import com.sse.app.academic.structure.Subject;
 import com.sse.app.academic.structure.Room;
 import com.sse.app.academic.structure.SubjectRoomRequirement;
 import com.sse.app.academic.structure.SubjectRoomRequirementService;
@@ -38,6 +40,7 @@ public class AutomaticTimetableService {
     private final TimetableBusinessRuleService businessRules;
     private final TeacherWorkloadPolicyService workloadPolicies;
     private final TeacherScheduleRestrictionService scheduleRestrictions;
+    private final CurriculumRequirementRepository curriculumRequirements;
 
     public AutomaticTimetableService(TimetableRepository slots, TeachingAssignmentRepository assignments,
                                      TeacherLoadRegistrationRepository registrations,
@@ -45,7 +48,8 @@ public class AutomaticTimetableService {
                                      TimetableVersionService versions,
                                      TimetableBusinessRuleService businessRules,
                                      TeacherWorkloadPolicyService workloadPolicies,
-                                     TeacherScheduleRestrictionService scheduleRestrictions) {
+                                     TeacherScheduleRestrictionService scheduleRestrictions,
+                                     CurriculumRequirementRepository curriculumRequirements) {
         this.slots = slots;
         this.assignments = assignments;
         this.registrations = registrations;
@@ -55,6 +59,7 @@ public class AutomaticTimetableService {
         this.businessRules = businessRules;
         this.workloadPolicies = workloadPolicies;
         this.scheduleRestrictions = scheduleRestrictions;
+        this.curriculumRequirements = curriculumRequirements;
     }
 
     @Transactional
@@ -65,11 +70,19 @@ public class AutomaticTimetableService {
     @Transactional
     public AutoTimetablePlan plan(AutoTimetableRequest request, String actorId) {
         structure.assertSemesterWritable(request.semesterId());
+        Semester semester = structure.getSemester(request.semesterId());
         String strategy = normalizeStrategy(request.strategy());
         List<TimetableSlot> liveSlots = slots.findBySemesterId(request.semesterId());
         boolean rebuildExisting = Boolean.TRUE.equals(request.rebuildExisting());
         List<TimetableSlot> occupied = rebuildExisting ? new ArrayList<>() : new ArrayList<>(liveSlots);
         int existingCount = rebuildExisting ? 0 : occupied.size();
+        List<TimetableSlot> schoolWideSlots = schoolWideActivitySlots(
+                request.semesterId(), semester.getAcademicYearId(), occupied);
+        occupied.addAll(schoolWideSlots);
+        Set<String> schoolWideSubjectIds = structure.listSubjects().stream()
+                .filter(subject -> "SHTT".equalsIgnoreCase(subject.getCode()))
+                .map(Subject::getId)
+                .collect(java.util.stream.Collectors.toSet());
         Map<String, TeacherLoadRegistration> loads = new HashMap<>();
         registrations.findBySemesterId(request.semesterId()).forEach(item -> {
                     workloadPolicies.apply(item);
@@ -90,11 +103,32 @@ public class AutomaticTimetableService {
         Map<String, Integer> classDemand = new HashMap<>();
         semesterAssignments.forEach(item -> classDemand.merge(
                 item.getClassId(), item.getWeeklyPeriods(), Integer::sum));
+        // Count both newly generated and previously published school-wide slots.
+        // This keeps a re-generation from incorrectly reporting 24/25 periods.
+        occupied.stream().filter(slot -> schoolWideSubjectIds.contains(slot.getSubjectId()))
+                .forEach(slot -> classDemand.merge(slot.getClassId(), 1, Integer::sum));
         long overloadedClasses = classDemand.values().stream()
                 .filter(periods -> periods > TimetableRulePolicy.PERIODS_PER_WEEK).count();
         if (overloadedClasses > 0) {
             throw ApiException.badRequest(overloadedClasses
                     + " lớp đang có tổng định mức vượt 25 tiết/tuần; hãy điều chỉnh định mức và phân công trước");
+        }
+        // Only enforce the full weekly frame after the semester has a curriculum.
+        // This preserves small isolated scheduling scenarios that intentionally
+        // contain just one subject, while an operational timetable is complete.
+        boolean curriculumConfigured = !curriculumRequirements.findBySemesterId(request.semesterId()).isEmpty();
+        List<SchoolClass> activeClasses = structure.listClasses(semester.getAcademicYearId(), null);
+        List<String> incompleteClasses = curriculumConfigured ? activeClasses.stream()
+                .filter(schoolClass -> classDemand.getOrDefault(schoolClass.getId(), 0)
+                        != TimetableRulePolicy.PERIODS_PER_WEEK)
+                .map(schoolClass -> schoolClass.getCode() + " ("
+                        + classDemand.getOrDefault(schoolClass.getId(), 0) + "/"
+                        + TimetableRulePolicy.PERIODS_PER_WEEK + " tiết)")
+                .toList() : List.of();
+        if (!incompleteClasses.isEmpty()) {
+            throw ApiException.badRequest("Chưa thể tạo thời khóa biểu vì định mức phân công chưa đủ 25 tiết/lớp: "
+                    + String.join(", ", incompleteClasses)
+                    + ". Hãy quay lại bước Phân công để bổ sung môn-lớp còn thiếu.");
         }
         List<TeachingAssignment> work = semesterAssignments.stream()
                 .filter(item -> occupied.stream().filter(slot -> sameAssignment(slot, item)).count()
@@ -126,6 +160,10 @@ public class AutomaticTimetableService {
         }
 
         List<AutoTimetableItem> result = new ArrayList<>();
+        schoolWideSlots.forEach(slot -> result.add(new AutoTimetableItem(slot.getClassId(), slot.getClassCode(),
+                slot.getStudyShift(), slot.getSubjectId(), slot.getSubjectName(), null, null,
+                null, slot.getDayOfWeek(), slot.getPeriodNo(), slot.getStartTime(), slot.getEndTime(),
+                "SCHOOL_WIDE", "Sinh hoạt toàn trường: hoạt động chung, không tính tải dạy")));
         List<String> warnings = new ArrayList<>();
         List<ScheduleNeed> needs = new ArrayList<>();
         List<Room> activeRooms = structure.listRooms().stream()
@@ -418,9 +456,22 @@ public class AutomaticTimetableService {
                                           String semesterId, int baseOccupiedSize, long deadlineNanos) {
         Set<String> classIds = needs.stream().map(need -> need.assignment.getClassId())
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-        if (baseOccupiedSize != 0 || !denseRoomsAreIndependent(needs)
-                || needs.stream().mapToInt(need -> need.remaining).sum()
-                != classIds.size() * TimetableRulePolicy.PERIODS_PER_WEEK) return false;
+        if (!denseRoomsAreIndependent(needs)) return false;
+
+        // Some weekly activities (currently Sinh hoạt toàn trường) are fixed before
+        // teacher scheduling. They occupy the same coordinate for every class and
+        // therefore simply remove that coordinate from the edge-colouring palette.
+        Set<Integer> fixedCoordinates = occupied.stream().limit(baseOccupiedSize)
+                .filter(slot -> classIds.contains(slot.getClassId()))
+                .map(this::slotIndex)
+                .collect(java.util.stream.Collectors.toSet());
+        List<Integer> availableCoordinates = new ArrayList<>();
+        for (int index = 0; index < TimetableRulePolicy.PERIODS_PER_WEEK; index++) {
+            if (!fixedCoordinates.contains(index)) availableCoordinates.add(index);
+        }
+        int colorCount = availableCoordinates.size();
+        if (colorCount <= 0 || needs.stream().mapToInt(need -> need.remaining).sum()
+                != classIds.size() * colorCount) return false;
 
         int variant = 0;
         do {
@@ -429,7 +480,7 @@ public class AutomaticTimetableService {
             for (String shift : List.of("MORNING", "AFTERNOON")) {
                 List<ScheduleNeed> shiftNeeds = needs.stream().filter(need ->
                         shift.equalsIgnoreCase(need.schoolClass.getStudyShift())).toList();
-                if (!shiftNeeds.isEmpty() && !colorShift(shiftNeeds, variant, colored)) {
+                if (!shiftNeeds.isEmpty() && !colorShift(shiftNeeds, variant, colorCount, colored)) {
                     coloredAll = false;
                     break;
                 }
@@ -437,10 +488,10 @@ public class AutomaticTimetableService {
             if (coloredAll) {
                 for (int permutation = 0; permutation < 80 && System.nanoTime() < deadlineNanos; permutation++) {
                     List<Integer> slotOrder = new ArrayList<>();
-                    for (int index = 0; index < TimetableRulePolicy.PERIODS_PER_WEEK; index++) slotOrder.add(index);
+                    slotOrder.addAll(availableCoordinates);
                     int seed = variant * 1009 + permutation;
                     slotOrder.sort(Comparator.comparingInt(index -> mixedRank(index, seed)));
-                    int[] slotForColor = new int[TimetableRulePolicy.PERIODS_PER_WEEK];
+                    int[] slotForColor = new int[colorCount];
                     for (int index = 0; index < slotOrder.size(); index++) slotForColor[index] = slotOrder.get(index);
 
                     List<TimetableSlot> proposed = new ArrayList<>();
@@ -468,7 +519,7 @@ public class AutomaticTimetableService {
                         proposed.add(simulated(choice.need().assignment, choice.need().schoolClass,
                                 candidate, semesterId, proposed.size() + 1L));
                     }
-                    if (valid && proposed.size() == classIds.size() * TimetableRulePolicy.PERIODS_PER_WEEK) {
+                    if (valid && proposed.size() == classIds.size() * colorCount) {
                         while (occupied.size() > baseOccupiedSize) occupied.remove(occupied.size() - 1);
                         occupied.addAll(proposed);
                         needs.forEach(ScheduleNeed::reset);
@@ -485,7 +536,8 @@ public class AutomaticTimetableService {
         return false;
     }
 
-    private boolean colorShift(List<ScheduleNeed> needs, int variant, List<ColorChoice> output) {
+    private boolean colorShift(List<ScheduleNeed> needs, int variant, int colorCount,
+                               List<ColorChoice> output) {
         List<String> realLeft = needs.stream().map(need -> need.assignment.getClassId()).distinct().sorted().toList();
         List<String> realRight = needs.stream().map(need -> need.assignment.getTeacherId()).distinct().sorted().toList();
         int size = Math.max(realLeft.size(), realRight.size());
@@ -505,13 +557,13 @@ public class AutomaticTimetableService {
         }
         int rightCursor = 0;
         for (String l : left) {
-            int deficit = TimetableRulePolicy.PERIODS_PER_WEEK - leftDegree.getOrDefault(l, 0);
+            int deficit = colorCount - leftDegree.getOrDefault(l, 0);
             while (deficit > 0) {
                 while (rightCursor < right.size() && rightDegree.getOrDefault(right.get(rightCursor), 0)
-                        >= TimetableRulePolicy.PERIODS_PER_WEEK) rightCursor++;
+                        >= colorCount) rightCursor++;
                 if (rightCursor >= right.size()) return false;
                 String r = right.get(rightCursor);
-                int room = TimetableRulePolicy.PERIODS_PER_WEEK - rightDegree.getOrDefault(r, 0);
+                int room = colorCount - rightDegree.getOrDefault(r, 0);
                 int add = Math.min(deficit, room);
                 List<ScheduleNeed> pair = edges.computeIfAbsent(edgeKey(l, r), ignored -> new ArrayList<>());
                 for (int index = 0; index < add; index++) pair.add(null);
@@ -521,7 +573,7 @@ public class AutomaticTimetableService {
             }
         }
 
-        for (int color = 0; color < TimetableRulePolicy.PERIODS_PER_WEEK; color++) {
+        for (int color = 0; color < colorCount; color++) {
             Map<String, String> rightOwner = new HashMap<>();
             List<String> leftOrder = new ArrayList<>(left);
             int seed = variant * 31 + color;
@@ -672,37 +724,103 @@ public class AutomaticTimetableService {
                                                        String strategy, int variant) {
         Comparator<Candidate> base = Comparator.comparingInt(candidate -> 0);
         if ("TEACHER_COMFORT".equals(strategy)) {
-            return base.thenComparingInt(candidate -> teacherDayLoad(
+            return base.thenComparingInt(candidate -> classContinuityPenalty(
+                            need.assignment.getClassId(), candidate, occupied))
+                    .thenComparingInt(candidate -> teacherDayLoad(
                             need.assignment.getTeacherId(), candidate.day(), occupied) == 0 ? 1 : 0)
                     .thenComparing(Comparator.comparingInt((Candidate candidate) -> teacherDayLoad(
                             need.assignment.getTeacherId(), candidate.day(), occupied)).reversed())
                     .thenComparingInt(candidate -> classDayLoad(
                             need.assignment.getClassId(), candidate.day(), occupied))
-                    .thenComparingInt(candidate -> rotatedSlotIndex(candidate, variant));
+                    .thenComparingInt(candidate -> rotatedSlotIndex(candidate,
+                            need.assignment.getClassId(), variant));
         }
         if ("EARLY_WEEK".equals(strategy)) {
-            return base.thenComparingInt(candidate -> DAYS.indexOf(candidate.day()))
-                    .thenComparingInt(candidate -> rotatedSlotIndex(candidate, variant))
+            return base.thenComparingInt(candidate -> classContinuityPenalty(
+                            need.assignment.getClassId(), candidate, occupied))
+                    .thenComparingInt(candidate -> DAYS.indexOf(candidate.day()))
+                    .thenComparingInt(candidate -> rotatedSlotIndex(candidate,
+                            need.assignment.getClassId(), variant))
                     .thenComparing(Candidate::roomCode);
         }
-        return base.thenComparingInt(candidate -> classDayLoad(
+        return base.thenComparingInt(candidate -> classContinuityPenalty(
+                        need.assignment.getClassId(), candidate, occupied))
+                .thenComparingInt(candidate -> classDayLoad(
                         need.assignment.getClassId(), candidate.day(), occupied))
                 .thenComparingInt(candidate -> subjectDayLoad(
                         need.assignment, candidate.day(), occupied))
                 .thenComparingInt(candidate -> teacherDayLoad(
                         need.assignment.getTeacherId(), candidate.day(), occupied))
-                .thenComparingInt(candidate -> rotatedSlotIndex(candidate, variant));
+                .thenComparingInt(candidate -> rotatedSlotIndex(candidate,
+                        need.assignment.getClassId(), variant));
     }
 
-    private int rotatedSlotIndex(Candidate candidate, int variant) {
-        int size = DAYS.size() * MORNING.size();
-        return Math.floorMod(slotIndex(candidate) + variant * 7, size);
+    private int classContinuityPenalty(String classId, Candidate candidate,
+                                       List<TimetableSlot> occupied) {
+        if (candidate.period() <= 1) return 0;
+        Set<Integer> existing = occupied.stream()
+                .filter(slot -> classId.equals(slot.getClassId()))
+                .filter(slot -> candidate.day().equals(slot.getDayOfWeek()))
+                .map(TimetableSlot::getPeriodNo)
+                .collect(java.util.stream.Collectors.toSet());
+        int missingEarlierPeriods = 0;
+        for (int period = 1; period < candidate.period(); period++) {
+            if (!existing.contains(period)) missingEarlierPeriods++;
+        }
+        return missingEarlierPeriods;
+    }
+
+    private int rotatedSlotIndex(Candidate candidate, String classId, int variant) {
+        int classRotation = Math.floorMod(Objects.hashCode(classId), DAYS.size());
+        int dayIndex = DAYS.indexOf(candidate.day());
+        int rotatedDay = Math.floorMod(dayIndex + classRotation + variant, DAYS.size());
+        // Always fill earlier periods first so a school day remains contiguous
+        // (period 1 -> period 5). Rotate only the weekday to stagger each
+        // class's free day/period instead of pushing every gap to Friday.
+        return (candidate.period() - 1) * DAYS.size() + rotatedDay;
     }
 
     private static String normalizeStrategy(String value) {
         String strategy = value == null ? "BALANCED" : value.trim().toUpperCase(Locale.ROOT);
         return Set.of("BALANCED", "TEACHER_COMFORT", "EARLY_WEEK").contains(strategy)
                 ? strategy : "BALANCED";
+    }
+
+    private List<TimetableSlot> schoolWideActivitySlots(String semesterId, String academicYearId,
+                                                         List<TimetableSlot> occupied) {
+        Set<String> schoolWideSubjectIds = structure.listSubjects().stream()
+                .filter(subject -> "SHTT".equalsIgnoreCase(subject.getCode()))
+                .map(Subject::getId).collect(java.util.stream.Collectors.toSet());
+        if (schoolWideSubjectIds.isEmpty()) return List.of();
+        Map<String, com.sse.app.academic.timetable.CurriculumRequirement> requirementByGrade =
+                new HashMap<>();
+        curriculumRequirements.findBySemesterId(semesterId).stream()
+                .filter(requirement -> schoolWideSubjectIds.contains(requirement.getSubjectId()))
+                .forEach(requirement -> requirementByGrade.put(requirement.getGradeLevel(), requirement));
+        List<TimetableSlot> generated = new ArrayList<>();
+        for (SchoolClass schoolClass : structure.listClasses(academicYearId, null)) {
+            var requirement = requirementByGrade.get(normalizeGrade(schoolClass.getGradeLevel()));
+            if (requirement == null || requirement.getWeeklyPeriods() <= 0) continue;
+            boolean exists = occupied.stream().anyMatch(slot -> schoolClass.getId().equals(slot.getClassId())
+                    && requirement.getSubjectId().equals(slot.getSubjectId()));
+            if (exists) continue;
+            Map<Integer, String[]> times = "AFTERNOON".equalsIgnoreCase(schoolClass.getStudyShift())
+                    ? AFTERNOON : MORNING;
+            String[] time = times.get(TimetableRulePolicy.PERIODS_PER_DAY);
+            generated.add(TimetableSlot.builder().id("preview-school-wide-" + schoolClass.getId())
+                    .classId(schoolClass.getId()).classCode(schoolClass.getCode())
+                    .studyShift(schoolClass.getStudyShift()).subjectId(requirement.getSubjectId())
+                    .subjectName(requirement.getSubjectName()).teacherId(null).teacherName(null)
+                    .roomCode(null).dayOfWeek("FRI").periodNo(TimetableRulePolicy.PERIODS_PER_DAY)
+                    .startTime(time[0]).endTime(time[1]).semesterId(semesterId).build());
+        }
+        return generated;
+    }
+
+    private static String normalizeGrade(String value) {
+        if (value == null) return "";
+        String grade = value.trim().toUpperCase(Locale.ROOT).replace("KHỐI", "").trim();
+        return grade.startsWith("K") ? grade : "K" + grade;
     }
 
     private static String strategySummary(String strategy) {
@@ -733,6 +851,11 @@ public class AutomaticTimetableService {
         // keeps the canonical-combination pruning below without forcing every
         // subject into consecutive periods on the earliest available day.
         return (candidate.period() - 1) * DAYS.size() + DAYS.indexOf(candidate.day());
+    }
+
+    private int slotIndex(TimetableSlot slot) {
+        return DAYS.indexOf(slot.getDayOfWeek()) * TimetableRulePolicy.PERIODS_PER_DAY
+                + slot.getPeriodNo() - 1;
     }
 
     private static TimetableSlot simulated(TeachingAssignment assignment, SchoolClass schoolClass,

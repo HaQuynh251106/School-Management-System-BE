@@ -37,7 +37,7 @@ public final class TimetableRulePolicy {
             if (candidate.classId().equals(existing.classId())) {
                 throw ApiException.conflict("Lớp đã có tiết khác trùng khung giờ");
             }
-            if (candidate.teacherId().equals(existing.teacherId())) {
+            if (present(candidate.teacherId()) && candidate.teacherId().equals(existing.teacherId())) {
                 throw ApiException.conflict("Giáo viên đã kín lịch do trùng khung giờ");
             }
             if (present(candidate.roomCode()) && candidate.roomCode().equals(existing.roomCode())) {
@@ -70,7 +70,7 @@ public final class TimetableRulePolicy {
                 SlotView right = slots.get(j);
                 if (!sameSemester(left, right) || !sameDay(left, right) || !overlaps(left, right)) continue;
                 if (left.classId().equals(right.classId())) messages.add("trùng lịch lớp");
-                else if (left.teacherId().equals(right.teacherId())) messages.add("trùng lịch giáo viên");
+                else if (present(left.teacherId()) && left.teacherId().equals(right.teacherId())) messages.add("trùng lịch giáo viên");
                 else if (present(left.roomCode()) && left.roomCode().equals(right.roomCode())) {
                     messages.add("trùng lịch phòng");
                 }

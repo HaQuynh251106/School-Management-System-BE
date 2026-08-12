@@ -408,7 +408,7 @@ public class UserService {
                 .passwordChangeRequired(true)
                 .activationStatus(activationStatus)
                 .teacherCode(r.teacherCode())
-                .mainSubject(r.mainSubject())
+                .mainSubject(canonicalMainSubject(r.role(), r.mainSubject()))
                 .studentCode(studentCode)
                 .classId(r.classId())
                 .className(r.className())
@@ -434,7 +434,7 @@ public class UserService {
         }
         if ("PENDING_EMAIL".equals(activationStatus)) {
             PasswordResetIssue issue = issueToken(saved, "ACTIVATION_LINK", 48, ChronoUnit.HOURS);
-            mailer.sendActivation(issue.email(), issue.token());
+            mailer.sendActivationAsync(issue.email(), issue.token(), issue.username(), issue.fullName(), issue.role());
         }
         return toDto(saved);
     }
@@ -478,7 +478,7 @@ public class UserService {
         if (r.phone() != null)      u.setPhone(r.phone());
         if (r.avatarUrl() != null)  u.setAvatarUrl(r.avatarUrl());
         if (r.teacherCode() != null)u.setTeacherCode(r.teacherCode());
-        if (r.mainSubject() != null)u.setMainSubject(r.mainSubject());
+        if (r.mainSubject() != null)u.setMainSubject(canonicalMainSubject(u.getRole(), r.mainSubject()));
         if (r.studentCode() != null)u.setStudentCode(r.studentCode());
         if (r.classId() != null)    u.setClassId(r.classId());
         if (r.className() != null)  u.setClassName(r.className());
@@ -506,7 +506,7 @@ public class UserService {
         if (!"ACTIVE".equals(lifecycleStatus(saved)) && previousEmail == null && saved.getEmail() != null) {
             saved.setActivationStatus("PENDING_EMAIL");
             PasswordResetIssue issue = issueToken(saved, "ACTIVATION_LINK", 48, ChronoUnit.HOURS);
-            mailer.sendActivation(issue.email(), issue.token());
+            mailer.sendActivationAsync(issue.email(), issue.token(), issue.username(), issue.fullName(), issue.role());
         }
         return toDto(saved);
     }
@@ -529,8 +529,28 @@ public class UserService {
         if (!"TEACHER".equals(teacher.getRole())) {
             throw ApiException.badRequest("Người dùng không phải giáo viên");
         }
-        teacher.setMainSubject(mainSubject.trim());
+        teacher.setMainSubject(canonicalMainSubject(teacher.getRole(), mainSubject));
         return toDto(users.save(teacher));
+    }
+
+    private String canonicalMainSubject(String role, String value) {
+        if (value == null || value.isBlank()) return null;
+        if (!"TEACHER".equals(role)) throw ApiException.badRequest("Chỉ giáo viên được khai báo bộ môn giảng dạy");
+        String requested = normalizeSubjectKey(value);
+        return structure.listSubjects().stream()
+                .filter(subject -> normalizeSubjectKey(subject.getId()).equals(requested)
+                        || normalizeSubjectKey(subject.getCode()).equals(requested)
+                        || normalizeSubjectKey(subject.getName()).equals(requested))
+                .findFirst().map(subject -> subject.getName())
+                .orElseThrow(() -> ApiException.badRequest("Bộ môn không tồn tại trong Cơ cấu đào tạo: " + value));
+    }
+
+    private String normalizeSubjectKey(String value) {
+        return Normalizer.normalize(Objects.toString(value, ""), Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .toLowerCase(Locale.ROOT)
+                .replace('đ', 'd')
+                .replaceAll("[^a-z0-9]", "");
     }
 
     @Transactional
@@ -612,7 +632,8 @@ public class UserService {
         return value == null || value.isBlank() ? null : value.trim();
     }
 
-    public record PasswordResetIssue(String token, String email, String purpose, String userId) {}
+    public record PasswordResetIssue(String token, String email, String purpose, String userId,
+                                     String username, String fullName, String role) {}
 
     @Transactional
     public UserDto confirmPasswordReset(String rawToken, String newPassword) {
@@ -665,7 +686,7 @@ public class UserService {
         }
         user.setActivationStatus("PENDING_EMAIL");
         PasswordResetIssue issue = issueToken(user, "ACTIVATION_LINK", 48, ChronoUnit.HOURS);
-        return mailer.sendActivation(issue.email(), issue.token());
+        return mailer.sendActivation(issue.email(), issue.token(), issue.username(), issue.fullName(), issue.role());
     }
 
     @Transactional
@@ -738,7 +759,8 @@ public class UserService {
             user.setActivationSentAt(now);
             users.save(user);
         }
-        return new PasswordResetIssue(raw, user.getEmail(), purpose, user.getId());
+        return new PasswordResetIssue(raw, user.getEmail(), purpose, user.getId(),
+                user.getUsername(), user.getFullName(), user.getRole());
     }
 
     private void assertUsableToken(PasswordResetToken token) {

@@ -258,9 +258,6 @@ public class UserController {
         if ("STUDENT".equals(role) && (hasValue(classId) || hasValue(className))) {
             throw ApiException.forbidden("Admin chỉ tạo tài khoản học sinh ở trạng thái Chờ phân lớp; Giáo vụ chịu trách nhiệm phân lớp");
         }
-        if ("TEACHER".equals(role) && hasValue(mainSubject)) {
-            throw ApiException.forbidden("Chuyên môn giáo viên do Giáo vụ chuẩn hóa");
-        }
     }
 
     private void requireConfirmedException(Boolean confirmed, String reason) {

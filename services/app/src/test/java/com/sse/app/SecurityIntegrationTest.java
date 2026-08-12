@@ -342,7 +342,7 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.metrics.length()").value(4))
-                .andExpect(jsonPath("$.charts.length()").value(2))
+                .andExpect(jsonPath("$.charts.length()").value(1))
                 .andExpect(jsonPath("$.charts[0].data.length()", greaterThanOrEqualTo(1)))
                 .andExpect(jsonPath("$.adminOverview.activeStudents").isNumber())
                 .andExpect(jsonPath("$.adminOverview.activeTeachers").isNumber())
@@ -908,15 +908,17 @@ class SecurityIntegrationTest {
 
         mvc.perform(put("/users/u-teacher-1")
                         .header("Authorization", "Bearer " + admin)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"mainSubject\":\"Toán\"}"))
-                .andExpect(status().isForbidden());
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"mainSubject\":\"Toán\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.mainSubject").value("Toán"));
 
         mvc.perform(post("/users")
                         .header("Authorization", "Bearer " + admin)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"username\":\"teacher.with.subject\",\"password\":\"Teacher123@@\",\"fullName\":\"Giáo viên sai luồng\",\"role\":\"TEACHER\",\"mainSubject\":\"Toán\"}"))
-                .andExpect(status().isForbidden());
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"teacher.with.subject\",\"password\":\"Teacher123@@\",\"fullName\":\"Giáo viên sai luồng\",\"role\":\"TEACHER\",\"mainSubject\":\"Toán\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.mainSubject").value("Toán"));
 
         mvc.perform(put("/users/u-teacher-1/specialization")
                         .header("Authorization", "Bearer " + academicStaff)
@@ -2428,11 +2430,11 @@ class SecurityIntegrationTest {
         mvc.perform(post("/chat/messages").header("Authorization", "Bearer " + student)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"toUserId\":\"u-student-2\",\"body\":\"Chào bạn cùng lớp\"}"))
-                .andExpect(status().isOk());
+                .andExpect(status().isForbidden());
         mvc.perform(post("/chat/messages").header("Authorization", "Bearer " + otherStudent)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"toUserId\":\"u-student-1\",\"body\":\"Chào bạn\"}"))
-                .andExpect(status().isOk());
+                .andExpect(status().isForbidden());
         jdbc.update("update users set class_id = ?, class_name = ? where id = ?", "c-8a1", "8A1", "u-student-2");
 
         mvc.perform(post("/chat/messages").header("Authorization", "Bearer " + parent)

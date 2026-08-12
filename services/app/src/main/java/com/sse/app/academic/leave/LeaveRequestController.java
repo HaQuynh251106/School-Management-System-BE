@@ -1,6 +1,7 @@
 package com.sse.app.academic.leave;
 
 import com.sse.app.academic.leave.LeaveRequestDtos.CreateLeaveRequest;
+import com.sse.app.academic.leave.LeaveRequestDtos.CreateChildLeaveRequest;
 import com.sse.app.academic.leave.LeaveRequestDtos.DecisionRequest;
 import com.sse.app.security.CurrentUser;
 import com.sse.app.security.CurrentUserHolder;
@@ -27,6 +28,13 @@ public class LeaveRequestController {
     public LeaveRequest create(@Valid @RequestBody CreateLeaveRequest input) {
         CurrentUserHolder.requireRole("STUDENT");
         return requests.create(input, CurrentUserHolder.require().id());
+    }
+
+    @PostMapping("/children")
+    public LeaveRequest createForChild(@Valid @RequestBody CreateChildLeaveRequest input) {
+        CurrentUserHolder.requireRole("PARENT");
+        CurrentUser parent = CurrentUserHolder.require();
+        return requests.createForChild(input, parent.id());
     }
 
     @PostMapping("/{id}/parent-confirm")

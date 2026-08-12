@@ -57,7 +57,7 @@ class CurriculumRequirementWorkflowIntegrationTest {
             assertThat(grade.missingSubjects()).extracting("subjectName").containsExactly("Ngữ văn");
         });
         assertThatThrownBy(() -> planning.plan(
-                new AutoAssignmentRequest(first.getId(), false, false), "academic-test"))
+                new AutoAssignmentRequest(first.getId(), true, false), "academic-test"))
                 .isInstanceOf(ApiException.class)
                 .hasMessageContaining("Ngữ văn");
 

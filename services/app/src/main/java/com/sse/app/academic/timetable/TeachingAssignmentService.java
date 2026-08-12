@@ -285,22 +285,29 @@ public class TeachingAssignmentService {
             throw ApiException.badRequest("Lớp và học kỳ không thuộc cùng năm học");
         }
         String subjectName = structure.requireSubjectName(request.subjectId());
+        boolean classMeeting = isClassMeetingSubject(request.subjectId());
         User teacher = users.getById(request.teacherId());
         if (!"TEACHER".equals(teacher.getRole()) || !"ACTIVE".equals(teacher.getStatus())) {
             throw ApiException.badRequest("Chỉ có thể phân công giáo viên đang hoạt động");
         }
-        if (!teacherSupportsSubject(teacher, request.subjectId())) {
+        if (classMeeting && !teacher.getId().equals(schoolClass.getHomeroomTeacherId())) {
+            throw ApiException.badRequest("Sinh hoạt lớp chỉ được gắn với giáo viên chủ nhiệm của lớp");
+        }
+        if (!classMeeting && !teacherSupportsSubject(teacher, request.subjectId())) {
             throw ApiException.badRequest("Giáo viên không đúng chuyên môn của môn " + subjectName);
         }
-        TeacherLoadRegistration load = workloadPolicies.ensureRegistration(
-                teacher.getId(), teacher.getFullName(), semester.getId());
-        int currentLoad = assignments.findByTeacherId(teacher.getId()).stream()
-                .filter(item -> semester.getId().equals(item.getSemesterId()))
-                .filter(item -> ignoredAssignmentId == null || !ignoredAssignmentId.equals(item.getId()))
-                .mapToInt(TeachingAssignment::getWeeklyPeriods).sum();
-        if (currentLoad + request.weeklyPeriods() > load.getMaxWeeklyPeriods()) {
-            throw ApiException.conflict("Phân công làm giáo viên vượt tải tối đa: "
-                    + (currentLoad + request.weeklyPeriods()) + "/" + load.getMaxWeeklyPeriods() + " tiết/tuần");
+        if (!classMeeting) {
+            TeacherLoadRegistration load = workloadPolicies.ensureRegistration(
+                    teacher.getId(), teacher.getFullName(), semester.getId());
+            int currentLoad = assignments.findByTeacherId(teacher.getId()).stream()
+                    .filter(item -> semester.getId().equals(item.getSemesterId()))
+                    .filter(item -> ignoredAssignmentId == null || !ignoredAssignmentId.equals(item.getId()))
+                    .filter(item -> !isClassMeetingSubject(item.getSubjectId()))
+                    .mapToInt(TeachingAssignment::getWeeklyPeriods).sum();
+            if (currentLoad + request.weeklyPeriods() > load.getMaxWeeklyPeriods()) {
+                throw ApiException.conflict("Phân công làm giáo viên vượt tải tối đa: "
+                        + (currentLoad + request.weeklyPeriods()) + "/" + load.getMaxWeeklyPeriods() + " tiết/tuần");
+            }
         }
         curriculumRequirements.findBySemesterIdAndGradeLevelAndSubjectId(
                         semester.getId(), normalizeGrade(schoolClass.getGradeLevel()), request.subjectId())
@@ -315,6 +322,7 @@ public class TeachingAssignmentService {
 
     private void assertBatchCapacity(String teacherId, String semesterId,
                                      List<SaveTeachingAssignmentRequest> requests) {
+        if (requests.stream().allMatch(item -> isClassMeetingSubject(item.subjectId()))) return;
         User teacher = users.getById(teacherId);
         TeacherLoadRegistration load = workloadPolicies.ensureRegistration(
                 teacherId, teacher.getFullName(), semesterId);
@@ -345,6 +353,11 @@ public class TeachingAssignmentService {
                 .map(TeachingAssignmentService::comparable)
                 .anyMatch(value -> value.equals(targetCode) || value.equals(targetName)
                         || value.equals(comparable(subject.getId())));
+    }
+
+    private boolean isClassMeetingSubject(String subjectId) {
+        return structure.listSubjects().stream()
+                .anyMatch(subject -> subject.getId().equals(subjectId) && "SHL".equalsIgnoreCase(subject.getCode()));
     }
 
     private static String comparable(String value) {

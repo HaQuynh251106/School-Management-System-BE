@@ -132,7 +132,9 @@ public class AuthController {
         UserService.PasswordResetIssue issue = users.requestPasswordReset(req.email(), req.username());
         Map<String, Object> body = recoveryResponse();
         if (issue != null) {
-            if ("ACTIVATION_LINK".equals(issue.purpose())) resetMailer.sendActivation(issue.email(), issue.token());
+            if ("ACTIVATION_LINK".equals(issue.purpose())) {
+                resetMailer.sendActivation(issue.email(), issue.token(), issue.username(), issue.fullName(), issue.role());
+            }
             else resetMailer.sendReset(issue.email(), issue.token());
             audit.record(issue.userId(), "SELF_SERVICE", "PUBLIC", "PASSWORD_RECOVERY_REQUESTED",
                     "identity", "user", issue.userId(), "Đã yêu cầu liên kết " + issue.purpose());

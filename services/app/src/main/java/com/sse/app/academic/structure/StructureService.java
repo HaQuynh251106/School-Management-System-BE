@@ -78,7 +78,7 @@ public class StructureService {
             throw ApiException.badRequest("Năm học mới phải ở trạng thái dự kiến trước khi kích hoạt");
         }
         AcademicYear year = years.save(AcademicYear.builder()
-                .id(orGen(r.id(), "ay")).code(code).name(defaultName(r.name(), code))
+                .id(orGen(r.id(), "ay")).code(code).name(defaultName(r.name(), "Năm học " + code))
                 .startDate(r.startDate()).endDate(r.endDate()).status("PLANNED").build());
         if (createDefaultSemesters) createDefaultSemesters(year);
         return year;

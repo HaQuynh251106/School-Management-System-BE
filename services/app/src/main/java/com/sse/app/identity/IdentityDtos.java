@@ -124,6 +124,7 @@ public final class IdentityDtos {
             String fullName,
             String role,
             String classCode,
+            String mainSubject,
             String linkedUsername,
             boolean valid,
             String error

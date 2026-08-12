@@ -77,8 +77,8 @@ sse:
   mail:
     enabled: ${SSE_MAIL_ENABLED:false}
     from: ${SSE_MAIL_FROM:no-reply@smartschool.local}
-    reset-url: ${SSE_PASSWORD_RESET_URL:http://localhost:5173/reset-password}
-    activation-url: ${SSE_ACCOUNT_ACTIVATION_URL:http://localhost:5173/activate-account}
+    reset-url: ${SSE_PASSWORD_RESET_URL:http://localhost:5173/#/dat-lai-mat-khau}
+    activation-url: ${SSE_ACCOUNT_ACTIVATION_URL:http://localhost:5173/#/kich-hoat-tai-khoan}
   push:
     firebase:
       enabled: ${SSE_FIREBASE_ENABLED:false}

@@ -61,8 +61,15 @@ public class WorkloadPlanningService {
         List<Subject> subjects = structure.listSubjects().stream()
                 .sorted(Comparator.comparing(Subject::getName)).toList();
         List<CurriculumRequirement> configured = listRequirements(semesterId);
-        List<String> grades = structure.listClasses(semester.getAcademicYearId(), null).stream()
+        List<String> operationalGrades = structure.listClasses(semester.getAcademicYearId(), null).stream()
                 .map(SchoolClass::getGradeLevel).map(WorkloadPlanningService::normalizeGrade)
+                .distinct().sorted().toList();
+        // A curriculum may be prepared before its first class is created.  Keep those
+        // grades visible in readiness so the UI can report 13/13 and 25/25 correctly.
+        List<String> grades = java.util.stream.Stream.concat(
+                        operationalGrades.stream(),
+                        configured.stream().map(CurriculumRequirement::getGradeLevel)
+                                .map(WorkloadPlanningService::normalizeGrade))
                 .distinct().sorted().toList();
         List<GradeCurriculumReadiness> gradeResults = grades.stream().map(grade -> {
             List<CurriculumRequirement> rows = configured.stream()
@@ -77,8 +84,10 @@ public class WorkloadPlanningService {
                     missing.isEmpty() && periods == TimetableRulePolicy.PERIODS_PER_WEEK, missing);
         }).toList();
         int totalPeriods = configured.stream().mapToInt(CurriculumRequirement::getWeeklyPeriods).sum();
-        boolean complete = !gradeResults.isEmpty()
-                && gradeResults.stream().allMatch(GradeCurriculumReadiness::complete);
+        boolean complete = !operationalGrades.isEmpty()
+                && gradeResults.stream()
+                .filter(item -> operationalGrades.contains(item.gradeLevel()))
+                .allMatch(GradeCurriculumReadiness::complete);
         return new CurriculumReadiness(semesterId, subjects.size(), configured.size(), totalPeriods,
                 complete, gradeResults);
     }
@@ -95,11 +104,8 @@ public class WorkloadPlanningService {
     @Transactional
     public CurriculumRequirement saveRequirement(SaveCurriculumRequirementRequest request, String actorId) {
         structure.assertSemesterWritable(request.semesterId());
-        Semester semester = structure.getSemester(request.semesterId());
+        structure.getSemester(request.semesterId());
         String grade = normalizeGrade(request.gradeLevel());
-        boolean gradeExists = structure.listClasses(semester.getAcademicYearId(), null).stream()
-                .anyMatch(item -> grade.equals(normalizeGrade(item.getGradeLevel())));
-        if (!gradeExists) throw ApiException.badRequest("Khối " + grade + " chưa có lớp trong năm học đã chọn");
         Subject subject = structure.listSubjects().stream()
                 .filter(item -> item.getId().equals(request.subjectId())).findFirst()
                 .orElseThrow(() -> ApiException.notFound("Môn học"));
@@ -131,13 +137,9 @@ public class WorkloadPlanningService {
     public List<CurriculumRequirement> copyRequirements(CopyCurriculumRequirementsRequest request, String actorId) {
         structure.assertSemesterWritable(request.targetSemesterId());
         structure.getSemester(request.sourceSemesterId());
-        Semester targetSemester = structure.getSemester(request.targetSemesterId());
+        structure.getSemester(request.targetSemesterId());
         String sourceGrade = normalizeGrade(request.sourceGradeLevel());
         String targetGrade = normalizeGrade(request.targetGradeLevel());
-        boolean targetGradeExists = structure.listClasses(targetSemester.getAcademicYearId(), null).stream()
-                .anyMatch(item -> targetGrade.equals(normalizeGrade(item.getGradeLevel())));
-        if (!targetGradeExists) throw ApiException.badRequest("Khối " + targetGrade
-                + " chưa có lớp trong năm học của học kỳ đích");
         List<CurriculumRequirement> sourceRows = listRequirements(request.sourceSemesterId()).stream()
                 .filter(item -> sourceGrade.equals(item.getGradeLevel())).toList();
         if (sourceRows.isEmpty()) throw ApiException.badRequest("Khối nguồn chưa có định mức để sao chép");
@@ -193,7 +195,8 @@ public class WorkloadPlanningService {
         List<TeachingAssignment> semesterAssignments = assignments.findAll().stream()
                 .filter(item -> semesterId.equals(item.getSemesterId())).toList();
         int expectedAssignments = classes.stream().mapToInt(schoolClass -> (int) listRequirements(semesterId).stream()
-                .filter(item -> normalizeGrade(schoolClass.getGradeLevel()).equals(item.getGradeLevel())).count()).sum();
+                .filter(item -> normalizeGrade(schoolClass.getGradeLevel()).equals(item.getGradeLevel()))
+                .filter(item -> !isSchoolWideActivity(item.getSubjectId())).count()).sum();
         int missingAssignments = Math.max(0, expectedAssignments - semesterAssignments.size());
         int expectedSlots = classes.size() * TimetableRulePolicy.PERIODS_PER_WEEK;
         int slotCount = registrations.countTimetableSlots(semesterId);
@@ -232,7 +235,7 @@ public class WorkloadPlanningService {
         List<SchoolClass> classes = structure.listClasses(semester.getAcademicYearId(), null);
         List<CurriculumRequirement> required = listRequirements(request.semesterId());
         CurriculumReadiness readiness = curriculumReadiness(request.semesterId());
-        if (!readiness.complete()) {
+        if (Boolean.TRUE.equals(request.apply()) && !readiness.complete()) {
             String details = readiness.grades().stream().filter(item -> !item.complete())
                     .map(item -> item.gradeLevel() + " thiếu " + item.missingSubjects().stream()
                             .map(MissingCurriculumSubject::subjectName)
@@ -254,10 +257,19 @@ public class WorkloadPlanningService {
         available.forEach(item -> projected.put(item.getTeacherId(),
                 assignments.findByTeacherId(item.getTeacherId()).stream()
                         .filter(a -> request.semesterId().equals(a.getSemesterId()))
+                        .filter(a -> !isClassMeeting(a.getSubjectId()))
                         .mapToInt(TeachingAssignment::getWeeklyPeriods).sum()));
 
         List<AutoAssignmentItem> items = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
+        if (!readiness.complete()) {
+            String details = readiness.grades().stream().filter(item -> !item.complete())
+                    .map(item -> item.gradeLevel() + " " + item.totalWeeklyPeriods() + "/"
+                            + TimetableRulePolicy.PERIODS_PER_WEEK + " tiết/tuần")
+                    .collect(java.util.stream.Collectors.joining("; "));
+            warnings.add("Bản xem trước chưa thể phát hành do định mức chưa đủ: " + details
+                    + ". Hãy hoàn thiện đủ 25 tiết/tuần cho mỗi khối.");
+        }
         Map<String, TeacherLoadRegistration> approvedByTeacher = available.stream()
                 .collect(java.util.stream.Collectors.toMap(TeacherLoadRegistration::getTeacherId, item -> item));
         projected.forEach((teacherId, assignedPeriods) -> {
@@ -272,8 +284,42 @@ public class WorkloadPlanningService {
         for (SchoolClass schoolClass : classes) {
             for (CurriculumRequirement requirement : required.stream()
                     .filter(item -> normalizeGrade(schoolClass.getGradeLevel()).equals(item.getGradeLevel())).toList()) {
+                if (isSchoolWideActivity(requirement.getSubjectId())) {
+                    items.add(new AutoAssignmentItem(schoolClass.getId(), schoolClass.getCode(),
+                            schoolClass.getGradeLevel(), requirement.getSubjectId(), requirement.getSubjectName(),
+                            requirement.getWeeklyPeriods(), null, null, 0, "SCHOOL_WIDE",
+                            "Hoạt động toàn trường: không phân công giáo viên, không tính tải dạy"));
+                    continue;
+                }
                 var existing = assignments.findByClassIdAndSubjectIdAndSemesterId(
                         schoolClass.getId(), requirement.getSubjectId(), request.semesterId());
+                if (isClassMeeting(requirement.getSubjectId())) {
+                    if (schoolClass.getHomeroomTeacherId() == null || schoolClass.getHomeroomTeacherId().isBlank()) {
+                        String message = "Lớp chưa có giáo viên chủ nhiệm để phụ trách Sinh hoạt lớp";
+                        items.add(new AutoAssignmentItem(schoolClass.getId(), schoolClass.getCode(),
+                                schoolClass.getGradeLevel(), requirement.getSubjectId(), requirement.getSubjectName(),
+                                requirement.getWeeklyPeriods(), null, null, 0, "UNASSIGNED", message));
+                        warnings.add(schoolClass.getCode() + " · " + requirement.getSubjectName() + ": " + message);
+                        unassignedCount++;
+                        continue;
+                    }
+                    if (existing.isPresent()) {
+                        TeachingAssignment assignment = existing.get();
+                        items.add(new AutoAssignmentItem(schoolClass.getId(), schoolClass.getCode(),
+                                schoolClass.getGradeLevel(), requirement.getSubjectId(), requirement.getSubjectName(),
+                                assignment.getWeeklyPeriods(), assignment.getTeacherId(), assignment.getTeacherName(),
+                                0, "HOMEROOM", "Tự gắn giáo viên chủ nhiệm; không tính tải dạy"));
+                        existingCount++;
+                    } else {
+                        items.add(new AutoAssignmentItem(schoolClass.getId(), schoolClass.getCode(),
+                                schoolClass.getGradeLevel(), requirement.getSubjectId(), requirement.getSubjectName(),
+                                requirement.getWeeklyPeriods(), schoolClass.getHomeroomTeacherId(),
+                                schoolClass.getHomeroomTeacherName(), 0, "HOMEROOM",
+                                "Sẽ tự gắn giáo viên chủ nhiệm; không tính tải dạy"));
+                        proposedCount++;
+                    }
+                    continue;
+                }
                 if (existing.isPresent()) {
                     TeachingAssignment a = existing.get();
                     TeacherLoadRegistration existingLoad = approvedByTeacher.get(a.getTeacherId());
@@ -329,7 +375,8 @@ public class WorkloadPlanningService {
         }
         AssignmentVersionResponse publishedVersion = null;
         if (apply) {
-            for (AutoAssignmentItem item : items) if ("PROPOSED".equals(item.status())) {
+            for (AutoAssignmentItem item : items) if ("PROPOSED".equals(item.status())
+                    || "HOMEROOM".equals(item.status())) {
                 teachingAssignments.create(new SaveTeachingAssignmentRequest(item.classId(), item.subjectId(),
                         item.teacherId(), request.semesterId(), item.weeklyPeriods()), actorId);
             }
@@ -349,6 +396,16 @@ public class WorkloadPlanningService {
                 .subjectId(item.getSubjectId()).subjectName(item.getSubjectName()).action(action)
                 .previousWeeklyPeriods(previousPeriods).newWeeklyPeriods(newPeriods)
                 .actorId(actorId).createdAt(Instant.now()).build());
+    }
+
+    private boolean isClassMeeting(String subjectId) {
+        return structure.listSubjects().stream()
+                .anyMatch(subject -> subject.getId().equals(subjectId) && "SHL".equalsIgnoreCase(subject.getCode()));
+    }
+
+    private boolean isSchoolWideActivity(String subjectId) {
+        return structure.listSubjects().stream()
+                .anyMatch(subject -> subject.getId().equals(subjectId) && "SHTT".equalsIgnoreCase(subject.getCode()));
     }
 
     private TeacherLoadResponse response(TeacherLoadRegistration item) {

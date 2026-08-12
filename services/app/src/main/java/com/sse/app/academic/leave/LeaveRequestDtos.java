@@ -10,5 +10,9 @@ public final class LeaveRequestDtos {
 
     public record CreateLeaveRequest(@NotNull LocalDate startDate, @NotNull LocalDate endDate,
                                      @NotBlank String reason) {}
+    public record CreateChildLeaveRequest(@NotBlank String studentId,
+                                          @NotNull LocalDate startDate,
+                                          @NotNull LocalDate endDate,
+                                          @NotBlank String reason) {}
     public record DecisionRequest(String note) {}
 }

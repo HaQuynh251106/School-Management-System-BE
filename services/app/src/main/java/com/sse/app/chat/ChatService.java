@@ -157,8 +157,6 @@ public class ChatService {
                 if (homeroom != null) ids.add(homeroom);
                 teachingAssignments.assignmentsOfClass(student.getClassId(), null)
                         .forEach(item -> ids.add(item.getTeacherId()));
-                users.listSummaries("STUDENT", null, student.getClassId())
-                        .forEach(classmate -> ids.add(classmate.id()));
             }
         } else if (current.isTeacher()) {
             for (var schoolClass : structure.classesOfHomeroom(current.id())) {
@@ -212,6 +210,8 @@ public class ChatService {
             } else if ("TEACHER".equals(contact.role())) {
                 structure.classesOfHomeroom(contactId)
                         .forEach(schoolClass -> addContactScope(scopes, schoolClass.getId(), "Giáo viên chủ nhiệm"));
+                teachingAssignments.assignmentsOfTeacher(contactId)
+                        .forEach(assignment -> addContactScope(scopes, assignment.getClassId(), "Giáo viên bộ môn"));
             }
             List<ChatContactScope> filtered = scopes.values().stream()
                     .filter(scope -> current.isAdmin() || visibleClassIds.contains(scope.classId()))

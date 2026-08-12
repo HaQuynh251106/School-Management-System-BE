@@ -8,6 +8,7 @@ import com.sse.app.identity.IdentityDtos.ImportPreview;
 import com.sse.app.identity.IdentityDtos.ImportPreviewRow;
 import com.sse.app.identity.IdentityDtos.ImportResult;
 import com.sse.app.identity.IdentityDtos.ImportRowError;
+import com.sse.app.academic.structure.StructureService;
 import org.apache.poi.ss.usermodel.*;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -42,13 +43,16 @@ public class UserImportService {
     private final UserService users;
     private final byte[] signingKey;
     private final AuditService audit;
+    private final StructureService structure;
 
     public UserImportService(UserService users,
                              @Value("${sse.jwt.secret}") String signingSecret,
-                             AuditService audit) {
+                             AuditService audit,
+                             StructureService structure) {
         this.users = users;
         this.signingKey = signingSecret.getBytes(StandardCharsets.UTF_8);
         this.audit = audit;
+        this.structure = structure;
     }
 
     public ImportPreview preview(MultipartFile file) {
@@ -126,7 +130,7 @@ public class UserImportService {
              ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             Sheet sheet = workbook.createSheet("Nguoi dung");
             String[] headers = {"Tên đăng nhập", "Họ tên", "Vai trò", "Email", "Số điện thoại",
-                    "Mã học sinh", "Mã giáo viên", "Ngày sinh", "Giới tính",
+                    "Mã học sinh", "Mã giáo viên", "Bộ môn giảng dạy", "Ngày sinh", "Giới tính",
                     "Địa chỉ", "Ngày nhập học", "Người giám hộ", "SĐT người giám hộ", "Tên đăng nhập liên kết"};
             Row header = sheet.createRow(0);
             CellStyle style = workbook.createCellStyle();
@@ -141,9 +145,24 @@ public class UserImportService {
             }
             Row example = sheet.createRow(1);
             String[] values = {"", "Nguyễn Văn A", "Học sinh", "a@example.edu.vn",
-                    "0900000000", "", "", "01/01/2010", "MALE", "TP. Hồ Chí Minh",
+                    "0900000000", "", "", "", "01/01/2010", "MALE", "TP. Hồ Chí Minh",
                     "05/09/2025", "Nguyễn Văn B", "0911111111", ""};
             for (int i = 0; i < values.length; i++) example.createCell(i).setCellValue(values[i]);
+
+            Sheet subjectSheet = workbook.createSheet("Danh muc bo mon");
+            Row subjectHeader = subjectSheet.createRow(0);
+            subjectHeader.createCell(0).setCellValue("Mã môn");
+            subjectHeader.createCell(1).setCellValue("Tên bộ môn dùng khi import");
+            subjectHeader.getCell(0).setCellStyle(style);
+            subjectHeader.getCell(1).setCellStyle(style);
+            int subjectRow = 1;
+            for (var subject : structure.listSubjects()) {
+                Row item = subjectSheet.createRow(subjectRow++);
+                item.createCell(0).setCellValue(subject.getCode());
+                item.createCell(1).setCellValue(subject.getName());
+            }
+            subjectSheet.setColumnWidth(0, 18 * 256);
+            subjectSheet.setColumnWidth(1, 32 * 256);
             workbook.write(output);
             return output.toByteArray();
         } catch (Exception e) {
@@ -209,10 +228,7 @@ public class UserImportService {
             if (!classCode.isBlank()) {
                 throw ApiException.forbidden("Import tài khoản không phân lớp học sinh; Giáo vụ thực hiện tại chức năng Phân lớp đầu cấp");
             }
-            String mainSubject = cell(row, h, "mainsubject", f);
-            if (!mainSubject.isBlank()) {
-                throw ApiException.forbidden("Import tài khoản không chuẩn hóa chuyên môn giáo viên; Giáo vụ thực hiện trong phân công giảng dạy");
-            }
+            String mainSubject = canonicalSubject(cell(row, h, "mainsubject", f), role);
 
             String email = emptyToNull(cell(row, h, "email", f));
             if (email != null && !email.matches("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")) {
@@ -237,7 +253,7 @@ public class UserImportService {
                     null, username, fullName, role,
                     email, emptyToNull(cell(row, h, "phone", f)), null,
                     teacherCode,
-                    null,
+                    mainSubject,
                     studentCode,
                     null,
                     null,
@@ -254,12 +270,13 @@ public class UserImportService {
             ImportPreviewRow preview = new ImportPreviewRow(
                     rowNumber, username, fullName, role,
                     "STUDENT".equals(role) ? "Chờ phân lớp" : "",
-                    linkedUsername, true, null
+                    mainSubject, linkedUsername, true, null
             );
             return new ParsedRow(preview, request, emptyToNull(linkedUsername));
         } catch (Exception e) {
             ImportPreviewRow preview = new ImportPreviewRow(
-                    rowNumber, username, fullName, roleText, classCode, linkedUsername, false, cleanMessage(e)
+                    rowNumber, username, fullName, roleText, classCode,
+                    cell(row, h, "mainsubject", f), linkedUsername, false, cleanMessage(e)
             );
             return new ParsedRow(preview, null, emptyToNull(linkedUsername));
         }
@@ -296,7 +313,7 @@ public class UserImportService {
                 out.add(row);
             } catch (Exception exception) {
                 ImportPreviewRow invalid = new ImportPreviewRow(row.preview().row(), row.preview().username(),
-                        row.preview().fullName(), row.preview().role(), row.preview().classCode(),
+                        row.preview().fullName(), row.preview().role(), row.preview().classCode(), row.preview().mainSubject(),
                         row.preview().linkedUsername(), false, cleanMessage(exception));
                 out.add(new ParsedRow(invalid, null, row.linkedUsername()));
             }
@@ -402,6 +419,9 @@ public class UserImportService {
         alias(out, "mahocsinh", "studentcode");
         alias(out, "magiaovien", "teachercode");
         alias(out, "monchinh", "mainsubject");
+        alias(out, "bomon", "mainsubject");
+        alias(out, "bomongiangday", "mainsubject");
+        alias(out, "monhocgiangday", "mainsubject");
         alias(out, "sodienthoai", "phone");
         alias(out, "ngaysinh", "dateofbirth");
         alias(out, "gioitinh", "gender");
@@ -453,6 +473,23 @@ public class UserImportService {
             case "parent", "phuhuynh" -> "PARENT";
             default -> throw ApiException.badRequest("Vai trò không hợp lệ: " + value);
         };
+    }
+
+    private String canonicalSubject(String value, String role) {
+        String requested = emptyToNull(value);
+        if (!"TEACHER".equals(role)) {
+            if (requested != null) throw ApiException.badRequest("Chỉ giáo viên được khai báo bộ môn giảng dạy");
+            return null;
+        }
+        if (requested == null) return null;
+        String normalized = normalizeHeader(requested);
+        return structure.listSubjects().stream()
+                .filter(subject -> normalizeHeader(subject.getCode()).equals(normalized)
+                        || normalizeHeader(subject.getName()).equals(normalized))
+                .findFirst()
+                .map(subject -> subject.getName())
+                .orElseThrow(() -> ApiException.badRequest(
+                        "Bộ môn không tồn tại: " + requested + ". Hãy dùng đúng mã hoặc tên môn trong Cơ cấu đào tạo"));
     }
 
     private LocalDate parseDate(String value) {

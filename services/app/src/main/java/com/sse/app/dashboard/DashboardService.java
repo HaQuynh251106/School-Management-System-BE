@@ -72,6 +72,44 @@ public class DashboardService {
                 select count(*) from exam_periods where academic_year_id=?
                 and status='DRAFT' and end_date >= current_date
                 """, academicYearId);
+        int workloadWarnings = semesterId.isBlank() ? 0 : integer("""
+                select count(*) from (
+                    select ta.teacher_id, sum(ta.weekly_periods) assigned,
+                           coalesce(max(tlr.max_weekly_periods),17) allowed
+                    from teaching_assignments ta
+                    left join teacher_load_registrations tlr
+                      on tlr.teacher_id=ta.teacher_id and tlr.semester_id=ta.semester_id
+                    where ta.semester_id=? and ta.status='ACTIVE'
+                    group by ta.teacher_id
+                ) workload where assigned > allowed
+                """, semesterId);
+        int pendingScheduleRestrictions = semesterId.isBlank() ? 0 : integer("""
+                select count(*) from teacher_schedule_restriction_requests
+                where semester_id=? and status in ('PENDING','NEEDS_INFO')
+                """, semesterId);
+        int pendingTimetableChanges = integer("""
+                select count(*) from timetable_change_requests
+                where status='PENDING'
+                """);
+        int timetableWarnings = semesterId.isBlank() ? 0 : integer("""
+                select count(*) from timetable_plans
+                where semester_id=? and (unscheduled_periods>0 or status='FAILED')
+                """, semesterId);
+        int timetableDrafts = semesterId.isBlank() ? 0 : integer("""
+                select count(*) from timetable_plans
+                where semester_id=? and status in ('DRAFT','READY','GENERATED')
+                """, semesterId);
+        int incompleteExams = academicYearId.isBlank() ? 0 : integer("""
+                select count(distinct ep.id) from exam_periods ep
+                where ep.academic_year_id=? and ep.status in ('DRAFT','CONFIRMED')
+                  and (not exists (select 1 from exam_schedules es where es.exam_period_id=ep.id)
+                    or exists (select 1 from exam_schedules es where es.exam_period_id=ep.id
+                               and not exists (select 1 from exam_rooms er where er.schedule_id=es.id)))
+                """, academicYearId);
+        int incompleteReportCards = academicYearId.isBlank() ? 0 : integer("""
+                select count(*) from report_cards
+                where academic_year_id=? and status not in ('PUBLISHED','LOCKED')
+                """, academicYearId);
         List<DashboardDtos.Metric> metrics = List.of(
                 metric("classes", "Lớp đang vận hành", classes, "NUMBER",
                         classesWithoutHomeroom == 0 ? "Tất cả lớp đã có chủ nhiệm" : classesWithoutHomeroom + " lớp thiếu chủ nhiệm", classesWithoutHomeroom > 0 ? "orange" : "blue"),
@@ -108,6 +146,20 @@ public class DashboardService {
                 "Kiểm tra các tiết chưa có khung giờ phù hợp.", "tiết", "WARNING", "E2");
         addWorkItem(workItems, draftExams, "draft-exams", "Kỳ thi đang ở bản nháp",
                 "Hoàn thiện lịch, phòng và phân công trước khi công bố.", "kỳ thi", "INFO", "E3");
+        addWorkItem(workItems, workloadWarnings, "teacher-workload", "Giáo viên vượt định mức",
+                "Cân bằng lại phân công hoặc kiểm tra quyết định giảm định mức, làm thêm giờ.", "giáo viên", "CRITICAL", "E2");
+        addWorkItem(workItems, pendingScheduleRestrictions, "pending-schedule-restrictions", "Đề nghị hạn chế lịch dạy chờ duyệt",
+                "Kiểm tra lý do, minh chứng và phạm vi thời gian trước khi đưa vào thuật toán xếp lịch.", "đề nghị", "WARNING", "E2");
+        addWorkItem(workItems, pendingTimetableChanges, "pending-timetable-changes", "Yêu cầu đổi tiết hoặc dạy thay chờ duyệt",
+                "Kiểm tra xung đột lớp, giáo viên và phòng trước khi áp dụng thay đổi.", "yêu cầu", "CRITICAL", "E2");
+        addWorkItem(workItems, timetableWarnings, "timetable-conflicts", "Phương án thời khóa biểu còn cảnh báo",
+                "Xử lý tiết chưa xếp hoặc phương án sinh tự động thất bại trước khi phát hành.", "phương án", "CRITICAL", "E2");
+        addWorkItem(workItems, timetableDrafts, "timetable-drafts", "Thời khóa biểu chưa phát hành",
+                "Kiểm tra phiên bản và phát hành lịch chính thức cho người dùng.", "phiên bản", "WARNING", "E2");
+        addWorkItem(workItems, incompleteExams, "exam-incomplete", "Kỳ thi chưa đủ điều kiện tổ chức",
+                "Hoàn thiện lịch thi, phòng thi và phân công nhân sự.", "kỳ thi", "WARNING", "E3");
+        addWorkItem(workItems, incompleteReportCards, "year-end-records", "Hồ sơ tổng kết chưa hoàn tất",
+                "Kiểm tra đủ điểm, rèn luyện và kết quả cuối năm trước khi chuyển năm.", "hồ sơ", "INFO", "E4");
         addHealthyWorkItem(workItems, "E2");
         return new DashboardDtos.Response(metrics, charts,
                 roleOverview("ACADEMIC_STAFF", academicCalendarItems(), workItems));
@@ -128,6 +180,11 @@ public class DashboardService {
                 select count(*) from invoices i join fee_periods fp on fp.id=i.fee_period_id
                 where fp.academic_year_id=? and i.status='OVERDUE'
                 """, academicYearId);
+        double overdueAmount = academicYearId.isBlank() ? 0 : number("""
+                select coalesce(sum(i.total_amount-i.paid_amount),0)
+                from invoices i join fee_periods fp on fp.id=i.fee_period_id
+                where fp.academic_year_id=? and i.status='OVERDUE'
+                """, academicYearId);
         int unpaidInvoices = academicYearId.isBlank() ? 0 : integer("""
                 select count(*) from invoices i join fee_periods fp on fp.id=i.fee_period_id
                 where fp.academic_year_id=? and i.status in ('PENDING','PARTIAL','OVERDUE')
@@ -140,11 +197,26 @@ public class DashboardService {
                 join fee_periods fp on fp.id=i.fee_period_id
                 where fp.academic_year_id=? and p.status in ('PENDING','PROCESSING')
                 """, academicYearId);
+        int failedPayments = academicYearId.isBlank() ? 0 : integer("""
+                select count(*) from payments p join invoices i on i.id=p.invoice_id
+                join fee_periods fp on fp.id=i.fee_period_id
+                where fp.academic_year_id=? and p.status in ('FAILED','CANCELLED','EXPIRED')
+                """, academicYearId);
+        int pendingReconciliation = integer("""
+                select count(*) from reconciliation_candidates
+                where status in ('PENDING','REVIEW_REQUIRED','UNMATCHED')
+                """);
+        int failedReceiptEmails = integer("""
+                select count(*) from notification_delivery_logs
+                where channel='EMAIL' and status in ('FAILED','DEAD')
+                  and resolved_at is null
+                """);
+        double collectionRate = total == 0 ? 0 : Math.min(100, 100.0 * collected / total);
         List<DashboardDtos.Metric> metrics = List.of(
                 metric("invoices", "Tổng phải thu", total, "CURRENCY", "Giá trị hóa đơn đã phát hành", "blue"),
-                metric("payments", "Đã thu", collected, "CURRENCY", "Tổng tiền đã ghi nhận", "green"),
+                metric("payments", "Đã thu", collected, "CURRENCY", String.format("%.1f%% tổng phải thu", collectionRate), "green"),
                 metric("alerts", "Còn phải thu", debt, "CURRENCY", "Công nợ toàn trường", debt > 0 ? "orange" : "green"),
-                metric("overdue", "Hóa đơn quá hạn", overdue, "NUMBER", "Cần phối hợp nhắc phụ huynh", overdue > 0 ? "red" : "green")
+                metric("overdue", "Số tiền quá hạn", overdueAmount, "CURRENCY", (int) overdue + " hóa đơn cần xử lý", overdue > 0 ? "red" : "green")
         );
         List<DashboardDtos.Chart> charts = List.of(
                 chart("Trạng thái hóa đơn", "Hóa đơn trong năm học hiện hành", "BAR", " hóa đơn",
@@ -155,7 +227,7 @@ public class DashboardService {
                                 join fee_periods fp on fp.id=i.fee_period_id
                                 where fp.academic_year_id=? group by i.status order by metric_value desc
                                 """, academicYearId)),
-                chart("Công nợ theo lớp", "Các lớp còn phải thu nhiều nhất", "COLUMN", " đ",
+                chart("Công nợ theo lớp", "Các lớp còn phải thu nhiều nhất", "COLUMN", " ₫",
                         academicYearId.isBlank() ? List.of() : rows("""
                                 select coalesce(i.class_code,'Chưa có lớp') label,
                                        coalesce(sum(i.total_amount-i.paid_amount),0) metric_value
@@ -174,6 +246,12 @@ public class DashboardService {
                 "Kiểm tra nội dung, thời hạn và đối tượng áp dụng.", "đợt thu", "INFO", "F1");
         addWorkItem(workItems, pendingPayments, "pending-payments", "Giao dịch chờ đối soát",
                 "Xác minh giao dịch chưa có kết quả cuối cùng.", "giao dịch", "WARNING", "F1");
+        addWorkItem(workItems, failedPayments, "failed-payments", "Giao dịch thanh toán thất bại",
+                "Kiểm tra lỗi thanh toán và hướng dẫn phụ huynh thực hiện lại.", "giao dịch", "CRITICAL", "F1");
+        addWorkItem(workItems, pendingReconciliation, "reconciliation", "Sao kê VietQR chưa khớp",
+                "Đối chiếu mã giao dịch, số tiền và hóa đơn tương ứng.", "giao dịch", "WARNING", "F1");
+        addWorkItem(workItems, failedReceiptEmails, "receipt-email", "Email biên nhận gửi thất bại",
+                "Kiểm tra địa chỉ email và gửi lại biên nhận sau khi khắc phục.", "email", "WARNING", "F1");
         addHealthyWorkItem(workItems, "F1");
         return new DashboardDtos.Response(metrics, charts,
                 roleOverview("ACCOUNTANT", accountantCalendarItems(), workItems));
@@ -217,6 +295,12 @@ public class DashboardService {
         int excused = integer("select count(*) from attendance_records where date = current_date and status = 'ABSENT_EXCUSED'");
         int unexcused = integer("select count(*) from attendance_records where date = current_date and status = 'ABSENT_UNEXCUSED'");
         int late = integer("select count(*) from attendance_records where date = current_date and status = 'LATE'");
+        String[] todayAliases = dayAliases(LocalDate.now().getDayOfWeek());
+        int scheduledToday = integer("""
+                select count(*) from timetable_slots
+                where upper(day_of_week) in (?, ?)
+                  and semester_id=(select id from semesters where status='ACTIVE' order by start_date desc limit 1)
+                """, todayAliases[0], todayAliases[1]);
 
         String academicYear = text("""
                 select code from academic_years
@@ -268,36 +352,28 @@ public class DashboardService {
                 """, activeAcademicYearId);
 
         List<DashboardDtos.WorkItem> workItems = new ArrayList<>();
-        addWorkItem(workItems, unassignedStudents, "unassigned-students", "Học sinh chưa được xếp lớp",
-                "Hoàn thiện lớp học trước khi phát hành thời khóa biểu.", "học sinh", "CRITICAL", "A1S");
-        addWorkItem(workItems, classesWithoutHomeroom, "missing-homeroom", "Lớp chưa có giáo viên chủ nhiệm",
-                "Yêu cầu Giáo vụ hoàn tất phân công chủ nhiệm.", "lớp", "WARNING", "A8");
         addWorkItem(workItems, notReadyAccounts, "account-readiness", "Tài khoản chưa sẵn sàng",
                 "Rà soát kích hoạt, email, yêu cầu đổi mật khẩu và trạng thái khóa.", "tài khoản", "CRITICAL", "A1L");
-        int missingPeriods = Math.max(0, requiredPeriods - scheduledPeriods);
-        addWorkItem(workItems, missingPeriods, "timetable-incomplete", "Thời khóa biểu chưa hoàn tất",
-                "Theo dõi Giáo vụ xử lý các tiết chưa được xếp.", "tiết", "WARNING", "A8");
-        addWorkItem(workItems, draftExams, "draft-exams", "Kỳ thi chưa được phát hành",
-                "Kiểm tra tiến độ chuẩn bị kỳ thi với bộ phận Giáo vụ.", "kỳ thi", "INFO", "A8");
         if (workItems.isEmpty()) {
             workItems.add(new DashboardDtos.WorkItem("healthy", "Không có việc tồn đọng quan trọng",
                     "Các bộ phận đang vận hành trong ngưỡng kiểm soát.", 0, "", "SUCCESS", "A8"));
         }
         List<DashboardDtos.CalendarItem> calendarItems = adminCalendarItems();
 
-        int openTasks = workItems.stream()
+        int openTasks = (int) workItems.stream()
                 .filter(item -> !"SUCCESS".equals(item.severity()))
-                .mapToInt(item -> (int) item.value())
-                .sum();
+                .count();
+        int totalAccounts = readyAccounts + notReadyAccounts;
+        double accountReadiness = totalAccounts == 0 ? 0 : 100.0 * readyAccounts / totalAccounts;
 
         List<DashboardDtos.Metric> metrics = List.of(
                 metric("students", "Học sinh đang học", activeStudents, "NUMBER",
                         unassignedStudents == 0 ? "Tất cả đã được xếp lớp" : unassignedStudents + " học sinh chưa có lớp", unassignedStudents > 0 ? "orange" : "blue"),
-                metric("accounts", "Tài khoản sẵn sàng", readyAccounts, "NUMBER",
-                        notReadyAccounts == 0 ? "Toàn bộ tài khoản có thể sử dụng" : notReadyAccounts + " tài khoản cần xử lý", notReadyAccounts > 0 ? "orange" : "green"),
+                metric("accounts", "Tỷ lệ tài khoản sẵn sàng", accountReadiness, "PERCENT",
+                        readyAccounts + "/" + totalAccounts + " tài khoản có thể sử dụng", notReadyAccounts > 0 ? "orange" : "green"),
                 metric("attendance", "Có mặt hôm nay", attendance,
                         attendanceRecords == 0 ? "PERCENT_OR_EMPTY" : "PERCENT",
-                        attendanceRecords == 0 ? "Chưa phát sinh dữ liệu điểm danh" : present + "/" + attendanceRecords + " lượt ghi nhận có mặt", "green"),
+                        attendanceRecords == 0 ? (scheduledToday == 0 ? "Hôm nay không có lịch học" : "Chưa phát sinh dữ liệu điểm danh") : present + "/" + attendanceRecords + " lượt ghi nhận có mặt", "green"),
                 metric("tasks", "Việc cần xử lý", openTasks, "NUMBER",
                         openTasks == 0 ? "Không có tồn đọng quan trọng" : workItems.size() + " nhóm việc đang mở",
                         openTasks > 0 ? "orange" : "green")
@@ -310,18 +386,7 @@ public class DashboardService {
                                   and u.role='STUDENT' and u.status='ACTIVE'
                                 where c.academic_year_id=? and c.status='ACTIVE'
                                 group by c.grade_level order by c.grade_level
-                                """, activeAcademicYearId)),
-                chart("Mức độ sẵn sàng tài khoản", "Mỗi tài khoản chỉ nằm trong một trạng thái ưu tiên", "BAR", " tài khoản", rows("""
-                        select case
-                                 when status = 'LOCKED' then 'Đã khóa'
-                                 when status <> 'ACTIVE' then 'Ngừng hoạt động'
-                                 when email is null or trim(email) = '' then 'Thiếu email'
-                                 when coalesce(activation_status, 'ACTIVE') <> 'ACTIVE' then 'Chờ kích hoạt'
-                                 when password_change_required = true then 'Cần đổi mật khẩu'
-                                 else 'Sẵn sàng'
-                               end label, count(*) metric_value
-                        from users group by label order by metric_value desc
-                        """))
+                                """, activeAcademicYearId))
         );
         DashboardDtos.AdminOverview overview = new DashboardDtos.AdminOverview(
                 academicYear, academicYearStatus, semester, semesterStatus, Instant.now().toString(),
@@ -758,36 +823,63 @@ public class DashboardService {
     }
 
     private List<DashboardDtos.CalendarItem> academicCalendarItems() {
-        LocalDate from = LocalDate.now().withDayOfMonth(1);
-        LocalDate to = from.plusMonths(4).minusDays(1);
+        LocalDate from = dashboardCalendarStart();
+        LocalDate to = dashboardCalendarEnd();
         List<DashboardDtos.CalendarItem> items = new ArrayList<>();
+        items.addAll(operationTaskCalendarItems("ACADEMIC_STAFF", null, "E7", from, to));
         items.addAll(calendarRows("""
-                select id, start_date event_date, name title, code detail
+                select es.id, es.exam_date event_date,
+                       concat(es.subject_name, ' · ', ep.name) title,
+                       concat(es.start_time, ' · ', es.duration_minutes, ' phút') detail
+                from exam_schedules es join exam_periods ep on ep.id=es.exam_period_id
+                where es.exam_date between ? and ? and ep.status in ('DRAFT','CONFIRMED')
+                """, "EXAM", "E3", from, to));
+        items.addAll(calendarRows("""
+                select id, start_date event_date, concat('Bắt đầu ', name) title, code detail
                 from exam_periods where start_date between ? and ? and status in ('DRAFT','CONFIRMED')
                 """, "EXAM", "E3", from, to));
         items.addAll(calendarRows("""
-                select id, start_date event_date, name title, status detail
+                select id, start_date event_date, concat('Bắt đầu ', name) title, status detail
                 from semesters where start_date between ? and ?
                 """, "SEMESTER", "E1", from, to));
+        items.addAll(calendarRows("""
+                select id, end_date event_date, concat('Kết thúc ', name) title, status detail
+                from semesters where end_date between ? and ?
+                """, "SEMESTER", "E4", from, to));
         items.addAll(calendarRows("""
                 select id, date event_date, name title, description detail
                 from school_holidays where date between ? and ?
                 """, "HOLIDAY", "E1", from, to));
-        return sortedCalendarItems(items, 30);
+        items.addAll(calendarRows("""
+                select id, occurrence_date event_date, 'Yêu cầu đổi tiết/dạy thay' title,
+                       concat(request_type, ' · ', status) detail
+                from timetable_change_requests
+                where occurrence_date between ? and ? and status in ('PENDING','APPROVED')
+                """, "SCHEDULE_CHANGE", "E2", from, to));
+        return sortedCalendarItems(items, 500);
     }
 
     private List<DashboardDtos.CalendarItem> accountantCalendarItems() {
-        LocalDate from = LocalDate.now().withDayOfMonth(1);
-        LocalDate to = from.plusMonths(4).minusDays(1);
-        return sortedCalendarItems(calendarRows("""
+        LocalDate from = dashboardCalendarStart();
+        LocalDate to = dashboardCalendarEnd();
+        List<DashboardDtos.CalendarItem> items = new ArrayList<>();
+        items.addAll(operationTaskCalendarItems("ACCOUNTANT", null, "F2", from, to));
+        items.addAll(calendarRows("""
                 select id, due_date event_date, name title, code detail
                 from fee_periods where due_date between ? and ? and status <> 'DRAFT'
-                """, "FEE", "F1", from, to), 30);
+                """, "FEE", "F1", from, to));
+        items.addAll(calendarRows("""
+                select id, cast(created_at as date) event_date, concat('Mở đợt thu · ', name) title,
+                       concat(code, ' · ', status) detail
+                from fee_periods
+                where cast(created_at as date) between ? and ? and status in ('OPEN','PUBLISHED','CLOSED')
+                """, "COLLECTION", "F1", from, to));
+        return sortedCalendarItems(items, 500);
     }
 
     private List<DashboardDtos.CalendarItem> teacherCalendarItems(String teacherId) {
-        LocalDate today = LocalDate.now();
-        LocalDate to = today.plusDays(35);
+        LocalDate from = dashboardCalendarStart();
+        LocalDate to = dashboardCalendarEnd();
         String semesterId = activeSemesterId();
         List<DashboardDtos.CalendarItem> items = new ArrayList<>();
         if (!semesterId.isBlank()) jdbc.query("""
@@ -798,7 +890,7 @@ public class DashboardService {
                 """, rs -> {
             DayOfWeek day = parseDayOfWeek(rs.getString("day_of_week"));
             if (day == null) return;
-            LocalDate date = today.with(TemporalAdjusters.nextOrSame(day));
+            LocalDate date = from.with(TemporalAdjusters.nextOrSame(day));
             while (!date.isAfter(to)) {
                 String classCode = rs.getString("class_code") == null ? "Lớp học" : rs.getString("class_code");
                 String room = rs.getString("room_code") == null ? "Chưa có phòng" : "Phòng " + rs.getString("room_code");
@@ -817,13 +909,38 @@ public class DashboardService {
                        coalesce(subject_name, 'Bài tập') detail
                 from assignments where teacher_id=? and deadline between ? and ?
                 and status='PUBLISHED'
-                """, "ASSIGNMENT", "B5", teacherId, today, to));
-        return sortedCalendarItems(items, 45);
+                """, "ASSIGNMENT", "B5", teacherId, from, to));
+        items.addAll(calendarRows("""
+                select concat(er.id, '-proctor') id, es.exam_date event_date,
+                       concat('Coi thi · ', es.subject_name) title,
+                       concat(es.start_time, ' · Phòng ', er.room_code) detail
+                from exam_rooms er
+                join exam_schedules es on es.id=er.schedule_id
+                join exam_periods ep on ep.id=es.exam_period_id
+                where (er.proctor_one_id=? or er.proctor_two_id=?)
+                  and es.exam_date between ? and ? and ep.status='CONFIRMED'
+                """, "EXAM_DUTY", "B12", teacherId, teacherId, from, to));
+        items.addAll(calendarRows("""
+                select concat(ega.id, '-grading') id, ep.end_date + 7 event_date,
+                       concat('Mở nhập điểm thi · ', ega.subject_name) title,
+                       concat('Lớp ', ega.class_code, ' · ', ep.name) detail
+                from exam_grading_assignments ega
+                join exam_periods ep on ep.id=ega.exam_period_id
+                where ega.teacher_id=? and ep.end_date + 7 between ? and ?
+                  and ep.status in ('CONFIRMED','COMPLETED')
+                """, "GRADING_DUTY", "B12", teacherId, from, to));
+        items.addAll(operationTaskCalendarItems("TEACHER", teacherId, "B17", from, to));
+        // A teacher can have many lessons plus assignment deadlines in the 5-week window.
+        // A small global limit used to truncate the end of the week (typically Thursday/Friday).
+        // Keep the complete operational window; the client is responsible for compact display.
+        return sortedCalendarItems(items, 1000);
     }
 
     private List<DashboardDtos.CalendarItem> sortedCalendarItems(List<DashboardDtos.CalendarItem> items, int limit) {
         return items.stream()
                 .sorted(Comparator.comparing(DashboardDtos.CalendarItem::date)
+                        .thenComparing(DashboardDtos.CalendarItem::detail,
+                                Comparator.nullsLast(String::compareTo))
                         .thenComparing(DashboardDtos.CalendarItem::title))
                 .limit(limit)
                 .toList();
@@ -857,30 +974,73 @@ public class DashboardService {
     }
 
     private List<DashboardDtos.CalendarItem> adminCalendarItems() {
-        LocalDate from = LocalDate.now().withDayOfMonth(1);
-        LocalDate to = from.plusMonths(4).minusDays(1);
+        LocalDate from = dashboardCalendarStart();
+        LocalDate to = dashboardCalendarEnd();
         List<DashboardDtos.CalendarItem> items = new ArrayList<>();
+        items.addAll(operationTaskCalendarItems("ADMIN", null, "A10", from, to));
         items.addAll(calendarRows("""
-                select id, start_date event_date, name title, code detail
-                from exam_periods where start_date between ? and ? and status in ('DRAFT','CONFIRMED')
-                """, "EXAM", "A8", from, to));
-        items.addAll(calendarRows("""
-                select id, due_date event_date, name title, code detail
-                from fee_periods where due_date between ? and ? and status <> 'DRAFT'
-                """, "FEE", "A8", from, to));
-        items.addAll(calendarRows("""
-                select id, start_date event_date, name title, status detail
-                from semesters where start_date between ? and ?
-                """, "SEMESTER", "A8", from, to));
+                select id, cast(scheduled_at as date) event_date, title,
+                       coalesce(category,'Thông báo toàn trường') detail
+                from announcements
+                where cast(scheduled_at as date) between ? and ?
+                  and audience in ('ALL','SCHOOL')
+                """, "ANNOUNCEMENT", "A9", from, to));
         items.addAll(calendarRows("""
                 select id, date event_date, name title, description detail
                 from school_holidays where date between ? and ?
                 """, "HOLIDAY", "A9", from, to));
+        items.addAll(calendarRows("""
+                select id, start_date event_date, concat('Kỳ thi · ', name) title, code detail
+                from exam_periods
+                where start_date between ? and ? and status='CONFIRMED'
+                """, "EXAM", "A8", from, to));
+        items.addAll(calendarRows("""
+                select id, due_date event_date, concat('Hạn thu · ', name) title, code detail
+                from fee_periods
+                where due_date between ? and ? and status in ('OPEN','PUBLISHED')
+                """, "FEE", "A8", from, to));
         return items.stream()
                 .sorted(Comparator.comparing(DashboardDtos.CalendarItem::date)
                         .thenComparing(DashboardDtos.CalendarItem::title))
-                .limit(20)
+                .limit(500)
                 .toList();
+    }
+
+    private LocalDate dashboardCalendarStart() {
+        return academicYearBoundary("start_date", LocalDate.now().withDayOfMonth(1));
+    }
+
+    private LocalDate dashboardCalendarEnd() {
+        return academicYearBoundary("end_date", LocalDate.now().plusMonths(10).withDayOfMonth(1).minusDays(1));
+    }
+
+    private LocalDate academicYearBoundary(String column, LocalDate fallback) {
+        String value = text("select cast(" + column + " as varchar) from academic_years "
+                + "order by case when status='ACTIVE' then 0 else 1 end, start_date desc limit 1");
+        if (value.isBlank()) return fallback;
+        try {
+            return LocalDate.parse(value);
+        } catch (RuntimeException ignored) {
+            return fallback;
+        }
+    }
+
+    private List<DashboardDtos.CalendarItem> operationTaskCalendarItems(
+            String role, String assignedTo, String pageCode, LocalDate from, LocalDate to) {
+        String assigneeClause = assignedTo == null
+                ? "assigned_role=?"
+                : "assigned_role=? and assigned_to=?";
+        String sql = """
+                select id, due_date event_date, title,
+                       concat(coalesce(priority, 'NORMAL'), ' · ', coalesce(module, 'Công việc')) detail
+                from operation_tasks
+                where %s and due_date between ? and ?
+                  and status not in ('COMPLETED','CANCELLED','REJECTED')
+                  and (snoozed_until is null or snoozed_until <= current_timestamp)
+                """.formatted(assigneeClause);
+        return assignedTo == null
+                ? calendarRows(sql, "TASK", pageCode, role, from, to)
+                : calendarRows(sql, "TASK", pageCode, role, assignedTo, from, to);
     }
 
     private List<DashboardDtos.CalendarItem> calendarRows(String sql, String type, String pageCode, Object... args) {
