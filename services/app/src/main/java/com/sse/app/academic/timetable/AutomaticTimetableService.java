@@ -1075,7 +1075,7 @@ public class AutomaticTimetableService {
 
     @Transactional
     public TimetableSchedule publish(String scheduleId, String actorId) {
-        TimetableSchedule schedule = requireDraft(scheduleId);
+        TimetableSchedule schedule = requireDraftForUpdate(scheduleId);
         ScheduleValidation validation = validate(scheduleId);
         if (!validation.valid()) {
             throw ApiException.conflict("Bản lịch còn " + validation.errorCount()
@@ -1142,6 +1142,15 @@ public class AutomaticTimetableService {
         TimetableSchedule schedule = getSchedule(id);
         if (!"DRAFT".equals(schedule.getStatus())) {
             throw ApiException.conflict("Chỉ bản nháp mới được chỉnh sửa hoặc phát hành");
+        }
+        return schedule;
+    }
+
+    private TimetableSchedule requireDraftForUpdate(String id) {
+        TimetableSchedule schedule = schedules.findByIdForUpdate(id)
+                .orElseThrow(() -> ApiException.notFound("Bản thời khóa biểu"));
+        if (!"DRAFT".equals(schedule.getStatus())) {
+            throw ApiException.conflict("Bản lịch đã được xử lý bởi một yêu cầu phát hành khác");
         }
         return schedule;
     }

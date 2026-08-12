@@ -28,10 +28,11 @@ class ChatServiceTest {
     @Mock UserService users;
     @Mock StructureService structure;
     @Mock TeachingAssignmentService teachingAssignments;
+    @Mock ChatRealtimeService realtime;
     ChatService service;
 
     @BeforeEach
-    void setUp() { service = new ChatService(repo, users, structure, teachingAssignments); }
+    void setUp() { service = new ChatService(repo, users, structure, teachingAssignments, realtime); }
 
     @Test
     void parentCanOnlyContactChildHomeroomTeacher() {
@@ -45,6 +46,7 @@ class ChatServiceTest {
         ChatMessage sent = service.send(parent, "Phụ huynh", "teacher-1", "  Xin chào cô  ");
 
         assertEquals("Xin chào cô", sent.getBody());
+        verify(realtime).publishMessage(sent);
         assertThrows(ApiException.class,
                 () -> service.send(parent, "Phụ huynh", "teacher-2", "Sai phạm vi"));
     }
@@ -66,6 +68,7 @@ class ChatServiceTest {
 
         assertTrue(unread.isReadFlag());
         verify(repo).saveAll(List.of(unread));
+        verify(realtime).publishRead("parent-1", "teacher-1", List.of("msg-1"));
     }
 
     private UserDto user(String id, String classId) {

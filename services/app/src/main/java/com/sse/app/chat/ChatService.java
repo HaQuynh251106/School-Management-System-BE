@@ -22,14 +22,17 @@ public class ChatService {
     private final UserService users;
     private final StructureService structure;
     private final TeachingAssignmentService teachingAssignments;
+    private final ChatRealtimeService realtime;
 
     public ChatService(ChatRepository repo, UserService users,
                        StructureService structure,
-                       TeachingAssignmentService teachingAssignments) {
+                       TeachingAssignmentService teachingAssignments,
+                       ChatRealtimeService realtime) {
         this.repo = repo;
         this.users = users;
         this.structure = structure;
         this.teachingAssignments = teachingAssignments;
+        this.realtime = realtime;
     }
 
     private List<ChatMessage> involving(String meId) {
@@ -43,6 +46,8 @@ public class ChatService {
         List<ChatMessage> unread = repo.findBySenderIdAndRecipientIdAndReadFlagIsFalse(otherId, me.id());
         unread.forEach(message -> message.setReadFlag(true));
         repo.saveAll(unread);
+        realtime.publishRead(me.id(), otherId,
+                unread.stream().map(ChatMessage::getId).toList());
         return involving(me.id()).stream()
                 .filter(m -> (me.id().equals(m.getSenderId()) && otherId.equals(m.getRecipientId()))
                         || (otherId.equals(m.getSenderId()) && me.id().equals(m.getRecipientId())))
@@ -81,10 +86,12 @@ public class ChatService {
         String normalized = body == null ? "" : body.trim();
         if (normalized.isBlank()) throw ApiException.badRequest("Nội dung tin nhắn không được để trống");
         if (normalized.length() > 2000) throw ApiException.badRequest("Tin nhắn không được vượt quá 2000 ký tự");
-        return repo.save(ChatMessage.builder()
+        ChatMessage saved = repo.save(ChatMessage.builder()
                 .id(Ids.gen("msg")).senderId(me.id()).senderName(meName)
                 .recipientId(toId).recipientName(users.fullNameOf(toId))
                 .body(normalized).readFlag(false).createdAt(Instant.now()).build());
+        realtime.publishMessage(saved);
+        return saved;
     }
 
     public List<UserDto> contacts(CurrentUser me) {
@@ -93,6 +100,12 @@ public class ChatService {
         return ids.stream().map(users::dtoById)
                 .sorted(Comparator.comparing(UserDto::fullName, Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER)))
                 .toList();
+    }
+
+    public Set<String> contactIdsFor(CurrentUser me) {
+        LinkedHashSet<String> ids = contactIds(me);
+        ids.remove(me.id());
+        return ids;
     }
 
     private void assertCanContact(CurrentUser me, String otherId) {

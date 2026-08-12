@@ -72,12 +72,18 @@ springdoc:
     operations-sorter: method
 
 sse:
+  web:
+    base-url: ${SSE_WEB_BASE_URL:http://127.0.0.1:5173}
   audit:
     mongo:
       enabled: ${SSE_AUDIT_MONGO_ENABLED:false}
       uri: ${SSE_AUDIT_MONGO_URI:mongodb://sse:sse_dev@localhost:27017/?authSource=admin}
       database: ${SSE_AUDIT_MONGO_DATABASE:sse_audit}
       collection: ${SSE_AUDIT_MONGO_COLLECTION:audit_logs}
+      retention-days: ${SSE_AUDIT_MONGO_RETENTION_DAYS:365}
+      connect-timeout-ms: ${SSE_AUDIT_MONGO_CONNECT_TIMEOUT_MS:2000}
+      retry-cooldown-ms: ${SSE_AUDIT_MONGO_RETRY_COOLDOWN_MS:30000}
+      sync-delay-ms: ${SSE_AUDIT_MONGO_SYNC_DELAY_MS:60000}
   jwt:
     # Đổi secret khi deploy. Tối thiểu 32 bytes cho HS256.
     secret: ${SSE_JWT_SECRET:dev-secret-do-not-use-in-prod-change-me-please-0123456789}
@@ -100,6 +106,7 @@ sse:
   notifications:
     worker:
       enabled: ${SSE_NOTIFICATION_WORKER_ENABLED:true}
+      concurrency: ${SSE_NOTIFICATION_WORKER_CONCURRENCY:4}
     provider-mode: ${SSE_NOTIFICATION_PROVIDER_MODE:mock}
     max-attempts: ${SSE_NOTIFICATION_MAX_ATTEMPTS:3}
     sendgrid:
@@ -107,7 +114,9 @@ sse:
       from-email: ${SSE_SENDGRID_FROM_EMAIL:no-reply@sse.local}
     fcm:
       access-token: ${SSE_FCM_ACCESS_TOKEN:}
-      send-url: ${SSE_FCM_SEND_URL:https://fcm.googleapis.com/v1/projects/PROJECT_ID/messages:send}
+      project-id: ${SSE_FCM_PROJECT_ID:}
+      service-account-file: ${SSE_FCM_SERVICE_ACCOUNT_FILE:${GOOGLE_APPLICATION_CREDENTIALS:}}
+      send-url: ${SSE_FCM_SEND_URL:}
   payment:
     public-base-url: ${SSE_PAYMENT_PUBLIC_BASE_URL:http://127.0.0.1:4000}
     sandbox-secret: ${SSE_PAYMENT_SANDBOX_SECRET:dev-payment-secret-change-me}

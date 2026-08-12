@@ -104,10 +104,11 @@ class NotificationServiceTest {
     void financeUnreadCountAndReadAllUseOnlyFinanceTypes() {
         Notification invoice = Notification.builder().id("notification-1").recipientId("parent-1")
                 .type("INVOICE").read(false).build();
-        when(notifications.countByRecipientIdAndReadIsFalseAndTypeIn("parent-1", List.of("INVOICE", "PAYMENT")))
+        when(notifications.countByRecipientIdAndChannelAndReadIsFalseAndTypeIn(
+                "parent-1", "IN_APP", List.of("INVOICE", "PAYMENT")))
                 .thenReturn(3L);
-        when(notifications.findByRecipientIdAndReadIsFalseAndTypeInOrderByCreatedAtDesc(
-                "parent-1", List.of("INVOICE", "PAYMENT"))).thenReturn(List.of(invoice));
+        when(notifications.findByRecipientIdAndChannelAndReadIsFalseAndTypeInOrderByCreatedAtDesc(
+                "parent-1", "IN_APP", List.of("INVOICE", "PAYMENT"))).thenReturn(List.of(invoice));
 
         assertEquals(3L, service.financeUnreadCount("parent-1"));
         service.markAllFinanceRead("parent-1");
@@ -127,6 +128,30 @@ class NotificationServiceTest {
                 "GRADE", "grade-1");
 
         verify(notifications, never()).save(any());
+    }
+
+    @Test
+    void disabledInAppDoesNotDisableEnabledEmailChannel() {
+        when(preferences.findByUserIdAndNotificationTypeAndChannel(
+                "student-1", "GRADE", "IN_APP"))
+                .thenReturn(Optional.of(UserNotificationPreference.builder().enabled(false).build()));
+        when(preferences.findByUserIdAndNotificationTypeAndChannel(
+                "student-1", "GRADE", "EMAIL"))
+                .thenReturn(Optional.of(UserNotificationPreference.builder().enabled(true).build()));
+
+        service.notifyUser("student-1", "GRADE", "Có điểm", "9.0",
+                "GRADE", "grade-1");
+
+        verify(notifications, never()).save(any());
+        verify(channelDispatcher).dispatch(
+                org.mockito.ArgumentMatchers.eq("student-1"),
+                org.mockito.ArgumentMatchers.eq("GRADE"),
+                org.mockito.ArgumentMatchers.eq("EMAIL"),
+                org.mockito.ArgumentMatchers.eq("Có điểm"),
+                org.mockito.ArgumentMatchers.eq("9.0"),
+                org.mockito.ArgumentMatchers.eq("GRADE"),
+                org.mockito.ArgumentMatchers.eq("grade-1"),
+                any(), any());
     }
 
     @Test
@@ -229,5 +254,25 @@ class NotificationServiceTest {
         assertEquals(2L, summary.failed());
         assertEquals(20.0, summary.failureRatePercent());
         assertEquals(10L, summary.notificationsByChannel().get("IN_APP"));
+    }
+
+    @Test
+    void passwordResetAlwaysDispatchesEmailWithResetLink() {
+        stubDeliverySaves();
+        service.handleDomainEvent(DomainEvent.of(
+                "identity.password.reset_requested", "user-1", "user", "user-1",
+                Map.of("username", "parent.one",
+                        "resetUrl", "http://127.0.0.1:5173/?token=one-time-token")));
+
+        verify(channelDispatcher).dispatch(
+                org.mockito.ArgumentMatchers.eq("user-1"),
+                org.mockito.ArgumentMatchers.eq("PASSWORD_RESET"),
+                org.mockito.ArgumentMatchers.eq("EMAIL"),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.contains("one-time-token"),
+                org.mockito.ArgumentMatchers.eq("PASSWORD_RESET"),
+                org.mockito.ArgumentMatchers.eq("user-1"),
+                org.mockito.ArgumentMatchers.contains("one-time-token"),
+                org.mockito.ArgumentMatchers.eq("SECURITY"));
     }
 }

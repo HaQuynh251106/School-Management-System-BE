@@ -10,6 +10,9 @@ import java.time.Duration;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.ArrayList;
+import java.util.Map;
+import java.util.HashMap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -143,6 +146,94 @@ class AutoTimetableSolverTest {
 
         assertNotNull(solved.getScore());
         assertEquals(0, solved.getScore().hardScore());
+    }
+
+    @Test
+    void schedulesThirtyClassesAcrossThreeGradesTwoShiftsAndSpecializedRooms() {
+        List<AutoTimeslot> timeslots = new ArrayList<>();
+        for (String day : List.of("TUE", "WED", "THU", "FRI", "SAT")) {
+            timeslots.add(new AutoTimeslot(day + "-1", day, 1, "07:00", "07:45"));
+            timeslots.add(new AutoTimeslot(day + "-6", day, 6, "13:30", "14:15"));
+        }
+
+        List<AutoRoom> rooms = new ArrayList<>();
+        Map<String, AutoRoom> homeRooms = new HashMap<>();
+        for (int grade : List.of(10, 11, 12)) {
+            for (int classNo = 1; classNo <= 10; classNo++) {
+                String classId = grade + "A" + classNo;
+                AutoRoom room = new AutoRoom("home-" + classId, "P-" + classId, "GENERAL", 45);
+                rooms.add(room);
+                homeRooms.put(classId, room);
+            }
+        }
+        List<AutoRoom> laboratories = new ArrayList<>();
+        for (int index = 1; index <= 5; index++) {
+            AutoRoom room = new AutoRoom("lab-" + index, "LAB" + index, "LAB", 40);
+            rooms.add(room);
+            laboratories.add(room);
+        }
+
+        List<AutoLesson> lessons = new ArrayList<>();
+        for (int grade : List.of(10, 11, 12)) {
+            for (int classNo = 1; classNo <= 10; classNo++) {
+                String classId = grade + "A" + classNo;
+                boolean afternoon = grade == 10 || (grade == 11 && classNo <= 5);
+                int shiftStart = afternoon ? 6 : 1;
+                List<AutoTimeslot> shiftSlots = timeslots.stream()
+                        .filter(slot -> slot.getPeriodNo() == shiftStart).toList();
+
+                AutoLesson general = new AutoLesson("general-" + classId,
+                        "assignment-general-" + classId, classId,
+                        "LIT", "Ngữ văn", "lit-" + classId, "GV Ngữ văn",
+                        "GENERAL", homeRooms.get(classId).getId(), "SOCIAL",
+                        false, false, false, 2, "FRI", 35, 1, 5, false);
+                general.setMainShiftStartPeriod(shiftStart);
+                general.setTimeslotRange(shiftSlots);
+                general.setRoomRange(List.of(homeRooms.get(classId)));
+                lessons.add(general);
+
+                String teacher = "lab-" + (afternoon ? "pm-" : "am-") + ((classNo - 1) % 5 + 1);
+                AutoLesson laboratory = lesson("lab-" + classId, classId,
+                        "CHEM", teacher, "LAB", 1);
+                laboratory.setMainShiftStartPeriod(shiftStart);
+                laboratory.setTimeslotRange(shiftSlots);
+                laboratory.setRoomRange(laboratories);
+                lessons.add(laboratory);
+            }
+        }
+
+        SolverFactory<AutoTimetable> factory = SolverFactory.create(new SolverConfig()
+                .withSolutionClass(AutoTimetable.class)
+                .withEntityClasses(AutoLesson.class)
+                .withConstraintProviderClass(AutoTimetableConstraintProvider.class)
+                .withTerminationSpentLimit(Duration.ofSeconds(8)));
+        AutoTimetable solved = factory.buildSolver().solve(
+                new AutoTimetable(timeslots, rooms, lessons));
+
+        assertNotNull(solved.getScore());
+        assertEquals(0, solved.getScore().hardScore(), solved.getScore().toString());
+        Set<String> classSlots = new HashSet<>();
+        Set<String> teacherSlots = new HashSet<>();
+        Set<String> roomSlots = new HashSet<>();
+        for (AutoLesson item : solved.getLessons()) {
+            assertNotNull(item.getTimeslot());
+            assertNotNull(item.getRoom());
+            String slot = item.getTimeslot().getId();
+            assertTrue(classSlots.add(item.getClassId() + ":" + slot));
+            assertTrue(teacherSlots.add(item.getTeacherId() + ":" + slot));
+            assertTrue(roomSlots.add(item.getRoom().getId() + ":" + slot));
+            boolean afternoon = item.getClassId().startsWith("10")
+                    || (item.getClassId().startsWith("11A")
+                    && Integer.parseInt(item.getClassId().substring(3)) <= 5);
+            assertEquals(afternoon ? 6 : 1, item.getTimeslot().getPeriodNo());
+            assertTrue(!"FRI".equals(item.getTimeslot().getDayOfWeek())
+                    || !item.getTeacherId().startsWith("lab-"));
+            if ("LAB".equals(item.getRequiredRoomType())) {
+                assertEquals("LAB", item.getRoom().getRoomType());
+            } else {
+                assertEquals(item.getHomeRoomId(), item.getRoom().getId());
+            }
+        }
     }
 
     private AutoLesson lesson(String id, String classId, String subjectId,

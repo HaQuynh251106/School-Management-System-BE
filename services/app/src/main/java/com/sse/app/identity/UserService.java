@@ -5,6 +5,7 @@ import com.sse.app.common.Ids;
 import com.sse.app.event.DomainEventPublisher;
 import com.sse.app.identity.IdentityDtos.*;
 import org.springframework.http.HttpStatus;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -17,6 +18,9 @@ import java.util.*;
 
 @Service
 public class UserService {
+
+    @Value("${sse.web.base-url:http://127.0.0.1:5173}")
+    private String webBaseUrl;
 
     private final UserRepository users;
     private final ParentStudentRepository relations;
@@ -472,8 +476,16 @@ public class UserService {
                 .tokenHash(sha256(raw))
                 .expiresAt(Instant.now().plus(30, ChronoUnit.MINUTES))
                 .build());
+        String baseUrl = webBaseUrl == null || webBaseUrl.isBlank()
+                ? "http://127.0.0.1:5173" : webBaseUrl;
+        String resetUrl = baseUrl.replaceAll("/+$", "") + "/?token="
+                + java.net.URLEncoder.encode(raw, StandardCharsets.UTF_8);
         events.publish("identity.password.reset_requested", found.get().getId(), "user", found.get().getId(),
-                Map.of("username", found.get().getUsername(), "email", Optional.ofNullable(found.get().getEmail()).orElse("")));
+                Map.of(
+                        "username", found.get().getUsername(),
+                        "email", Optional.ofNullable(found.get().getEmail()).orElse(""),
+                        "resetUrl", resetUrl,
+                        "expiresInMinutes", 30));
         return raw;
     }
 

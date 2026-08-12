@@ -17,6 +17,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
+import static com.sse.app.notification.NotificationDtos.NotificationProviderStatus;
+
 /** Email/push provider adapter with bounded retry and per-attempt delivery logs. */
 @Service
 public class NotificationChannelDispatcher {
@@ -24,6 +26,7 @@ public class NotificationChannelDispatcher {
     private final NotificationDeliveryLogRepository logs;
     private final UserService users;
     private final ObjectMapper mapper;
+    private final FcmAccessTokenProvider fcmTokens;
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(8)).build();
 
@@ -35,19 +38,31 @@ public class NotificationChannelDispatcher {
     private String sendGridApiKey;
     @Value("${sse.notifications.sendgrid.from-email:no-reply@sse.local}")
     private String sendGridFromEmail;
-    @Value("${sse.notifications.fcm.access-token:}")
-    private String fcmAccessToken;
-    @Value("${sse.notifications.fcm.send-url:https://fcm.googleapis.com/v1/projects/PROJECT_ID/messages:send}")
+    @Value("${sse.notifications.fcm.project-id:}")
+    private String fcmProjectId;
+    @Value("${sse.notifications.fcm.send-url:}")
     private String fcmSendUrl;
 
     public NotificationChannelDispatcher(NotificationRepository notifications,
                                          NotificationDeliveryLogRepository logs,
                                          UserService users,
-                                         ObjectMapper mapper) {
+                                         ObjectMapper mapper,
+                                         FcmAccessTokenProvider fcmTokens) {
         this.notifications = notifications;
         this.logs = logs;
         this.users = users;
         this.mapper = mapper;
+        this.fcmTokens = fcmTokens;
+    }
+
+    public NotificationProviderStatus providerStatus() {
+        return new NotificationProviderStatus(
+                providerMode == null ? "MOCK" : providerMode.trim().toUpperCase(),
+                sendGridApiKey != null && !sendGridApiKey.isBlank(),
+                sendGridFromEmail,
+                fcmTokens.isConfigured() && fcmProjectId != null && !fcmProjectId.isBlank(),
+                fcmTokens.source(),
+                fcmProjectId);
     }
 
     public Notification dispatch(String recipientId, String type, String channel,
@@ -114,10 +129,12 @@ public class NotificationChannelDispatcher {
     }
 
     private String sendEmail(Notification row) throws Exception {
-        if (sendGridApiKey.isBlank()) throw new IllegalStateException("SendGrid API key chưa được cấu hình");
+        if (sendGridApiKey == null || sendGridApiKey.isBlank()) {
+            throw new IllegalStateException("SendGrid API key chua duoc cau hinh");
+        }
         UserDto recipient = users.dtoById(row.getRecipientId());
         if (recipient.email() == null || recipient.email().isBlank()) {
-            throw new IllegalStateException("Người nhận chưa có email");
+            throw new IllegalStateException("Nguoi nhan chua co email");
         }
         Map<String, Object> payload = Map.of(
                 "personalizations", List.of(Map.of("to", List.of(Map.of("email", recipient.email())))),
@@ -128,19 +145,29 @@ public class NotificationChannelDispatcher {
     }
 
     private String sendPush(Notification row) throws Exception {
-        if (fcmAccessToken.isBlank()) throw new IllegalStateException("FCM access token chưa được cấu hình");
+        if (fcmProjectId == null || fcmProjectId.isBlank()) {
+            throw new IllegalStateException("FCM project ID chua duoc cau hinh");
+        }
         List<UserDevice> devices = users.devices(row.getRecipientId(), false);
-        if (devices.isEmpty()) throw new IllegalStateException("Người nhận chưa đăng ký thiết bị push");
+        if (devices.isEmpty()) {
+            throw new IllegalStateException("Nguoi nhan chua dang ky thiet bi push");
+        }
         String lastResponse = "";
+        String accessToken = fcmTokens.accessToken();
         for (UserDevice device : devices) {
             Map<String, Object> payload = Map.of("message", Map.of(
                     "token", device.getDeviceToken(),
                     "notification", Map.of("title", row.getTitle(), "body", row.getBody()),
                     "data", Map.of("deepLink", row.getDeepLink() == null ? "" : row.getDeepLink(),
                             "notificationId", row.getId())));
-            lastResponse = postJson(fcmSendUrl, "Bearer " + fcmAccessToken, payload);
+            lastResponse = postJson(resolveFcmSendUrl(), "Bearer " + accessToken, payload);
         }
         return lastResponse;
+    }
+
+    private String resolveFcmSendUrl() {
+        if (fcmSendUrl != null && !fcmSendUrl.isBlank()) return fcmSendUrl;
+        return "https://fcm.googleapis.com/v1/projects/" + fcmProjectId + "/messages:send";
     }
 
     private String postJson(String url, String authorization, Object payload) throws Exception {

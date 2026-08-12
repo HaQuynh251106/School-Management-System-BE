@@ -158,15 +158,21 @@ public class TeacherStaffingService {
                 .mapToInt(SubjectStaffingRow::minimumTeachersForSemester).sum();
         int minimumForYear = rows.stream().filter(SubjectStaffingRow::countedAsSubjectTeacher)
                 .mapToInt(SubjectStaffingRow::minimumTeachersForYear).sum();
-        BigDecimal maximumFte = TeacherStaffingRules.maximumTeacherFte(
+        BigDecimal minimumStaffingFte = TeacherStaffingRules.minimumTeacherFte(
                 schoolClasses.size(), policy.getTeacherClassRatio());
-        int maximumWholeTeachers = TeacherStaffingRules.maximumWholeTeachers(
+        int minimumWholeTeachers = TeacherStaffingRules.minimumWholeTeachers(
                 schoolClasses.size(), policy.getTeacherClassRatio());
+        BigDecimal maximumFte = TeacherStaffingRules.maximumTeacherFte(schoolClasses.size());
+        int maximumWholeTeachers = TeacherStaffingRules.maximumWholeTeachers(schoolClasses.size());
         boolean withinCeiling = activeTeachers.size() <= maximumWholeTeachers;
+        if (activeTeachers.size() < minimumWholeTeachers) {
+            errors.add("Trường công lập " + schoolClasses.size() + " lớp cần tối thiểu "
+                    + minimumWholeTeachers + " giáo viên theo định mức 2,25 giáo viên/lớp; hiện có "
+                    + activeTeachers.size() + ".");
+        }
         if (!withinCeiling) {
-            warnings.add("Hiện có " + activeTeachers.size() + " giáo viên, vượt trần nguyên người "
-                    + maximumWholeTeachers + " theo tỷ lệ " + policy.getTeacherClassRatio()
-                    + " giáo viên/lớp. Ban giám hiệu và nhân viên hỗ trợ không tính trong trần này.");
+            warnings.add("Hiện có " + activeTeachers.size() + " giáo viên, vượt mức khuyến nghị "
+                    + maximumWholeTeachers + " theo tỷ lệ 2,40 giáo viên/lớp.");
         }
         if (minimumForYear > maximumWholeTeachers) {
             errors.add("Kế hoạch cần tối thiểu " + minimumForYear
@@ -177,7 +183,8 @@ public class TeacherStaffingService {
         return new TeacherStaffingAnalysis(
                 academicYearId, semesterId, grade,
                 schoolClasses.size(), scopeClasses.size(), activeTeachers.size(),
-                minimumForSemester, minimumForYear, maximumFte, maximumWholeTeachers,
+                minimumForSemester, minimumForYear,
+                minimumStaffingFte, minimumWholeTeachers, maximumFte, maximumWholeTeachers,
                 withinCeiling, errors.isEmpty(),
                 rows.stream().mapToInt(SubjectStaffingRow::annualPeriods).sum(),
                 rows.stream().mapToInt(SubjectStaffingRow::selectedSemesterPeriods).sum(),
@@ -290,4 +297,3 @@ public class TeacherStaffingService {
         }
     }
 }
-

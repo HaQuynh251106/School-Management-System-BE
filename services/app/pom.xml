@@ -79,6 +79,13 @@
             <artifactId>spring-retry</artifactId>
         </dependency>
 
+        <!-- Refresh OAuth2 access tokens for Firebase Cloud Messaging service accounts. -->
+        <dependency>
+            <groupId>com.google.auth</groupId>
+            <artifactId>google-auth-library-oauth2-http</artifactId>
+            <version>1.43.0</version>
+        </dependency>
+
         <!-- S3-compatible storage for assignment and submission files -->
         <dependency>
             <groupId>io.minio</groupId>

@@ -18,10 +18,12 @@ public class RabbitNotificationWorker {
         this.notifications = notifications;
     }
 
-    @RabbitListener(queues = "${sse.rabbitmq.notification-queue:sse.notification.events}")
+    @RabbitListener(
+            queues = "${sse.rabbitmq.notification-queue:sse.notification.events}",
+            concurrency = "${sse.notifications.worker.concurrency:4}")
     public void consume(DomainEvent event,
                         @Header(name = AmqpHeaders.RECEIVED_ROUTING_KEY, required = false) String routingKey) {
-        log.info("Consuming notification event {} via routingKey={}", event.name(), routingKey);
+        log.debug("Consuming notification event {} via routingKey={}", event.name(), routingKey);
         notifications.handleDomainEvent(event);
     }
 }

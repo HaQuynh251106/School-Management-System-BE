@@ -9,6 +9,8 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
+import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
 
 import java.util.Map;
 
@@ -41,6 +43,11 @@ public class GlobalExceptionHandler {
         log.error("Unhandled request error", ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(Map.of("error", "Hệ thống chưa thể hoàn tất thao tác. Vui lòng thử lại hoặc liên hệ quản trị viên."));
+    }
+
+    @ExceptionHandler({AsyncRequestNotUsableException.class, AsyncRequestTimeoutException.class})
+    public void handleDisconnectedStream(Exception ex) {
+        log.debug("Realtime client disconnected before the stream completed");
     }
 
     @ExceptionHandler(NoResourceFoundException.class)

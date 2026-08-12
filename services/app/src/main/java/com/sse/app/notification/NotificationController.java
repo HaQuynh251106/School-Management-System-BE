@@ -7,6 +7,7 @@ import com.sse.app.common.ApiException;
 import com.sse.app.identity.UserDto;
 import com.sse.app.identity.UserService;
 import com.sse.app.notification.NotificationDtos.*;
+import com.sse.app.common.PageResponse;
 import com.sse.app.security.CurrentUser;
 import com.sse.app.security.CurrentUserHolder;
 import jakarta.validation.Valid;
@@ -26,20 +27,31 @@ public class NotificationController {
     private final TeachingAssignmentService teachingAssignments;
     private final StructureService structure;
     private final UserService users;
+    private final NotificationChannelDispatcher channelDispatcher;
 
     public NotificationController(NotificationService notifications,
                                   TeachingAssignmentService teachingAssignments,
                                   StructureService structure,
-                                  UserService users) {
+                                  UserService users,
+                                  NotificationChannelDispatcher channelDispatcher) {
         this.notifications = notifications;
         this.teachingAssignments = teachingAssignments;
         this.structure = structure;
         this.users = users;
+        this.channelDispatcher = channelDispatcher;
     }
 
     @GetMapping("/notifications")
     public List<Notification> inbox(@RequestParam(required = false, defaultValue = "false") boolean unread) {
         return notifications.inbox(CurrentUserHolder.require().id(), unread);
+    }
+
+    @GetMapping("/notifications/page")
+    public PageResponse<Notification> inboxPage(
+            @RequestParam(required = false, defaultValue = "false") boolean unread,
+            @RequestParam(required = false, defaultValue = "0") int page,
+            @RequestParam(required = false, defaultValue = "20") int size) {
+        return notifications.inboxPage(CurrentUserHolder.require().id(), unread, page, size);
     }
 
     @GetMapping("/notifications/unread-count")
@@ -94,10 +106,24 @@ public class NotificationController {
         return notifications.latestDeliveryAttempts();
     }
 
+    @GetMapping("/admin/notification-deliveries/page")
+    public PageResponse<NotificationDeliveryLog> deliveryPage(
+            @RequestParam(required = false, defaultValue = "0") int page,
+            @RequestParam(required = false, defaultValue = "50") int size) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return notifications.deliveryPage(page, size);
+    }
+
     @GetMapping("/admin/notification-operations/summary")
     public NotificationOperationsSummary operationsSummary() {
         CurrentUserHolder.requireRole("ADMIN");
         return notifications.operationsSummary();
+    }
+
+    @GetMapping("/admin/notification-providers/status")
+    public NotificationProviderStatus providerStatus() {
+        CurrentUserHolder.requireRole("ADMIN");
+        return channelDispatcher.providerStatus();
     }
 
     @GetMapping("/admin/notifications/{id}/deliveries")

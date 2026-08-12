@@ -49,6 +49,8 @@ public final class TeacherStaffingDtos {
             int currentActiveTeacherCount,
             int minimumSubjectTeachersForSemester,
             int minimumSubjectTeachersForYear,
+            BigDecimal minimumStaffingFte,
+            int minimumWholeTeachers,
             BigDecimal maximumTeacherFte,
             int maximumWholeTeachers,
             boolean withinLegalCeiling,
@@ -61,4 +63,3 @@ public final class TeacherStaffingDtos {
             List<String> errors,
             List<String> warnings) {}
 }
-

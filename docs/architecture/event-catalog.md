@@ -24,7 +24,7 @@
 | `identity.user.login` | identity (P1) | notification audit (P5) | userId, success, ip |
 | `identity.user.created` | identity (P1) | academic (P2/P3) cache | userId, role |
 | `identity.user.locked` | identity (P1) | notification audit (P5) | userId |
-| `identity.password.reset_requested` | identity (P1) | notification (P5) → email | userId, tokenUrl |
+| `identity.password.reset_requested` | identity (P1) | notification (P5) → email | userId, resetUrl, expiresInMinutes |
 | `academic.timetable.changed` | academic (P2) | notification (P5) | classId, semesterId |
 | `academic.attendance.absent` | academic (P2) | notification (P5) → push+email PH | studentId, date, period |
 | `academic.attendance.recorded` | academic (P2) | audit (P5) | classId, slotId, date |

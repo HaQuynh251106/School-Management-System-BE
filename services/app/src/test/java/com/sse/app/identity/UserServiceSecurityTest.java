@@ -19,6 +19,8 @@ import static org.mockito.Mockito.when;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Map;
+import org.mockito.ArgumentCaptor;
 
 @ExtendWith(MockitoExtension.class)
 class UserServiceSecurityTest {
@@ -105,5 +107,26 @@ class UserServiceSecurityTest {
         ApiException error = assertThrows(ApiException.class,
                 () -> service.validatePassword("password"));
         assertEquals(400, error.getStatus().value());
+    }
+
+    @Test
+    void passwordResetEventContainsExpiringFrontendLink() {
+        User user = User.builder().id("u-3").username("parent.one")
+                .email("parent@example.com").role("PARENT").status("ACTIVE").build();
+        when(users.findByEmail("parent@example.com")).thenReturn(Optional.of(user));
+        when(resetTokens.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.requestPasswordReset("parent@example.com", null);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> payload = ArgumentCaptor.forClass(Map.class);
+        verify(events).publish(
+                org.mockito.ArgumentMatchers.eq("identity.password.reset_requested"),
+                org.mockito.ArgumentMatchers.eq("u-3"),
+                org.mockito.ArgumentMatchers.eq("user"),
+                org.mockito.ArgumentMatchers.eq("u-3"), payload.capture());
+        assertTrue(String.valueOf(payload.getValue().get("resetUrl"))
+                .startsWith("http://127.0.0.1:5173/?token="));
+        assertEquals(30, payload.getValue().get("expiresInMinutes"));
     }
 }

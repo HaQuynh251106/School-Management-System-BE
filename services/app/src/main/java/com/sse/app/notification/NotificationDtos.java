@@ -45,4 +45,12 @@ public final class NotificationDtos {
             double failureRatePercent,
             Map<String, Long> notificationsByChannel,
             Instant generatedAt) {}
+
+    public record NotificationProviderStatus(
+            String mode,
+            boolean sendGridConfigured,
+            String sendGridFromEmail,
+            boolean fcmConfigured,
+            String fcmCredentialSource,
+            String fcmProjectId) {}
 }

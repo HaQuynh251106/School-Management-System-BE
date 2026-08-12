@@ -20,11 +20,14 @@ class TeacherStaffingRulesTest {
     }
 
     @Test
-    void regularPublicSchoolUsesConservativeWholeTeacherCeiling() {
+    void regularPublicSchoolUsesSixtyEightToSeventyTwoTeachersForThirtyClasses() {
         BigDecimal ratio = TeacherStaffingRules.ratioFor("PUBLIC_REGULAR");
         assertEquals(new BigDecimal("67.50"),
-                TeacherStaffingRules.maximumTeacherFte(30, ratio));
-        assertEquals(67, TeacherStaffingRules.maximumWholeTeachers(30, ratio));
+                TeacherStaffingRules.minimumTeacherFte(30, ratio));
+        assertEquals(68, TeacherStaffingRules.minimumWholeTeachers(30, ratio));
+        assertEquals(new BigDecimal("72.00"),
+                TeacherStaffingRules.maximumTeacherFte(30));
+        assertEquals(72, TeacherStaffingRules.maximumWholeTeachers(30));
     }
 
     @Test

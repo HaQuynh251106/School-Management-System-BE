@@ -4,6 +4,8 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.data.jpa.repository.Lock;
+import jakarta.persistence.LockModeType;
 
 import java.util.List;
 import java.time.LocalDate;
@@ -23,6 +25,9 @@ interface TimetableRepository extends JpaRepository<TimetableSlot, String> {
 }
 
 interface TimetableScheduleRepository extends JpaRepository<TimetableSchedule, String> {
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select schedule from TimetableSchedule schedule where schedule.id = :id")
+    Optional<TimetableSchedule> findByIdForUpdate(@Param("id") String id);
     List<TimetableSchedule> findBySemesterIdOrderByCreatedAtDesc(String semesterId);
     List<TimetableSchedule> findBySemesterIdAndStatus(String semesterId, String status);
     Optional<TimetableSchedule> findFirstBySemesterIdAndScopeGradeLevelAndStatusOrderByPublishedAtDesc(

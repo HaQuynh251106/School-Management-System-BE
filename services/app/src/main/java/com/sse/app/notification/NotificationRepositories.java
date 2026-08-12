@@ -1,19 +1,28 @@
 package com.sse.app.notification;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 import java.util.List;
 import java.util.Optional;
 
 interface NotificationRepository extends JpaRepository<Notification, String> {
-    List<Notification> findByRecipientIdOrderByCreatedAtDesc(String recipientId);
-    List<Notification> findByRecipientIdAndReadIsFalseOrderByCreatedAtDesc(String recipientId);
-    List<Notification> findByRecipientIdAndReadIsFalseAndTypeInOrderByCreatedAtDesc(
-            String recipientId, List<String> types);
-    long countByRecipientIdAndReadIsFalse(String recipientId);
-    long countByRecipientIdAndReadIsFalseAndTypeIn(String recipientId, List<String> types);
-    List<Notification> findByRecipientIdAndReadIsFalseAndGroupKeyOrderByCreatedAtDesc(
-            String recipientId, String groupKey);
+    List<Notification> findByRecipientIdAndChannelOrderByCreatedAtDesc(
+            String recipientId, String channel);
+    Page<Notification> findByRecipientIdAndChannelOrderByCreatedAtDesc(
+            String recipientId, String channel, Pageable pageable);
+    List<Notification> findByRecipientIdAndChannelAndReadIsFalseOrderByCreatedAtDesc(
+            String recipientId, String channel);
+    Page<Notification> findByRecipientIdAndChannelAndReadIsFalseOrderByCreatedAtDesc(
+            String recipientId, String channel, Pageable pageable);
+    List<Notification> findByRecipientIdAndChannelAndReadIsFalseAndTypeInOrderByCreatedAtDesc(
+            String recipientId, String channel, List<String> types);
+    long countByRecipientIdAndChannelAndReadIsFalse(String recipientId, String channel);
+    long countByRecipientIdAndChannelAndReadIsFalseAndTypeIn(
+            String recipientId, String channel, List<String> types);
+    List<Notification> findByRecipientIdAndChannelAndReadIsFalseAndGroupKeyOrderByCreatedAtDesc(
+            String recipientId, String channel, String groupKey);
     List<Notification> findByStatusOrderByCreatedAtDesc(String status);
     long countByStatus(String status);
     long countByChannel(String channel);
@@ -25,6 +34,7 @@ interface NotificationTemplateRepository extends JpaRepository<NotificationTempl
 interface NotificationDeliveryLogRepository extends JpaRepository<NotificationDeliveryLog, String> {
     List<NotificationDeliveryLog> findByNotificationIdOrderByAttemptNoAsc(String notificationId);
     List<NotificationDeliveryLog> findTop200ByOrderByAttemptedAtDesc();
+    Page<NotificationDeliveryLog> findAllByOrderByAttemptedAtDesc(Pageable pageable);
     long countByStatus(String status);
 }
 

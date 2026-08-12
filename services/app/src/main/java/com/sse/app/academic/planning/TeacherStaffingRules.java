@@ -9,6 +9,7 @@ import java.util.Locale;
 final class TeacherStaffingRules {
     static final String PUBLIC_REGULAR = "PUBLIC_REGULAR";
     private static final BigDecimal PUBLIC_REGULAR_RATIO = new BigDecimal("2.25");
+    private static final BigDecimal PUBLIC_REGULAR_MAX_RATIO = new BigDecimal("2.40");
 
     private TeacherStaffingRules() {}
 
@@ -41,13 +42,24 @@ final class TeacherStaffingRules {
         return (requiredWeeklyPeriods + weeklyTeachingNorm - 1) / weeklyTeachingNorm;
     }
 
-    static BigDecimal maximumTeacherFte(int classCount, BigDecimal ratio) {
+    static BigDecimal minimumTeacherFte(int classCount, BigDecimal ratio) {
         return ratio.multiply(BigDecimal.valueOf(Math.max(0, classCount)))
                 .setScale(2, RoundingMode.HALF_UP);
     }
 
-    static int maximumWholeTeachers(int classCount, BigDecimal ratio) {
-        return maximumTeacherFte(classCount, ratio)
-                .setScale(0, RoundingMode.FLOOR).intValue();
+    static int minimumWholeTeachers(int classCount, BigDecimal ratio) {
+        return minimumTeacherFte(classCount, ratio)
+                .setScale(0, RoundingMode.CEILING).intValue();
+    }
+
+    static BigDecimal maximumTeacherFte(int classCount) {
+        return PUBLIC_REGULAR_MAX_RATIO
+                .multiply(BigDecimal.valueOf(Math.max(0, classCount)))
+                .setScale(2, RoundingMode.HALF_UP);
+    }
+
+    static int maximumWholeTeachers(int classCount) {
+        return maximumTeacherFte(classCount)
+                .setScale(0, RoundingMode.CEILING).intValue();
     }
 }

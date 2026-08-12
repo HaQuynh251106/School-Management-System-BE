@@ -7,6 +7,8 @@ import com.sse.app.identity.UserService;
 import com.sse.app.identity.UserDto;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.http.MediaType;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
 import java.util.Map;
@@ -18,10 +20,13 @@ public class ChatController {
 
     private final ChatService chat;
     private final UserService users;
+    private final ChatRealtimeService realtime;
 
-    public ChatController(ChatService chat, UserService users) {
+    public ChatController(ChatService chat, UserService users,
+                          ChatRealtimeService realtime) {
         this.chat = chat;
         this.users = users;
+        this.realtime = realtime;
     }
 
     public record SendMessageRequest(@NotBlank String toUserId, @NotBlank String body) {}
@@ -34,6 +39,19 @@ public class ChatController {
     @GetMapping("/contacts")
     public List<UserDto> contacts() {
         return chat.contacts(CurrentUserHolder.require());
+    }
+
+    @GetMapping(value = "/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter events() {
+        CurrentUser me = CurrentUserHolder.require();
+        return realtime.connect(me.id(), chat.contactIdsFor(me));
+    }
+
+    @GetMapping("/presence")
+    public Map<String, Object> presence() {
+        CurrentUser me = CurrentUserHolder.require();
+        return Map.of("onlineUserIds",
+                realtime.onlineAmong(chat.contactIdsFor(me)));
     }
 
     @GetMapping("/messages")

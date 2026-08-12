@@ -7,6 +7,8 @@ import com.sse.app.identity.UserDto;
 import com.sse.app.identity.UserService;
 import com.sse.app.notification.NotificationDtos.*;
 import org.springframework.stereotype.Service;
+import org.springframework.data.domain.PageRequest;
+import com.sse.app.common.PageResponse;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -48,6 +50,13 @@ public class NotificationService {
 
     public Notification notifyUser(String recipientId, String type, String title, String body,
                                    String refType, String refId) {
+        Notification notification = notifyInAppOnly(recipientId, type, title, body, refType, refId);
+        dispatchExternalIfEnabled(recipientId, type, title, body, refType, refId);
+        return notification;
+    }
+
+    private Notification notifyInAppOnly(String recipientId, String type, String title, String body,
+                                         String refType, String refId) {
         if (!isEnabled(recipientId, type, "IN_APP")) return null;
         String groupKey = groupKey(type);
         Notification n = notifications.save(Notification.builder()
@@ -69,7 +78,6 @@ public class NotificationService {
                 .providerResponse("IN_APP persisted")
                 .attemptedAt(Instant.now())
                 .build());
-        dispatchExternalIfEnabled(recipientId, type, title, body, refType, refId);
         return n;
     }
 
@@ -91,10 +99,20 @@ public class NotificationService {
                     event.entityId(), "SYSTEM", "Đăng nhập mới",
                     "Tài khoản của bạn vừa đăng nhập thành công.",
                     "USER", event.entityId());
-            case "identity.password.reset_requested" -> notifyUser(
-                    event.entityId(), "SYSTEM", "Yêu cầu đặt lại mật khẩu",
-                    "Hệ thống đã nhận yêu cầu đặt lại mật khẩu cho tài khoản của bạn.",
-                    "USER", event.entityId());
+            case "identity.password.reset_requested" -> {
+                String resetUrl = asString(p.get("resetUrl"));
+                String title = "Đặt lại mật khẩu Trường học số";
+                notifyInAppOnly(event.entityId(), "SYSTEM", title,
+                        "Yêu cầu đặt lại mật khẩu đã được gửi tới email của bạn. Liên kết có hiệu lực trong 30 phút.",
+                        "USER", event.entityId());
+                String emailBody = "Xin chào " + asString(p.get("username")) + ",\n\n"
+                        + "Mở liên kết dưới đây để đặt lại mật khẩu:\n" + resetUrl + "\n\n"
+                        + "Liên kết chỉ sử dụng một lần và hết hạn sau 30 phút. "
+                        + "Nếu bạn không yêu cầu thao tác này, hãy bỏ qua email.";
+                channelDispatcher.dispatch(event.entityId(), "PASSWORD_RESET", "EMAIL",
+                        title, emailBody, "PASSWORD_RESET", event.entityId(),
+                        resetUrl, "SECURITY");
+            }
             case "identity.password.reset_completed" -> notifyUser(
                     event.entityId(), "SYSTEM", "Mật khẩu đã được cập nhật",
                     "Mật khẩu của bạn đã được đặt lại, mọi refresh token cũ đã bị thu hồi.",
@@ -196,6 +214,15 @@ public class NotificationService {
                 String body = asString(p.get("message"));
                 notifyUser(studentId, "GRADE", title, body, "GRADE", event.entityId());
                 notifyParentsOfStudent(studentId, "GRADE", title, body, "GRADE", event.entityId());
+            }
+            case "academic.homeroom_remark.published" -> {
+                String studentId = asString(p.get("studentId"));
+                String body = asString(p.get("message"));
+                notifyUser(studentId, "HOMEROOM_REMARK", "Nhận xét mới từ giáo viên chủ nhiệm",
+                        body, "HOMEROOM_REMARK", event.entityId());
+                notifyParentsOfStudent(studentId, "HOMEROOM_REMARK",
+                        "GVCN đã nhận xét về học sinh", body,
+                        "HOMEROOM_REMARK", event.entityId());
             }
             case "academic.assignment.published" -> {
                 String classId = asString(p.get("classId"));
@@ -315,29 +342,60 @@ public class NotificationService {
 
     public List<Notification> inbox(String recipientId, boolean unreadOnly) {
         return unreadOnly
-                ? notifications.findByRecipientIdAndReadIsFalseOrderByCreatedAtDesc(recipientId)
-                : notifications.findByRecipientIdOrderByCreatedAtDesc(recipientId);
+                ? notifications.findByRecipientIdAndChannelAndReadIsFalseOrderByCreatedAtDesc(
+                        recipientId, "IN_APP")
+                : notifications.findByRecipientIdAndChannelOrderByCreatedAtDesc(
+                        recipientId, "IN_APP");
+    }
+
+    public PageResponse<Notification> inboxPage(
+            String recipientId, boolean unreadOnly, int page, int size) {
+        PageRequest pageable = PageRequest.of(validPage(page), validSize(size));
+        return PageResponse.from(unreadOnly
+                ? notifications.findByRecipientIdAndChannelAndReadIsFalseOrderByCreatedAtDesc(
+                        recipientId, "IN_APP", pageable)
+                : notifications.findByRecipientIdAndChannelOrderByCreatedAtDesc(
+                        recipientId, "IN_APP", pageable));
+    }
+
+    public PageResponse<NotificationDeliveryLog> deliveryPage(int page, int size) {
+        return PageResponse.from(deliveryLogs.findAllByOrderByAttemptedAtDesc(
+                PageRequest.of(validPage(page), validSize(size))));
+    }
+
+    private int validPage(int page) {
+        if (page < 0) throw ApiException.badRequest("Số trang không được âm");
+        return page;
+    }
+
+    private int validSize(int size) {
+        if (size < 1 || size > 200) {
+            throw ApiException.badRequest("Kích thước trang phải từ 1 đến 200");
+        }
+        return size;
     }
 
     public long unreadCount(String recipientId) {
-        return notifications.countByRecipientIdAndReadIsFalse(recipientId);
+        return notifications.countByRecipientIdAndChannelAndReadIsFalse(recipientId, "IN_APP");
     }
 
     public long financeUnreadCount(String recipientId) {
-        return notifications.countByRecipientIdAndReadIsFalseAndTypeIn(
-                recipientId, FINANCE_NOTIFICATION_TYPES);
+        return notifications.countByRecipientIdAndChannelAndReadIsFalseAndTypeIn(
+                recipientId, "IN_APP", FINANCE_NOTIFICATION_TYPES);
     }
 
     public Notification markRead(String id, String recipientId) {
         Notification n = notifications.findById(id).orElseThrow(() -> ApiException.notFound("Thông báo"));
         if (!recipientId.equals(n.getRecipientId())) throw ApiException.forbidden("Không phải thông báo của bạn");
+        if (!"IN_APP".equals(n.getChannel())) throw ApiException.forbidden("Không phải thông báo trong ứng dụng");
         n.setRead(true);
         n.setReadAt(Instant.now());
         return notifications.save(n);
     }
 
     public void markAllRead(String recipientId) {
-        var list = notifications.findByRecipientIdAndReadIsFalseOrderByCreatedAtDesc(recipientId);
+        var list = notifications.findByRecipientIdAndChannelAndReadIsFalseOrderByCreatedAtDesc(
+                recipientId, "IN_APP");
         list.forEach(n -> {
             n.setRead(true);
             n.setReadAt(Instant.now());
@@ -346,8 +404,8 @@ public class NotificationService {
     }
 
     public void markAllFinanceRead(String recipientId) {
-        var list = notifications.findByRecipientIdAndReadIsFalseAndTypeInOrderByCreatedAtDesc(
-                recipientId, FINANCE_NOTIFICATION_TYPES);
+        var list = notifications.findByRecipientIdAndChannelAndReadIsFalseAndTypeInOrderByCreatedAtDesc(
+                recipientId, "IN_APP", FINANCE_NOTIFICATION_TYPES);
         list.forEach(n -> {
             n.setRead(true);
             n.setReadAt(Instant.now());
@@ -358,8 +416,8 @@ public class NotificationService {
     public int markGroupRead(String recipientId, String requestedGroupKey) {
         String key = normalize(requestedGroupKey);
         List<Notification> rows =
-                notifications.findByRecipientIdAndReadIsFalseAndGroupKeyOrderByCreatedAtDesc(
-                        recipientId, key);
+                notifications.findByRecipientIdAndChannelAndReadIsFalseAndGroupKeyOrderByCreatedAtDesc(
+                        recipientId, "IN_APP", key);
         Instant now = Instant.now();
         rows.forEach(row -> {
             row.setRead(true);
@@ -501,6 +559,7 @@ public class NotificationService {
             case "ATTENDANCE" -> "/attendance?ref=" + id;
             case "GRADE" -> "/grades?ref=" + id;
             case "YEAR_RESULT" -> "/year-results?ref=" + id;
+            case "HOMEROOM_REMARK" -> "/academic-monitoring?ref=" + id;
             case "TIMETABLE" -> "/timetable";
             default -> "/notifications?ref=" + id;
         };

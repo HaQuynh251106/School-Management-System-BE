@@ -794,7 +794,7 @@ public class ExamScheduleService {
     @Transactional
     public ExamVersionDetail recallPublished(String periodId, String reason, String actorId) {
         ExamPeriod period = requirePeriod(periodId);
-        if (!"PUBLISHED".equals(period.getStatus()) || period.getPublishedVersionId() == null) {
+        if (!isRecallablePeriodStatus(period.getStatus()) || period.getPublishedVersionId() == null) {
             throw ApiException.conflict("Đợt thi chưa có lịch đang phát hành để thu hồi");
         }
         ExamScheduleVersion published = requireVersion(period.getPublishedVersionId());
@@ -835,6 +835,10 @@ public class ExamScheduleService {
         events.publish("academic.exam_schedule.recalled", actorId, "exam_period", periodId,
                 Map.of("periodId", periodId, "periodName", period.getName(), "reason", reason.trim()));
         return detail(draft.getId());
+    }
+
+    static boolean isRecallablePeriodStatus(String status) {
+        return Set.of("PUBLISHED", "CLOSED").contains(status);
     }
 
     public List<PublishedExamView> studentExams(String studentId) {

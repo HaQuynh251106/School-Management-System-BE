@@ -3,6 +3,9 @@ package com.sse.app.audit;
 import com.sse.app.common.Ids;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.data.domain.PageRequest;
+import com.sse.app.common.ApiException;
+import com.sse.app.common.PageResponse;
 
 import java.time.Instant;
 import java.util.*;
@@ -39,6 +42,33 @@ public class AuditService {
         if (module != null && !module.isBlank()) return repo.findByModuleOrderByCreatedAtDesc(module);
         if (action != null && !action.isBlank()) return repo.findByActionOrderByCreatedAtDesc(action);
         return repo.findTop200ByOrderByCreatedAtDesc();
+    }
+
+    public PageResponse<AuditLog> page(String module, String action, int page, int size) {
+        if (page < 0) throw ApiException.badRequest("Số trang không được âm");
+        if (size < 1 || size > 200) {
+            throw ApiException.badRequest("Kích thước trang phải từ 1 đến 200");
+        }
+        PageRequest pageable = PageRequest.of(page, size);
+        return PageResponse.from(module != null && !module.isBlank()
+                ? repo.findByModuleOrderByCreatedAtDesc(module, pageable)
+                : action != null && !action.isBlank()
+                ? repo.findByActionOrderByCreatedAtDesc(action, pageable)
+                : repo.findAllByOrderByCreatedAtDesc(pageable));
+    }
+
+    public Map<String, Object> mongoStatus() {
+        MongoAuditSink sink = mongo.getIfAvailable();
+        return sink == null ? Map.of("enabled", false, "connected", false) : sink.status();
+    }
+
+    public synchronized Map<String, Object> syncMongo() {
+        MongoAuditSink sink = mongo.getIfAvailable();
+        if (sink == null) return Map.of("enabled", false, "synced", 0);
+        List<AuditLog> logs = repo.findTop1000ByOrderByCreatedAtDesc();
+        int synced = sink.sync(logs);
+        return Map.of("enabled", true, "synced", synced, "limit", 1000,
+                "completedAt", Instant.now().toString());
     }
 
     public Map<String, Object> stats() {
