@@ -21,6 +21,7 @@ spring:
       # database restore. Pin the application schema so Flyway, JPA and raw
       # queries consistently resolve the restored production tables.
       schema: ${SSE_DB_SCHEMA:public}
+      connection-init-sql: SET search_path TO ${SSE_DB_SCHEMA:public}
 
   jpa:
     hibernate:
