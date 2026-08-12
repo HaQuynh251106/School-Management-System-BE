@@ -41,6 +41,8 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         String p = request.getRequestURI();
         return HttpMethod.OPTIONS.matches(request.getMethod())
                 || p.startsWith("/auth/")
+                || p.equals("/payments/gateway/callback")
+                || p.startsWith("/payments/sandbox/checkout")
                 || p.equals("/")
                 || p.equals("/health")
                 || p.equals("/actuator/health")

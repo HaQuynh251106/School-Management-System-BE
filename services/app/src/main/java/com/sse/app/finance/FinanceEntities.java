@@ -175,6 +175,12 @@ class PaymentGatewayTransaction {
     private String txnRef;
     @Column(nullable = false, length = 32)
     private String gateway;
+    @Column(unique = true, length = 120)
+    private String idempotencyKey;
+    @Column(unique = true, length = 120)
+    private String gatewayTransactionId;
+    @Column(unique = true, length = 120)
+    private String callbackEventId;
     @Column(nullable = false, length = 32)
     private String status;
     @Column(length = 4000)

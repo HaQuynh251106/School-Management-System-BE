@@ -23,6 +23,8 @@ sse:
     expose-token: true
   payments:
     mode: vietqr
+    sandbox:
+      enabled: true
     vietqr:
       bank-id: MB
       account-no: "0123456789"

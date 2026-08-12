@@ -1,6 +1,6 @@
 # F18 - Quy trinh contract -> phat trien -> E2E
 
-Cap nhat: 11/08/2026
+Cap nhat: 12/08/2026
 
 ## Trang thai hien tai
 
@@ -75,6 +75,58 @@ flowchart LR
 - `flutter analyze` sach; Mobile test `30` dat va `4` integration test bo qua theo cau hinh hien tai sau ban sua F12.
 - Native Android F13 da xac nhan CLB co phi, can duyet va gioi han mot cho tren UI Student; trang thai, phi va so cho hien dung du lieu backend.
 - E2E F13 native dat: dang ky lan dau `PENDING`, dang ky trung bi chan `409`, Admin duyet sinh hoa don, het cho vao `WAITLIST`, Admin tu choi khong sinh hoa don va Parent ngoai pham vi bi chan `403`.
+- Them Android E2E tu dong cho F17 o hai muc: API flow va UI flow that.
+- UI E2E tu dong dat tron luong Parent login -> mo hoa don -> tao VietQR -> bao da chuyen khoan -> Accountant login -> doi soat -> hoa don `PAID`.
+- API E2E tu dong xac nhan callback/doi soat lap lai khong cong tien, tang version hoac tao receipt lan hai.
+- Tao pipeline `tools/generate_openapi_clients.ps1`, ghim OpenAPI Generator `7.24.0` va sinh package Dart Dio `sse_finance_api` tu `finance.yaml`.
+- F17 Mobile da dung request/response typed cho chi tiet hoa don, VietQR, thu tien mat, doi soat, tu choi va hoan tien.
+- Sua lech contract VietQR: bo sung `bankId`, `accountNo`, `accountName` dung voi response Backend dang chay; contract test khoa cac field nay.
+- Sau khi sinh client: contract Backend `7/7`, `flutter analyze` sach, Mobile `32` test dat va `4` test tich hop bo qua theo cau hinh.
+- Bo sung `GET /invoices` vao finance contract voi day du filter va object permission; Mobile da dung client typed cho danh sach hoa don.
+- Mobile test tang len `34` dat; UI E2E Android da retest tron luong Parent -> VietQR -> Accountant sau khi chuyen danh sach sang client typed.
+- Tao `identity.yaml` cho dang nhap, refresh/logout, quen/dat lai mat khau, ho so ca nhan va Admin quan ly nguoi dung.
+- Mobile da dung package sinh tu dong `sse_identity_api` cho auth/session va cac thao tac danh sach, tao, xem, khoa/mo khoa, reset mat khau tai khoan.
+- Android Identity E2E dat: API dang nhap dung du 6 vai tro va UI hoc sinh vao dung trang chu; khong con ket splash khi dung dung `API_BASE_URL`.
+- E2E Admin users dat: tao tai khoan, khoa thi dang nhap bi chan `403`, mo khoa, reset mat khau va dang nhap lai thanh cong.
+- Tao `academic.yaml` cho co cau nam hoc/hoc ky/lop/mon/phong, TKB ca nhan/theo lop va mutation lop/mon/phong/phan cong/tiet hoc.
+- Mobile da dung package sinh tu dong `sse_academic_api` cho 7 API doc nen va 5 mutation Academic core.
+- E2E Academic dat: Parent va Teacher xem lop ngoai pham vi bi chan `403`; xep trung tiet bi chan `409`; so tiet da xep/con lai cap nhat dung.
+- Tao `report.yaml` cho dashboard theo 6 vai tro, bao cao ca nhan, tong quan Admin, pho diem, chuyen can, doanh thu va export `csv/xlsx/pdf`.
+- Mobile da dung package sinh tu dong `sse_report_api` cho toan bo API Dashboard/Report, ke ca response byte cua hai endpoint export.
+- E2E Report live dat: Admin doc du lieu that va tai du 3 dinh dang; Parent doc bao cao cua 2 con, tai CSV ca nhan va truy cap child ngoai pham vi bi chan `403`.
+- Mo rong `academic.yaml` cho 6 API Attendance: lich su, bulk mark, ngay nghi, trang thai buoi, don nghi da duyet va mo khoa diem danh muon.
+- Mobile da dung `sse_academic_api` typed cho Attendance; trang thai ngoai `PRESENT/LATE/ABSENT_UNEXCUSED/ABSENT_EXCUSED` bi chan truoc khi gui.
+- E2E Attendance live dat: Student bi ep ve chinh minh; Parent sai con `403`; Teacher thieu slot `400`, slot ngoai phan cong `403`; ngay ngoai hoc ky bi chan `400` va khong doi du lieu.
+- Mo rong `academic.yaml` cho Grades: danh sach, gradebook context, create/bulk/update, optimistic locking, change log va CRUD dau diem.
+- Mobile da dung `sse_academic_api` typed cho toan bo Grades core; cac man hien tai giu nguyen interface Map/List.
+- E2E Grades live dat: Student bi ep ve chinh minh; Parent sai con `403`; Teacher thieu lop-hoc ky `400`; diem `11` bi `400`, version cu bi `409`, diem va version goc khong thay doi.
+- Mo rong `academic.yaml` cho Exams giai doan 1: danh sach dot thi, lich thi theo vai tro/con, nhiem vu cham, ket qua hoc sinh, danh sach va gui phuc khao.
+- Mobile da dung `sse_academic_api` typed cho 6 API Exams dang duoc giao dien goi; interface Map/List cu duoc giu de khong lam vo man hinh.
+- E2E Exams giai doan 1 live dat: Admin/Giao vu doc dot thi; Teacher, Student va Parent doc dung pham vi; Parent chon ho so khong lien ket bi `403`; phuc khao ly do qua ngan `400`, ky/ket qua khong ton tai `404` va khong tao du lieu rac.
+- OpenAPI academic da bo alias vai tro lap lai vuot gioi han cua SnakeYAML/OpenAPI Generator; contract validate sach va tiep tuc sinh client on dinh khi mo rong.
+- Exams giai doan 2 da co contract va Mobile UI cho tao dot thi, tao lich thi, gan phong/giam thi, xep thi sinh, chon giao vien du dieu kien va phan cong cham theo lop.
+- E2E Exams preparation live dat tren du lieu giu lai: lich trung bi `409`, phat hanh thieu dieu kien bi `409`; sau khi co phong, giam thi, thi sinh va giao vien cham thi phat hanh thanh cong revision `1`.
+- Sau phat hanh, Student nhan dung lich Toan, phong `P201`, so bao danh va cho ngoi; Teacher nhan dung nhiem vu cham va nhap diem theo lop 10A1.
+- Exams giai doan sau ky thi da co contract typed cho nhap diem, khoa/mo khoa, xac nhan, xem ket qua, phuc khao, xu ly phuc khao va lich su dieu chinh.
+- Mobile Teacher co man Cham thi va phuc khao; Student co man Ket qua ky thi va gui phuc khao; Giao vu co state action khoa, mo khoa va xac nhan ngay tai chi tiet ky thi.
+- E2E Exams sau ky thi live dat: Teacher nhap `8.25`, Giao vu khoa/cong bo, Student gui phuc khao, Teacher chap nhan va sua `8.75`, Giao vu xac nhan `CONFIRMED`; adjustment va notification duoc tao.
+- Sau mo rong: Backend `72/72` test dat; Mobile `49` test dat, `7` test tich hop skip theo cau hinh; `flutter analyze` sach.
+- Academic year-end da co OpenAPI typed va Mobile UI cho Giao vu xem blocker/ke hoach chuyen lop, GVCN nhap hanh kiem, Student/Parent xem tong ket.
+- Year-end live safety dat: nam `2026-2027` con `2/2` hoc sinh thieu du lieu; rollover bi chan `400` va khong tao nam hoc rac.
+- Android E2E S01 tu dong dat chuoi `UNPAID -> PARTIAL -> PAID -> PARTIALLY_REFUNDED -> REFUNDED`; thu sau `PAID` va hoan sau `REFUNDED` deu bi chan `409`.
+- Sau cap nhat: Mobile `50` test dat, `7` test tich hop skip theo cau hinh; `flutter analyze` sach; Android finance E2E `2/2` dat.
+- Q02 da co payment URL, IPN/callback HMAC-SHA256, idempotency key va khoa giao dich khi xu ly callback; chu ky sai bi chan, callback lap khong cong tien lan hai.
+- Mobile mo cong thanh toan ngoai ung dung, doi host theo Web/Android va chi lay ket qua tu backend; sandbox mac dinh tat va chi bat ro rang o local/demo.
+- Android Q02 E2E dat tren PostgreSQL; loi ep kieu entity tai trang checkout da duoc test va sua. Backend `73/73`, Mobile `51` test dat va `flutter analyze` sach.
+- Year-end Mobile co bai E2E rieng tai `integration_test/year_end_e2e_test.dart`: Giao vu, GVCN, Hoc sinh va Phu huynh doc dung pham vi; truy cap sai vai tro bi chan `403`.
+- Android year-end E2E `2/2` dat: man Giao vu hien dung blocker, nut chuyen nam bi khoa; request rollover khi du lieu chua du bi chan `400` va so nam hoc khong thay doi.
+- Hoi quy sau year-end: Mobile `51` test dat, `7` test live skip theo cau hinh, `flutter analyze` sach; 3 test Backend trong tam ve preview, phan quyen va rollover dat.
+- Year-end success path da co test co lap: tao nam hoc moi, clone `2` hoc ky, tao `2` lop va xu ly du `PROMOTED`, `RETAINED`, `GRADUATED`; ket qua hoc sinh duoc chot truoc khi kich hoat nam moi.
+- Them `PaymentConfigurationValidator` cho production: cam sandbox, chan thong tin VietQR rong/placeholder va chi cho phep mode `disabled` hoac `vietqr`; local/demo khong bi anh huong.
+- `docker-compose.prod.yml` tat sandbox ro rang; gateway production hien san sang o che do VietQR thu cong va doi soat.
+- Flutter SDK da nang len stable `3.44.9`; thu nghiem Built-in Kotlin cho thay `file_picker` moi va `flutter_plugin_android_lifecycle` hien chua dung chung duoc tren bo cong cu nay, nen da giu cau hinh KGP on dinh.
+- Hoi quy cuoi: Backend `77/77`, Mobile `51` test dat va `7` live test skip theo cau hinh, Android year-end E2E `2/2`, `flutter analyze` sach, Flutter Web release va APK debug deu build thanh cong.
+- Docker rebuild tu source thanh cong; Backend va PostgreSQL deu `healthy`, actuator tra `UP`.
 
 ## Du lieu E2E giu lai
 
@@ -110,20 +162,25 @@ flowchart LR
 - Dang ky Android F13 da duyet: `cr-563848e6a3`, hoa don `inv-d5d3897160`, trang thai hoa don `UNPAID`.
 - Dang ky Android F13 cho cho: `cr-2e97fee5fd`, hoc sinh Pham Hoai Binh, trang thai `WAITLIST`, vi tri `1`.
 - Nhanh tu choi Android F13: CLB `club-f13-reject-20260811-1433`, dang ky `cr-cce9c47416`, trang thai `REJECTED`, khong co hoa don.
+- Tai khoan test Admin users: `mobile.chiduc.test`, vai tro `PARENT`, trang thai `ACTIVE`; mat khau test ban giao rieng.
+- Academic E2E: lop `c-9eddd8a411` (`CD0812122410`), mon `sj-8bd3f901c6`, phong `rm-9e549d4c0b`, phan cong `ta-7b93482e2a`, tiet `tt-f7a4262039`.
+- Exams E2E: dot thi `ep-f813afd410` (`MOBILE-CD-20260812133220`), lich Toan `es-c2a490df50`, phong thi `er-e160ccd87d`, thi sinh `ec-f4cf733248`, phan cong cham `ega-8e7de2a038`; lich da phat hanh revision `1`.
+- Exams sau ky thi E2E: dot `ep-13e143820b` (`F18 E2E - Cham diem va phuc khao`), lich `es-b858ee1d97`, phong `er-8d74230edf`, thi sinh `ec-ff3f47cefa`, phan cong cham `ega-f6357ab2f2`.
+- Ket qua thi E2E `exr-31353a40ec`: diem ban dau `8.25`, diem sau phuc khao `8.75`; phuc khao `erv-8066fdc261` trang thai `APPROVED`; dieu chinh `exa-048a83bfda`; dot thi `CONFIRMED`.
+- S01 Android tu dong: dot thu `fp-8f36d60533` (`S01-ANDROID-1786525257494`), hoa don `inv-4a9b93a9d3`; da thu `1.000.000 d`, hoan `1.000.000 d`, trang thai cuoi `REFUNDED`.
+- Q02 Android: dot thu `S01-ANDROID-1786527368680`, hoa don `inv-01a1ede97b`, payment `pay-60a70e6cc7`, txn `SBXCBCCEA62562C4BDC8DC8`, bien nhan `REC-E420A7867442`; trang thai cuoi `PAID`, da thu dung `1.000.000 d` sau callback lap.
+- Year-end giu nguyen nam hoc dang hoat dong `2026-2027`: `2/2` hoc sinh con thieu diem hoac hanh kiem; khong tao nam hoc E2E moi de nguoi dung tiep tuc kiem tra blocker tren Mobile.
 
 ## Con thieu
 
-- Chua co OpenAPI contract cho cac domain identity va academic tong.
-- Chua co pipeline sinh client Mobile tu OpenAPI; hien model/request van duoc duy tri thu cong.
-- F11, F12 va F13 da dat tren UI native Android; F17 va S01 chua duoc chay tron bo bang thao tac UI native.
-- Chua co E2E tu dong mo UI va thao tac tron luong Phu huynh -> VietQR -> Ke toan doi soat -> bien nhan.
-- Contract hien moi bao phu phan tai chinh cot loi, chua bao phu dashboard/report/export.
+- Khong con hang muc core nao co the hoan tat them chi bang code local trong pham vi flowchart hien tai.
+- Gateway production tu dong van can nha cung cap, merchant ID/secret va callback URL public. Khi chua co cac gia tri nay, he thong dung VietQR thu cong va doi soat; production startup se tu chan sandbox/cau hinh gia.
+- Android Gradle se chuyen sang Built-in Kotlin khi Flutter stable va toan bo plugin lien quan cung ho tro AGP 9. Hien tai day la canh bao tuong lai; APK, test Android va Web van dat.
 
 ## Thu tu tiep theo
 
-1. Chay lan luot F17 va S01 tren emulator va giu du lieu nghiem thu.
-2. Sinh client Mobile tu OpenAPI de giam request/model viet tay.
-3. Bo sung UI E2E tu dong cho cac luong tai chinh tren thiet bi Android.
+1. Nhan thong tin nha cung cap thanh toan de thay VietQR thu cong bang gateway production tu dong.
+2. Retest va chuyen Built-in Kotlin khi bo Flutter/plugin stable da tuong thich AGP 9.
 
 ## Dieu kien dong F18
 

@@ -1,0 +1,270 @@
+openapi: 3.1.0
+info: { title: SSE Dashboard and Report API, version: 0.1.0 }
+servers: [{ url: / }]
+tags: [{ name: Report }]
+paths:
+  /dashboard:
+    get:
+      tags: [Report]
+      operationId: getDashboard
+      x-roles: &allRoles [ADMIN, ACADEMIC_STAFF, ACCOUNTANT, TEACHER, STUDENT, PARENT]
+      x-object-permission: Moi vai tro chi nhan dashboard trong pham vi cua minh; Parent chi duoc chon con da lien ket.
+      x-idempotency: Read-only.
+      x-owners: &owners { backend: Dashboard, client: Mobile }
+      parameters: [{ name: childId, in: query, schema: { type: string } }]
+      responses:
+        '200': { description: Dashboard theo vai tro, content: { application/json: { schema: { $ref: '#/components/schemas/Dashboard' } } } }
+        '403': { $ref: '#/components/responses/ApiErrorResponse' }
+  /me/reports:
+    get:
+      tags: [Report]
+      operationId: getPersonalReport
+      x-roles: &personalRoles [TEACHER, STUDENT, PARENT]
+      x-object-permission: Student xem minh; Teacher xem lop phu trach; Parent xem cac con da lien ket hoac mot childId hop le.
+      x-idempotency: Read-only.
+      x-owners: *owners
+      parameters: [{ name: childId, in: query, schema: { type: string } }]
+      responses:
+        '200': { description: Bao cao ca nhan, content: { application/json: { schema: { $ref: '#/components/schemas/PersonalReport' } } } }
+        '403': { $ref: '#/components/responses/ApiErrorResponse' }
+  /me/reports/export:
+    get:
+      tags: [Report]
+      operationId: exportPersonalReport
+      x-roles: *personalRoles
+      x-object-permission: Cung pham vi du lieu voi bao cao ca nhan.
+      x-idempotency: Read-only; moi lan tai duoc ghi audit.
+      x-owners: *owners
+      parameters: [{ name: childId, in: query, schema: { type: string } }]
+      responses:
+        '200':
+          description: Tep CSV bao cao ca nhan
+          headers: { Content-Disposition: { schema: { type: string } } }
+          content: { text/csv: { schema: { type: string, format: binary } } }
+        '403': { $ref: '#/components/responses/ApiErrorResponse' }
+  /reports/overview:
+    get:
+      tags: [Report]
+      operationId: getReportOverview
+      x-roles: &adminRoles [ADMIN]
+      x-object-permission: Chi Admin doc so lieu tong quan toan truong.
+      x-idempotency: Read-only.
+      x-owners: *owners
+      responses:
+        '200': { description: Tong quan he thong, content: { application/json: { schema: { $ref: '#/components/schemas/ReportOverview' } } } }
+        '403': { $ref: '#/components/responses/ApiErrorResponse' }
+  /reports/grade-distribution:
+    get:
+      tags: [Report]
+      operationId: getGradeDistribution
+      x-roles: *adminRoles
+      x-object-permission: Chi Admin doc pho diem toan truong theo bo loc.
+      x-idempotency: Read-only.
+      x-owners: *owners
+      parameters:
+        - { name: semesterId, in: query, schema: { type: string } }
+        - { name: classId, in: query, schema: { type: string } }
+        - { name: subjectId, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Pho diem, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/GradeBand' } } } } }
+        '403': { $ref: '#/components/responses/ApiErrorResponse' }
+  /reports/attendance-summary:
+    get:
+      tags: [Report]
+      operationId: getAttendanceSummary
+      x-roles: *adminRoles
+      x-object-permission: Chi Admin doc tong hop chuyen can theo lop va khoang ngay.
+      x-idempotency: Read-only.
+      x-owners: *owners
+      parameters:
+        - { name: classId, in: query, schema: { type: string } }
+        - { name: startDate, in: query, schema: { type: string, format: date } }
+        - { name: endDate, in: query, schema: { type: string, format: date } }
+      responses:
+        '200': { description: Tong hop chuyen can, content: { application/json: { schema: { $ref: '#/components/schemas/AttendanceSummary' } } } }
+        '403': { $ref: '#/components/responses/ApiErrorResponse' }
+  /reports/revenue:
+    get:
+      tags: [Report]
+      operationId: getRevenueReport
+      x-roles: *adminRoles
+      x-object-permission: Chi Admin doc tong hop doanh thu va cong no theo dot thu hoac lop.
+      x-idempotency: Read-only.
+      x-owners: *owners
+      parameters:
+        - { name: periodId, in: query, schema: { type: string } }
+        - { name: classId, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Tong hop doanh thu, content: { application/json: { schema: { $ref: '#/components/schemas/RevenueReport' } } } }
+        '403': { $ref: '#/components/responses/ApiErrorResponse' }
+  /reports/export:
+    get:
+      tags: [Report]
+      operationId: exportReport
+      x-roles: *adminRoles
+      x-object-permission: Chi Admin xuat bao cao toan truong; bo loc giong endpoint du lieu nguon.
+      x-idempotency: Read-only; moi lan tai duoc ghi audit.
+      x-owners: *owners
+      parameters:
+        - { name: type, in: query, schema: { type: string, enum: [overview, grades, attendance, revenue], default: overview } }
+        - { name: format, in: query, schema: { type: string, enum: [csv, xlsx, pdf], default: csv } }
+        - { name: semesterId, in: query, schema: { type: string } }
+        - { name: classId, in: query, schema: { type: string } }
+        - { name: subjectId, in: query, schema: { type: string } }
+        - { name: startDate, in: query, schema: { type: string, format: date } }
+        - { name: endDate, in: query, schema: { type: string, format: date } }
+        - { name: periodId, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Tep bao cao theo dinh dang da chon
+          headers:
+            Content-Disposition: { schema: { type: string } }
+            X-Report-As-Of: { schema: { type: string, format: date-time } }
+          content:
+            text/csv: { schema: { type: string, format: binary } }
+            application/pdf: { schema: { type: string, format: binary } }
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: { schema: { type: string, format: binary } }
+        '400': { $ref: '#/components/responses/ApiErrorResponse' }
+        '403': { $ref: '#/components/responses/ApiErrorResponse' }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  responses:
+    ApiErrorResponse:
+      description: Loi nghiep vu hoac phan quyen
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+  schemas:
+    ApiError:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        details: { type: object, additionalProperties: true }
+    Dashboard:
+      type: object
+      required: [asOf, scope, metrics, charts, shortcuts, errors]
+      properties:
+        asOf: { type: string, format: date-time }
+        scope: { $ref: '#/components/schemas/DashboardScope' }
+        metrics: { type: array, items: { $ref: '#/components/schemas/DashboardMetric' } }
+        charts: { type: array, items: { $ref: '#/components/schemas/DashboardChart' } }
+        shortcuts: { type: array, items: { $ref: '#/components/schemas/DashboardShortcut' } }
+        errors: { type: array, items: { $ref: '#/components/schemas/DashboardWidgetError' } }
+    DashboardScope:
+      type: object
+      required: [role, objectType, objectIds]
+      properties:
+        role: { type: string }
+        objectType: { type: string }
+        objectIds: { type: array, items: { type: string } }
+    DashboardTrend:
+      type: object
+      required: [direction, label]
+      properties:
+        direction: { type: string }
+        change: { type: number }
+        label: { type: string }
+    DashboardMetric:
+      type: object
+      required: [key, label, value, format, hint, tone, trend]
+      properties:
+        key: { type: string }
+        label: { type: string }
+        value: { type: number }
+        format: { type: string }
+        hint: { type: string }
+        tone: { type: string }
+        trend: { $ref: '#/components/schemas/DashboardTrend' }
+    DashboardDatum:
+      type: object
+      required: [label, value]
+      properties: { label: { type: string }, value: { type: number } }
+    DashboardChart:
+      type: object
+      required: [title, subtitle, type, suffix, max, data]
+      properties:
+        title: { type: string }
+        subtitle: { type: string }
+        type: { type: string }
+        suffix: { type: string }
+        max: { type: number }
+        data: { type: array, items: { $ref: '#/components/schemas/DashboardDatum' } }
+    DashboardShortcut:
+      type: object
+      required: [key, label, target, filters]
+      properties:
+        key: { type: string }
+        label: { type: string }
+        target: { type: string }
+        filters: { type: object, additionalProperties: { type: string } }
+    DashboardWidgetError:
+      type: object
+      required: [widget, code, message, retryable]
+      properties:
+        widget: { type: string }
+        code: { type: string }
+        message: { type: string }
+        retryable: { type: boolean }
+    ReportOverview:
+      type: object
+      required: [students, teachers, parents, admins, classes, subjects]
+      properties:
+        students: { type: integer, format: int64 }
+        teachers: { type: integer, format: int64 }
+        parents: { type: integer, format: int64 }
+        admins: { type: integer, format: int64 }
+        classes: { type: integer, format: int64 }
+        subjects: { type: integer, format: int64 }
+    GradeBand:
+      type: object
+      required: [band, count]
+      properties: { band: { type: string }, count: { type: integer, format: int64 } }
+    AttendanceSummary:
+      type: object
+      required: [present, late, absentExcused, absentUnexcused, total, attendanceRate]
+      properties:
+        present: { type: integer, format: int64 }
+        late: { type: integer, format: int64 }
+        absentExcused: { type: integer, format: int64 }
+        absentUnexcused: { type: integer, format: int64 }
+        total: { type: integer, format: int64 }
+        attendanceRate: { type: number }
+    RevenueReport:
+      type: object
+      required: [invoiceCount, paidCount, totalAmount, paidAmount, outstanding]
+      properties:
+        invoiceCount: { type: integer, format: int64 }
+        paidCount: { type: integer, format: int64 }
+        totalAmount: { type: integer, format: int64 }
+        paidAmount: { type: integer, format: int64 }
+        outstanding: { type: integer, format: int64 }
+    FinanceSummary:
+      type: object
+      required: [invoiceCount, paidInvoiceCount, totalAmount, paidAmount, outstanding]
+      properties:
+        invoiceCount: { type: integer, format: int64 }
+        paidInvoiceCount: { type: integer, format: int64 }
+        totalAmount: { type: integer, format: int64 }
+        paidAmount: { type: integer, format: int64 }
+        outstanding: { type: integer, format: int64 }
+    PersonalReport:
+      type: object
+      required: [role, studentCount, classCount, gradeCount, averageScore, subjectAverages, attendanceTotal, present, late, absentExcused, absentUnexcused, attendanceRate, submissionCount, gradedSubmissionCount]
+      properties:
+        role: { type: string }
+        studentCount: { type: integer, format: int64 }
+        classCount: { type: integer, format: int64 }
+        gradeCount: { type: integer, format: int64 }
+        averageScore: { type: number }
+        subjectAverages: { type: object, additionalProperties: { type: number } }
+        attendanceTotal: { type: integer, format: int64 }
+        present: { type: integer, format: int64 }
+        late: { type: integer, format: int64 }
+        absentExcused: { type: integer, format: int64 }
+        absentUnexcused: { type: integer, format: int64 }
+        attendanceRate: { type: number }
+        submissionCount: { type: integer, format: int64 }
+        gradedSubmissionCount: { type: integer, format: int64 }
+        finance: { $ref: '#/components/schemas/FinanceSummary' }
+security: [{ bearerAuth: [] }]

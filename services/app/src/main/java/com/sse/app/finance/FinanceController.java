@@ -255,6 +255,23 @@ public class FinanceController {
         return finance.pay(r, clientIp);
     }
 
+    @GetMapping("/payments/{paymentId}/status")
+    public Map<String, Object> paymentStatus(@PathVariable String paymentId) {
+        CurrentUser me = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("PARENT", "ADMIN", "ACCOUNTANT");
+        Payment payment = finance.getPayment(paymentId);
+        Invoice invoice = finance.getInvoice(payment.getInvoiceId());
+        if (me.isParent() && !me.id().equals(invoice.getParentId())) {
+            users.assertParentOf(me.id(), invoice.getStudentId());
+        }
+        return finance.sandboxPaymentStatus(paymentId);
+    }
+
+    @PostMapping("/payments/gateway/callback")
+    public Map<String, Object> gatewayCallback(@Valid @RequestBody GatewayCallbackRequest request) {
+        return finance.processGatewayCallback(request);
+    }
+
     @PostMapping("/payments/cash")
     public Map<String, Object> recordCash(@Valid @RequestBody CashPaymentRequest request) {
         CurrentUser me = CurrentUserHolder.require();

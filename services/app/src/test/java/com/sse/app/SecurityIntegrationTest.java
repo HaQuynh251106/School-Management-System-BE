@@ -21,6 +21,10 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.nio.charset.StandardCharsets;
+import java.util.HexFormat;
 import jakarta.servlet.http.Cookie;
 
 import static org.hamcrest.Matchers.nullValue;
@@ -37,6 +41,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -1947,6 +1952,104 @@ class SecurityIntegrationTest {
                                  "title":"Không hợp lệ","body":"Giáo viên không được gửi theo vai trò."}
                                 """))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void sandboxGatewayRejectsInvalidSignaturesAndProcessesRepeatedIpnOnce() throws Exception {
+        String admin = login("admin", "admin@123");
+        String suffix = Long.toString(System.nanoTime());
+        JsonNode period = body(mvc.perform(post("/fee-periods")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"code":"Q02-%s","name":"Q02 sandbox callback",
+                                 "applyToGrades":"K10","dueDate":"2026-09-30"}
+                                """.formatted(suffix)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        String periodId = period.path("id").asText();
+        mvc.perform(post("/fee-periods/{id}/items", periodId)
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Q02 gateway sandbox\",\"amount\":420000}"))
+                .andExpect(status().isOk());
+        mvc.perform(post("/fee-periods/{id}/open", periodId)
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk());
+        JsonNode generated = body(mvc.perform(post("/fee-periods/{id}/generate-invoices", periodId)
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        JsonNode invoice = generated.get(0);
+        String invoiceId = invoice.path("id").asText();
+        long amount = invoice.path("totalAmount").asLong();
+
+        String request = """
+                {"invoiceId":"%s","method":"SANDBOX","idempotencyKey":"q02-%s"}
+                """.formatted(invoiceId, suffix);
+        JsonNode created = body(mvc.perform(post("/payments")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON).content(request))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.gateway").value("SSE_SANDBOX"))
+                .andExpect(jsonPath("$.paymentUrl").isString())
+                .andReturn().getResponse().getContentAsString());
+        String paymentId = created.path("payment").path("id").asText();
+        String txnRef = created.path("payment").path("txnRef").asText();
+        mvc.perform(post("/payments")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON).content(request))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.payment.id").value(paymentId));
+
+        String gatewayTxn = "GW-" + suffix;
+        String eventId = "EVT-" + suffix;
+        String callbackTemplate = """
+                {"merchantCode":"SSE_SCHOOL","txnRef":"%s",
+                 "gatewayTransactionId":"%s","callbackEventId":"%s",
+                 "amount":%d,"currency":"VND","status":"SUCCESS","signature":"%s"}
+                """;
+        mvc.perform(post("/payments/gateway/callback")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(callbackTemplate.formatted(txnRef, gatewayTxn, eventId, amount, "invalid")))
+                .andExpect(status().isBadRequest());
+        String signature = sandboxSignature(txnRef, gatewayTxn, eventId, amount, "SUCCESS");
+        String callback = callbackTemplate.formatted(txnRef, gatewayTxn, eventId, amount, signature);
+        mvc.perform(post("/payments/gateway/callback")
+                        .contentType(MediaType.APPLICATION_JSON).content(callback))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.payment.status").value("SUCCESS"))
+                .andExpect(jsonPath("$.invoice.status").value("PAID"))
+                .andExpect(jsonPath("$.invoice.paidAmount").value(amount));
+        mvc.perform(post("/payments/gateway/callback")
+                        .contentType(MediaType.APPLICATION_JSON).content(callback))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.invoice.paidAmount").value(amount));
+        mvc.perform(get("/payments/{paymentId}/status", paymentId)
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.payment.receiptCode").value(
+                        org.hamcrest.Matchers.startsWith("REC-")));
+        mvc.perform(get("/payments/sandbox/checkout").param("txnRef", txnRef))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_HTML));
+        mvc.perform(post("/payments/sandbox/checkout/complete")
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .param("txnRef", txnRef).param("outcome", "SUCCESS"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("SBX-GW-")));
+        mvc.perform(get("/payments/{paymentId}/status", paymentId)
+                        .header("Authorization", "Bearer " + admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.invoice.paidAmount").value(amount));
+    }
+
+    private String sandboxSignature(String txnRef, String gatewayTransactionId,
+                                    String callbackEventId, long amount, String status) throws Exception {
+        String canonical = String.join("|", "SSE_SCHOOL", txnRef, gatewayTransactionId,
+                callbackEventId, Long.toString(amount), "VND", status);
+        Mac mac = Mac.getInstance("HmacSHA256");
+        mac.init(new SecretKeySpec("local-sandbox-secret-change-me".getBytes(StandardCharsets.UTF_8),
+                "HmacSHA256"));
+        return HexFormat.of().formatHex(mac.doFinal(canonical.getBytes(StandardCharsets.UTF_8)));
     }
 
     @Test

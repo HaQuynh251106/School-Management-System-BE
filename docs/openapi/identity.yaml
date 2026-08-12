@@ -1,0 +1,461 @@
+openapi: 3.1.0
+info:
+  title: SSE Identity API
+  version: 0.1.0
+  description: Contract cho dang nhap, phien lam viec va ho so ca nhan tren Mobile.
+servers:
+  - url: /
+tags:
+  - name: Identity
+paths:
+  /auth/login:
+    post:
+      tags: [Identity]
+      operationId: login
+      x-roles: [PUBLIC]
+      x-object-permission: Khong yeu cau dang nhap.
+      x-idempotency: Moi lan dang nhap cap mot cap token moi.
+      x-owners: { backend: Identity, client: Mobile }
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Dang nhap thanh cong.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+        '401': { $ref: '#/components/responses/ApiErrorResponse' }
+        '429': { $ref: '#/components/responses/ApiErrorResponse' }
+  /auth/refresh:
+    post:
+      tags: [Identity]
+      operationId: refreshSession
+      x-roles: [PUBLIC]
+      x-object-permission: Refresh token hop le va chua bi thu hoi.
+      x-idempotency: Refresh token duoc xoay vong va chi dung mot lan.
+      x-owners: { backend: Identity, client: Mobile }
+      security: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RefreshRequest' }
+      responses:
+        '200':
+          description: Cap token moi.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenResponse' }
+        '401': { $ref: '#/components/responses/ApiErrorResponse' }
+  /auth/logout:
+    post:
+      tags: [Identity]
+      operationId: logout
+      x-roles: [PUBLIC]
+      x-object-permission: Thu hoi refresh token duoc cung cap neu co.
+      x-idempotency: Goi lai van tra thanh cong.
+      x-owners: { backend: Identity, client: Mobile }
+      security: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LogoutRequest' }
+      responses:
+        '200':
+          description: Da dang xuat.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OkResponse' }
+  /auth/forgot-password:
+    post:
+      tags: [Identity]
+      operationId: forgotPassword
+      x-roles: [PUBLIC]
+      x-object-permission: Cong khai; response khong tiet lo tai khoan co ton tai hay khong.
+      x-idempotency: Co the yeu cau lai; token cu duoc xu ly theo chinh sach backend.
+      x-owners: { backend: Identity, client: Mobile }
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ForgotPasswordRequest' }
+      responses:
+        '200':
+          description: Da tiep nhan yeu cau.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ForgotPasswordResponse' }
+  /auth/reset-password:
+    post:
+      tags: [Identity]
+      operationId: resetPassword
+      x-roles: [PUBLIC]
+      x-object-permission: Chi token reset hop le duoc doi mat khau.
+      x-idempotency: Token reset chi dung mot lan.
+      x-owners: { backend: Identity, client: Mobile }
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResetPasswordRequest' }
+      responses:
+        '200':
+          description: Da dat lai mat khau.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OkResponse' }
+        '400': { $ref: '#/components/responses/ApiErrorResponse' }
+  /me:
+    get:
+      tags: [Identity]
+      operationId: getCurrentUser
+      x-roles: [ADMIN, ACADEMIC_STAFF, ACCOUNTANT, TEACHER, STUDENT, PARENT]
+      x-object-permission: Chi doc ho so cua token hien tai.
+      x-idempotency: Read-only.
+      x-owners: { backend: Identity, client: Mobile }
+      responses:
+        '200':
+          description: Ho so nguoi dung hien tai.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/ApiErrorResponse' }
+  /me/password:
+    put:
+      tags: [Identity]
+      operationId: changeMyPassword
+      x-roles: [ADMIN, ACADEMIC_STAFF, ACCOUNTANT, TEACHER, STUDENT, PARENT]
+      x-object-permission: Chi doi mat khau cua token hien tai.
+      x-idempotency: Khong idempotent; mat khau hien tai chi hop le truoc lan doi dau.
+      x-owners: { backend: Identity, client: Mobile }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangePasswordRequest' }
+      responses:
+        '200':
+          description: Doi mat khau thanh cong va can dang nhap lai.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChangePasswordResponse' }
+        '400': { $ref: '#/components/responses/ApiErrorResponse' }
+  /me/profile:
+    put:
+      tags: [Identity]
+      operationId: updateMyProfile
+      x-roles: [ADMIN, ACADEMIC_STAFF, ACCOUNTANT, TEACHER, STUDENT, PARENT]
+      x-object-permission: Chi sua cac truong ho so duoc phep cua token hien tai.
+      x-idempotency: Gui lai cung payload cho cung ket qua.
+      x-owners: { backend: Identity, client: Mobile }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateMyProfileRequest' }
+      responses:
+        '200':
+          description: Ho so sau khi cap nhat.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '400': { $ref: '#/components/responses/ApiErrorResponse' }
+  /users:
+    get:
+      tags: [Identity]
+      operationId: listUsers
+      x-roles: [ADMIN, ACADEMIC_STAFF, TEACHER]
+      x-object-permission: Admin va giao vu xem day du; giao vien chi nhan ban tom tat.
+      x-idempotency: Read-only.
+      x-owners: { backend: Identity, client: Mobile }
+      parameters:
+        - { name: role, in: query, schema: { type: string } }
+        - { name: q, in: query, schema: { type: string } }
+        - { name: classId, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Danh sach nguoi dung theo pham vi quyen.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/User' }
+        '403': { $ref: '#/components/responses/ApiErrorResponse' }
+    post:
+      tags: [Identity]
+      operationId: createUser
+      x-roles: [ADMIN]
+      x-object-permission: Chi Admin tao tai khoan.
+      x-idempotency: Username la duy nhat; gui lai trung username bi tu choi.
+      x-owners: { backend: Identity, client: Mobile }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateUserRequest' }
+      responses:
+        '200':
+          description: Tai khoan vua tao.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '400': { $ref: '#/components/responses/ApiErrorResponse' }
+        '403': { $ref: '#/components/responses/ApiErrorResponse' }
+  /users/{id}:
+    get:
+      tags: [Identity]
+      operationId: getUser
+      x-roles: [ADMIN, ACADEMIC_STAFF, ACCOUNTANT, TEACHER, STUDENT, PARENT]
+      x-object-permission: Admin xem moi ho so; nguoi dung xem chinh minh; phu huynh xem con lien ket.
+      x-idempotency: Read-only.
+      x-owners: { backend: Identity, client: Mobile }
+      parameters:
+        - { $ref: '#/components/parameters/UserId' }
+      responses:
+        '200':
+          description: Ho so nguoi dung.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '403': { $ref: '#/components/responses/ApiErrorResponse' }
+  /users/{id}/lock:
+    post:
+      tags: [Identity]
+      operationId: lockUser
+      x-roles: [ADMIN]
+      x-object-permission: Chi Admin khoa tai khoan.
+      x-idempotency: Goi lai giu trang thai LOCKED.
+      x-owners: { backend: Identity, client: Mobile }
+      parameters:
+        - { $ref: '#/components/parameters/UserId' }
+      responses:
+        '200':
+          description: Tai khoan da khoa.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '403': { $ref: '#/components/responses/ApiErrorResponse' }
+  /users/{id}/unlock:
+    post:
+      tags: [Identity]
+      operationId: unlockUser
+      x-roles: [ADMIN]
+      x-object-permission: Chi Admin mo khoa tai khoan.
+      x-idempotency: Goi lai giu trang thai ACTIVE.
+      x-owners: { backend: Identity, client: Mobile }
+      parameters:
+        - { $ref: '#/components/parameters/UserId' }
+      responses:
+        '200':
+          description: Tai khoan da mo khoa.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '403': { $ref: '#/components/responses/ApiErrorResponse' }
+  /users/{id}/reset-password:
+    post:
+      tags: [Identity]
+      operationId: adminResetUserPassword
+      x-roles: [ADMIN]
+      x-object-permission: Chi Admin dat lai mat khau tai khoan.
+      x-idempotency: Khong idempotent khi backend tu sinh mat khau.
+      x-owners: { backend: Identity, client: Mobile }
+      parameters:
+        - { $ref: '#/components/parameters/UserId' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminResetPasswordRequest' }
+      responses:
+        '200':
+          description: Mat khau tam de Admin ban giao an toan.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminResetPasswordResponse' }
+        '403': { $ref: '#/components/responses/ApiErrorResponse' }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    ApiErrorResponse:
+      description: Loi nghiep vu hoac phan quyen.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+  parameters:
+    UserId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+  schemas:
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string, minLength: 1 }
+        password: { type: string, minLength: 1, writeOnly: true }
+    RefreshRequest:
+      type: object
+      properties:
+        refreshToken: { type: [string, 'null'], writeOnly: true }
+    LogoutRequest:
+      type: object
+      properties:
+        refreshToken: { type: [string, 'null'], writeOnly: true }
+    ForgotPasswordRequest:
+      type: object
+      properties:
+        email: { type: [string, 'null'], format: email }
+        username: { type: [string, 'null'] }
+    ResetPasswordRequest:
+      type: object
+      required: [token, newPassword]
+      properties:
+        token: { type: string, minLength: 1, writeOnly: true }
+        newPassword: { type: string, minLength: 10, maxLength: 128, writeOnly: true }
+    ChangePasswordRequest:
+      type: object
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword: { type: string, minLength: 1, writeOnly: true }
+        newPassword: { type: string, minLength: 10, maxLength: 128, writeOnly: true }
+    UpdateMyProfileRequest:
+      type: object
+      properties:
+        email: { type: [string, 'null'], format: email }
+        phone: { type: [string, 'null'], maxLength: 30 }
+        avatarUrl: { type: [string, 'null'], maxLength: 1000 }
+        address: { type: [string, 'null'], maxLength: 1000 }
+        guardianName: { type: [string, 'null'], maxLength: 255 }
+        guardianPhone: { type: [string, 'null'], maxLength: 30 }
+    CreateUserRequest:
+      type: object
+      required: [username, password, fullName, role]
+      properties:
+        id: { type: [string, 'null'] }
+        username: { type: string, minLength: 1 }
+        password: { type: string, minLength: 10, maxLength: 128, writeOnly: true }
+        fullName: { type: string, minLength: 1 }
+        role:
+          type: string
+          enum: [ADMIN, ACADEMIC_STAFF, ACCOUNTANT, TEACHER, STUDENT, PARENT]
+        email: { type: [string, 'null'] }
+        phone: { type: [string, 'null'] }
+        avatarUrl: { type: [string, 'null'] }
+        teacherCode: { type: [string, 'null'] }
+        mainSubject: { type: [string, 'null'] }
+        studentCode: { type: [string, 'null'] }
+        classId: { type: [string, 'null'] }
+        className: { type: [string, 'null'] }
+        dateOfBirth: { type: [string, 'null'], format: date }
+        gender: { type: [string, 'null'] }
+        placeOfBirth: { type: [string, 'null'] }
+        ethnicity: { type: [string, 'null'] }
+        nationality: { type: [string, 'null'] }
+        address: { type: [string, 'null'] }
+        enrollmentDate: { type: [string, 'null'], format: date }
+        guardianName: { type: [string, 'null'] }
+        guardianPhone: { type: [string, 'null'] }
+    AdminResetPasswordRequest:
+      type: object
+      properties:
+        newPassword: { type: [string, 'null'], minLength: 10, maxLength: 128, writeOnly: true }
+    AdminResetPasswordResponse:
+      type: object
+      required: [ok, password]
+      properties:
+        ok: { type: boolean }
+        password: { type: string, writeOnly: true }
+    TokenResponse:
+      type: object
+      required: [accessToken, refreshToken, expiresIn]
+      properties:
+        accessToken: { type: string, writeOnly: true }
+        refreshToken: { type: string, writeOnly: true }
+        expiresIn: { type: integer, format: int64 }
+    LoginResponse:
+      allOf:
+        - { $ref: '#/components/schemas/TokenResponse' }
+        - type: object
+          required: [user]
+          properties:
+            user: { $ref: '#/components/schemas/User' }
+    OkResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+    ForgotPasswordResponse:
+      allOf:
+        - { $ref: '#/components/schemas/OkResponse' }
+        - type: object
+          required: [message]
+          properties:
+            message: { type: string }
+            devResetToken: { type: [string, 'null'], writeOnly: true }
+    ChangePasswordResponse:
+      type: object
+      required: [ok, reauthenticationRequired]
+      properties:
+        ok: { type: boolean }
+        reauthenticationRequired: { type: boolean }
+    User:
+      type: object
+      required: [id, username, fullName, role, status, passwordChangeRequired]
+      properties:
+        id: { type: string }
+        username: { type: string }
+        fullName: { type: string }
+        role:
+          type: string
+          enum: [ADMIN, ACADEMIC_STAFF, ACCOUNTANT, TEACHER, STUDENT, PARENT]
+        status: { type: string, enum: [ACTIVE, LOCKED, INACTIVE] }
+        passwordChangeRequired: { type: boolean }
+        email: { type: [string, 'null'] }
+        phone: { type: [string, 'null'] }
+        avatarUrl: { type: [string, 'null'] }
+        studentCode: { type: [string, 'null'] }
+        className: { type: [string, 'null'] }
+        classId: { type: [string, 'null'] }
+        dateOfBirth: { type: [string, 'null'], format: date }
+        gender: { type: [string, 'null'] }
+        placeOfBirth: { type: [string, 'null'] }
+        ethnicity: { type: [string, 'null'] }
+        nationality: { type: [string, 'null'] }
+        address: { type: [string, 'null'] }
+        enrollmentDate: { type: [string, 'null'], format: date }
+        guardianName: { type: [string, 'null'] }
+        guardianPhone: { type: [string, 'null'] }
+        teacherCode: { type: [string, 'null'] }
+        mainSubject: { type: [string, 'null'] }
+        childrenIds:
+          type: [array, 'null']
+          items: { type: string }
+        cohortId: { type: [string, 'null'] }
+        studentStatus: { type: [string, 'null'] }
+        graduatedAt: { type: [string, 'null'], format: date-time }
+        graduationAcademicYearId: { type: [string, 'null'] }
+        graduationClassId: { type: [string, 'null'] }
+    ApiError:
+      type: object
+      required: [status, message]
+      properties:
+        status: { type: integer }
+        error: { type: [string, 'null'] }
+        message: { type: string }
+        path: { type: [string, 'null'] }
+        timestamp: { type: [string, 'null'], format: date-time }
+security:
+  - bearerAuth: []

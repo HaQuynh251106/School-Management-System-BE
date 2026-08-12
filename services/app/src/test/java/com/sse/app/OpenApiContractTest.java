@@ -26,7 +26,7 @@ class OpenApiContractTest {
     void contractsAreParseableAndCarryRequiredGovernanceMetadata() throws IOException {
         for (String contract : List.of(
                 "finance.yaml", "assignment.yaml", "file.yaml", "chat.yaml", "notification.yaml",
-                "club.yaml")) {
+                "club.yaml", "identity.yaml", "academic.yaml", "report.yaml")) {
             assertGovernanceMetadata(loadContract(contract), contract);
         }
     }
@@ -57,23 +57,34 @@ class OpenApiContractTest {
         Map<String, Object> contract = loadContract("finance.yaml");
         Map<String, Object> paths = map(contract.get("paths"));
 
+        assertOperation(paths, "/invoices", "get", "listInvoices");
         assertOperation(paths, "/payments/cash", "post", "recordCashPayment");
+        assertOperation(paths, "/payments/gateway/callback", "post", "processGatewayCallback");
+        assertOperation(paths, "/payments/{paymentId}/status", "get", "getPaymentStatus");
         assertOperation(paths, "/payments/{paymentId}/confirm-vietqr", "post", "confirmVietQrPayment");
         assertOperation(paths, "/payments/{paymentId}/reject-vietqr", "post", "rejectVietQrPayment");
         assertOperation(paths, "/invoices/{invoiceId}/refund", "post", "refundInvoice");
         assertOperation(paths, "/invoices/{invoiceId}", "get", "getInvoiceDetail");
 
-        Map<String, Object> status = map(resolve(contract, "components", "schemas", "Invoice",
-                "properties", "status"));
+        Map<String, Object> status = map(resolve(contract, "components", "schemas",
+                "InvoiceStatus"));
         assertEquals(Set.of("UNPAID", "PARTIAL", "PAID", "OVERDUE", "CANCELLED",
                         "PARTIALLY_REFUNDED", "REFUNDED"),
                 Set.copyOf(list(status.get("enum"))));
-        Map<String, Object> transitions = map(status.get("x-state-transitions"));
+        Map<String, Object> invoiceStatus = map(resolve(contract, "components", "schemas",
+                "Invoice", "properties", "status"));
+        Map<String, Object> transitions = map(invoiceStatus.get("x-state-transitions"));
         assertEquals(List.of("PARTIAL", "PAID", "OVERDUE", "CANCELLED"),
                 list(transitions.get("UNPAID")));
         assertEquals(List.of("REFUNDED"), list(transitions.get("PARTIALLY_REFUNDED")));
         assertTrue(list(transitions.get("REFUNDED")).isEmpty());
         assertTrue(list(transitions.get("CANCELLED")).isEmpty());
+
+        List<Object> vietQrResult = list(resolve(contract, "components", "schemas",
+                "VietQrPaymentResult", "allOf"));
+        Map<String, Object> vietQrFields = map(map(vietQrResult.get(1)).get("properties"));
+        assertTrue(vietQrFields.keySet().containsAll(Set.of(
+                "qrImageUrl", "bankId", "accountNo", "accountName", "transferContent")));
     }
 
     @Test
@@ -134,6 +145,108 @@ class OpenApiContractTest {
                 "approveClubRegistration");
         assertOperation(paths, "/club-registrations/{registrationId}/cancel", "post",
                 "cancelClubRegistration");
+    }
+
+    @Test
+    void identityContractCoversCoreMobileAuthenticationAndProfile() throws IOException {
+        Map<String, Object> paths = map(loadContract("identity.yaml").get("paths"));
+
+        assertOperation(paths, "/auth/login", "post", "login");
+        assertOperation(paths, "/auth/refresh", "post", "refreshSession");
+        assertOperation(paths, "/auth/logout", "post", "logout");
+        assertOperation(paths, "/auth/forgot-password", "post", "forgotPassword");
+        assertOperation(paths, "/auth/reset-password", "post", "resetPassword");
+        assertOperation(paths, "/me", "get", "getCurrentUser");
+        assertOperation(paths, "/me/password", "put", "changeMyPassword");
+        assertOperation(paths, "/me/profile", "put", "updateMyProfile");
+        assertOperation(paths, "/users", "get", "listUsers");
+        assertOperation(paths, "/users", "post", "createUser");
+        assertOperation(paths, "/users/{id}", "get", "getUser");
+        assertOperation(paths, "/users/{id}/lock", "post", "lockUser");
+        assertOperation(paths, "/users/{id}/unlock", "post", "unlockUser");
+        assertOperation(paths, "/users/{id}/reset-password", "post",
+                "adminResetUserPassword");
+    }
+
+    @Test
+    void academicContractCoversCoreMobileStructureAndTimetableReads() throws IOException {
+        Map<String, Object> paths = map(loadContract("academic.yaml").get("paths"));
+        assertOperation(paths, "/academicYears", "get", "listAcademicYears");
+        assertOperation(paths, "/semesters", "get", "listSemesters");
+        assertOperation(paths, "/classes", "get", "listClasses");
+        assertOperation(paths, "/subjects", "get", "listSubjects");
+        assertOperation(paths, "/rooms", "get", "listRooms");
+        assertOperation(paths, "/timetableSlots", "get", "listTimetableSlots");
+        assertOperation(paths, "/me/timetable", "get", "getMyTimetable");
+        assertOperation(paths, "/classes", "post", "createClass");
+        assertOperation(paths, "/subjects", "post", "createSubject");
+        assertOperation(paths, "/rooms", "post", "createRoom");
+        assertOperation(paths, "/teaching-assignments", "get", "listTeachingAssignments");
+        assertOperation(paths, "/teaching-assignments", "post", "createTeachingAssignment");
+        assertOperation(paths, "/timetableSlots", "post", "createTimetableSlot");
+        assertOperation(paths, "/attendance", "get", "listAttendance");
+        assertOperation(paths, "/attendance/bulk", "post", "bulkMarkAttendance");
+        assertOperation(paths, "/attendance/day-status", "get", "getAttendanceDayStatus");
+        assertOperation(paths, "/attendance/session-status", "get", "getAttendanceSessionStatus");
+        assertOperation(paths, "/attendance/approved-leaves", "get", "listApprovedLeavesForAttendance");
+        assertOperation(paths, "/attendance/unlock", "post", "unlockLateAttendance");
+        assertOperation(paths, "/grades", "get", "listGrades");
+        assertOperation(paths, "/grades", "post", "createGrade");
+        assertOperation(paths, "/grades/bulk", "post", "bulkUpsertGrades");
+        assertOperation(paths, "/me/gradebook-context", "get", "getTeacherGradebookContext");
+        assertOperation(paths, "/grades/{id}", "put", "updateGrade");
+        assertOperation(paths, "/grades/{id}/change-logs", "get", "listGradeChangeLogs");
+        assertOperation(paths, "/exam-categories", "get", "listExamCategories");
+        assertOperation(paths, "/exam-periods", "get", "listExamPeriods");
+        assertOperation(paths, "/exam-periods", "post", "createExamPeriod");
+        assertOperation(paths, "/exam-periods/{id}", "put", "updateExamPeriod");
+        assertOperation(paths, "/exam-periods/{id}", "delete", "deleteExamPeriod");
+        assertOperation(paths, "/exam-periods/{id}/publish-schedule", "post", "publishExamSchedule");
+        assertOperation(paths, "/exam-periods/{id}/schedules", "get", "listExamSchedules");
+        assertOperation(paths, "/exam-periods/{id}/schedules", "post", "createExamSchedule");
+        assertOperation(paths, "/exam-schedules/{id}", "put", "updateExamSchedule");
+        assertOperation(paths, "/exam-schedules/{id}", "delete", "deleteExamSchedule");
+        assertOperation(paths, "/exam-schedules/{id}/rooms", "get", "listExamRooms");
+        assertOperation(paths, "/exam-schedules/{id}/rooms", "post", "createExamRoom");
+        assertOperation(paths, "/exam-rooms/{id}", "delete", "deleteExamRoom");
+        assertOperation(paths, "/exam-rooms/{id}/allocate", "post", "allocateExamCandidates");
+        assertOperation(paths, "/exam-schedules/{id}/eligible-graders", "get", "listEligibleExamGraders");
+        assertOperation(paths, "/exam-schedules/{id}/graders", "get", "listExamGraders");
+        assertOperation(paths, "/exam-schedules/{id}/graders", "put", "saveExamGrader");
+        assertOperation(paths, "/exam-periods/{id}/lock-scores", "post", "lockExamScores");
+        assertOperation(paths, "/exam-periods/{id}/unlock-scores", "post", "unlockExamScores");
+        assertOperation(paths, "/exam-periods/{id}/confirm", "post", "confirmExamPeriod");
+        assertOperation(paths, "/exam-periods/{id}/results", "get", "listExamResults");
+        assertOperation(paths, "/exam-periods/{id}/results", "put", "saveExamResults");
+        assertOperation(paths, "/me/exam-agenda", "get", "getMyExamAgenda");
+        assertOperation(paths, "/me/exam-grading", "get", "getMyExamGradingTasks");
+        assertOperation(paths, "/me/exam-results", "get", "getMyExamResults");
+        assertOperation(paths, "/me/exam-reviews", "get", "getMyExamReviews");
+        assertOperation(paths, "/exam-periods/{id}/reviews", "get", "listExamReviews");
+        assertOperation(paths, "/exam-periods/{id}/reviews", "post", "requestExamReview");
+        assertOperation(paths, "/exam-reviews/{id}/resolve", "put", "resolveExamReview");
+        assertOperation(paths, "/exam-periods/{id}/adjustments", "get", "listExamScoreAdjustments");
+        assertOperation(paths, "/academic-years/{id}/promotion-preview", "get", "getPromotionPreview");
+        assertOperation(paths, "/academic-years/{id}/students/{studentId}/conduct", "put", "setStudentConduct");
+        assertOperation(paths, "/academic-years/{id}/homeroom-summaries", "get", "getHomeroomYearlySummaries");
+        assertOperation(paths, "/academic-years/{id}/my-summary", "get", "getMyYearlySummary");
+        assertOperation(paths, "/academic-years/{id}/children/{studentId}/summary", "get", "getChildYearlySummary");
+        assertOperation(paths, "/academic-years/{id}/finalize", "post", "finalizeAcademicYear");
+        assertOperation(paths, "/academic-years/{id}/rollover-preview", "get", "getYearRolloverPreview");
+        assertOperation(paths, "/academic-years/{id}/rollover", "post", "rolloverAcademicYear");
+    }
+
+    @Test
+    void reportContractCoversDashboardReportsAndExports() throws IOException {
+        Map<String, Object> paths = map(loadContract("report.yaml").get("paths"));
+        assertOperation(paths, "/dashboard", "get", "getDashboard");
+        assertOperation(paths, "/me/reports", "get", "getPersonalReport");
+        assertOperation(paths, "/me/reports/export", "get", "exportPersonalReport");
+        assertOperation(paths, "/reports/overview", "get", "getReportOverview");
+        assertOperation(paths, "/reports/grade-distribution", "get", "getGradeDistribution");
+        assertOperation(paths, "/reports/attendance-summary", "get", "getAttendanceSummary");
+        assertOperation(paths, "/reports/revenue", "get", "getRevenueReport");
+        assertOperation(paths, "/reports/export", "get", "exportReport");
     }
 
     private static Map<String, Object> loadContract(String fileName) throws IOException {

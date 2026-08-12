@@ -47,6 +47,7 @@ spring:
       mail.smtp.starttls.enable: ${SSE_MAIL_STARTTLS:true}
 
 sse:
+  environment: ${SSE_ENVIRONMENT:local}
   jwt:
     # Required outside local/test. Use a secret manager in production.
     secret: ${SSE_JWT_SECRET}
@@ -62,6 +63,11 @@ sse:
   payments:
     # vietqr = tạo QR chuyển khoản thật; hóa đơn chỉ hoàn tất sau khi Admin đối soát.
     mode: ${SSE_PAYMENT_MODE:disabled}
+    public-base-url: ${SSE_PAYMENT_PUBLIC_BASE_URL:http://127.0.0.1:4000}
+    sandbox:
+      enabled: ${SSE_PAYMENT_SANDBOX_ENABLED:false}
+      merchant-code: ${SSE_PAYMENT_SANDBOX_MERCHANT:SSE_SCHOOL}
+      secret: ${SSE_PAYMENT_SANDBOX_SECRET:local-sandbox-secret-change-me}
     vietqr:
       bank-id: ${SSE_VIETQR_BANK_ID:}
       account-no: ${SSE_VIETQR_ACCOUNT_NO:}

@@ -2,6 +2,10 @@ package com.sse.app.finance;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import jakarta.persistence.LockModeType;
 
 import java.util.List;
 import java.util.Optional;
@@ -50,7 +54,13 @@ interface InvoiceRefundRepository extends JpaRepository<InvoiceRefund, String> {
 
 interface PaymentGatewayTransactionRepository extends JpaRepository<PaymentGatewayTransaction, String> {
     Optional<PaymentGatewayTransaction> findByTxnRef(String txnRef);
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select t from PaymentGatewayTransaction t where t.txnRef = :txnRef")
+    Optional<PaymentGatewayTransaction> findByTxnRefForUpdate(@Param("txnRef") String txnRef);
     Optional<PaymentGatewayTransaction> findByPaymentId(String paymentId);
+    Optional<PaymentGatewayTransaction> findByIdempotencyKey(String idempotencyKey);
+    Optional<PaymentGatewayTransaction> findByGatewayTransactionId(String gatewayTransactionId);
+    Optional<PaymentGatewayTransaction> findByCallbackEventId(String callbackEventId);
     List<PaymentGatewayTransaction> findByStatusAndCreatedAtBefore(String status, Instant cutoff);
     List<PaymentGatewayTransaction> findByGatewayAndStatusInOrderByCreatedAtDesc(
             String gateway, List<String> statuses);

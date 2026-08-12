@@ -37,7 +37,17 @@ public final class FinanceDtos {
             int invoiceCount, long totalAmount, boolean valid,
             List<String> errors, List<FeePeriodRecipientPreview> recipients) {}
 
-    public record PayRequest(@NotBlank String invoiceId, String method) {}
+    public record PayRequest(@NotBlank String invoiceId, String method, String idempotencyKey) {}
+
+    public record GatewayCallbackRequest(
+            @NotBlank String merchantCode,
+            @NotBlank String txnRef,
+            @NotBlank String gatewayTransactionId,
+            @NotBlank String callbackEventId,
+            @NotNull @Positive Long amount,
+            @NotBlank String currency,
+            @NotBlank String status,
+            @NotBlank String signature) {}
 
     public record CashPaymentRequest(
             @NotBlank String invoiceId, @Positive Long amount,
