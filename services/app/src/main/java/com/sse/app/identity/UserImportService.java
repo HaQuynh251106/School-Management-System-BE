@@ -1,6 +1,7 @@
 package com.sse.app.identity;
 
 import com.sse.app.academic.structure.SchoolClass;
+import com.sse.app.academic.structure.Subject;
 import com.sse.app.academic.structure.StructureService;
 import com.sse.app.common.ApiException;
 import com.sse.app.identity.IdentityDtos.CreateUserRequest;
@@ -116,7 +117,7 @@ public class UserImportService {
              ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             Sheet sheet = workbook.createSheet("Nguoi dung");
             String[] headers = {"Tên đăng nhập", "Họ tên", "Vai trò", "Mật khẩu", "Email", "Số điện thoại",
-                    "Mã lớp", "Mã học sinh", "Mã giáo viên", "Môn chính", "Ngày sinh", "Giới tính",
+                    "Mã lớp", "Mã môn chuyên ngành", "Ngày sinh", "Giới tính",
                     "Địa chỉ", "Ngày nhập học", "Người giám hộ", "SĐT người giám hộ", "Tên đăng nhập liên kết"};
             Row header = sheet.createRow(0);
             CellStyle style = workbook.createCellStyle();
@@ -131,7 +132,7 @@ public class UserImportService {
             }
             Row example = sheet.createRow(1);
             String[] values = {"hs.nguyenvana", "Nguyễn Văn A", "Học sinh", "Sse@123456", "a@example.edu.vn",
-                    "0900000000", "10A1", "", "", "", "01/01/2010", "MALE", "TP. Hồ Chí Minh",
+                    "0900000000", "10A1", "", "01/01/2010", "MALE", "TP. Hồ Chí Minh",
                     "05/09/2025", "Nguyễn Văn B", "0911111111", ""};
             for (int i = 0; i < values.length; i++) example.createCell(i).setCellValue(values[i]);
             workbook.write(output);
@@ -197,12 +198,21 @@ public class UserImportService {
                 schoolClass = structure.classByCode(requestedClassCode)
                         .orElseThrow(() -> ApiException.badRequest("Không tìm thấy lớp " + requestedClassCode));
             }
+            Subject mainSubject = null;
+            if ("TEACHER".equals(role)) {
+                mainSubject = structure.requireSubjectByCodeOrName(
+                        cell(row, h, "mainsubject", f));
+            }
 
             String password = required(cell(row, h, "password", f), "Mật khẩu tạm");
             if (password.length() < 10) throw ApiException.badRequest("Mật khẩu tạm phải có ít nhất 10 ký tự");
-            String email = emptyToNull(cell(row, h, "email", f));
-            if (email != null && !email.matches("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")) {
+            String email = required(cell(row, h, "email", f), "Email");
+            if (!email.matches("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")) {
                 throw ApiException.badRequest("Email không hợp lệ");
+            }
+            String phone = required(cell(row, h, "phone", f), "Số điện thoại");
+            if (!phone.matches("^[0-9+ .()\\-]{7,30}$")) {
+                throw ApiException.badRequest("Số điện thoại không hợp lệ");
             }
 
             User linked = linkedUsername.isBlank() ? null : users.findByUsername(linkedUsername)
@@ -216,10 +226,11 @@ public class UserImportService {
 
             CreateUserRequest request = new CreateUserRequest(
                     null, username, password, fullName, role,
-                    email, emptyToNull(cell(row, h, "phone", f)), null,
-                    emptyToNull(cell(row, h, "teachercode", f)),
-                    emptyToNull(cell(row, h, "mainsubject", f)),
-                    emptyToNull(cell(row, h, "studentcode", f)),
+                    email, phone, null,
+                    null,
+                    mainSubject == null ? null : mainSubject.getName(),
+                    mainSubject == null ? null : mainSubject.getId(),
+                    null,
                     schoolClass == null ? null : schoolClass.getId(),
                     schoolClass == null ? null : schoolClass.getCode(),
                     parseDate(cell(row, h, "dateofbirth", f)),
@@ -333,6 +344,7 @@ public class UserImportService {
         alias(out, "mahocsinh", "studentcode");
         alias(out, "magiaovien", "teachercode");
         alias(out, "monchinh", "mainsubject");
+        alias(out, "mamonchuyennganh", "mainsubject");
         alias(out, "sodienthoai", "phone");
         alias(out, "ngaysinh", "dateofbirth");
         alias(out, "gioitinh", "gender");
@@ -377,8 +389,6 @@ public class UserImportService {
     private String normalizeRole(String value) {
         return switch (normalizeHeader(value)) {
             case "admin", "quantrivien" -> "ADMIN";
-            case "academicstaff", "giaovu" -> "ACADEMIC_STAFF";
-            case "accountant", "ketoan" -> "ACCOUNTANT";
             case "teacher", "giaovien" -> "TEACHER";
             case "student", "hocsinh" -> "STUDENT";
             case "parent", "phuhuynh" -> "PARENT";

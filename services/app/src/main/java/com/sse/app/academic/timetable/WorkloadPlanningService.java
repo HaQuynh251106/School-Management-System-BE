@@ -57,6 +57,24 @@ public class WorkloadPlanningService {
         Subject subject = structure.listSubjects().stream()
                 .filter(item -> item.getId().equals(request.subjectId())).findFirst()
                 .orElseThrow(() -> ApiException.notFound("Môn học"));
+        java.time.LocalDate startDate = request.startDate() == null
+                ? semester.getStartDate() : request.startDate();
+        java.time.LocalDate endDate = request.endDate() == null
+                ? semester.getEndDate() : request.endDate();
+        if (endDate.isBefore(startDate)
+                || startDate.isBefore(semester.getStartDate())
+                || endDate.isAfter(semester.getEndDate())) {
+            throw ApiException.badRequest("Thời gian môn học phải nằm trong học kỳ và ngày kết thúc không được trước ngày bắt đầu");
+        }
+        if ((request.examWindowStart() == null) != (request.examWindowEnd() == null)) {
+            throw ApiException.badRequest("Cần nhập đủ ngày bắt đầu và kết thúc cửa sổ thi");
+        }
+        if (request.examWindowStart() != null
+                && (request.examWindowEnd().isBefore(request.examWindowStart())
+                || request.examWindowStart().isBefore(startDate)
+                || request.examWindowEnd().isAfter(endDate))) {
+            throw ApiException.badRequest("Cửa sổ thi phải nằm trong thời gian môn học");
+        }
         Instant now = Instant.now();
         CurriculumRequirement item = requirements
                 .findBySemesterIdAndGradeLevelAndSubjectId(request.semesterId(), grade, request.subjectId())
@@ -65,6 +83,14 @@ public class WorkloadPlanningService {
                         .subjectId(subject.getId()).subjectName(subject.getName()).createdAt(now).build());
         item.setSubjectName(subject.getName());
         item.setWeeklyPeriods(request.weeklyPeriods());
+        item.setTotalPeriods(request.totalPeriods() == null
+                ? Math.max(request.weeklyPeriods(), request.weeklyPeriods() * 18)
+                : request.totalPeriods());
+        item.setStartDate(startDate);
+        item.setEndDate(endDate);
+        item.setExamWindowStart(request.examWindowStart());
+        item.setExamWindowEnd(request.examWindowEnd());
+        item.setMilestone(clean(request.milestone()));
         item.setUpdatedAt(now);
         return requirements.save(item);
     }

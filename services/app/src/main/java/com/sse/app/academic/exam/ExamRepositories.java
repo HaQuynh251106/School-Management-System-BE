@@ -4,7 +4,10 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.*;
 
 interface ExamPeriodRepository extends JpaRepository<ExamPeriod, String> { Optional<ExamPeriod> findByCode(String code); }
-interface ExamScheduleRepository extends JpaRepository<ExamSchedule, String> { List<ExamSchedule> findByExamPeriodId(String examPeriodId); }
+interface ExamScheduleRepository extends JpaRepository<ExamSchedule, String> {
+    List<ExamSchedule> findByExamPeriodId(String examPeriodId);
+    List<ExamSchedule> findByPlanOperationKey(String planOperationKey);
+}
 interface ExamRoomRepository extends JpaRepository<ExamRoom, String> { List<ExamRoom> findByScheduleId(String scheduleId); }
 interface ExamGradingAssignmentRepository extends JpaRepository<ExamGradingAssignment, String> {
     List<ExamGradingAssignment> findByExamPeriodId(String examPeriodId);

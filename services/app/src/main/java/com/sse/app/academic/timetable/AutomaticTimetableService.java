@@ -16,6 +16,7 @@ public class AutomaticTimetableService {
     // tránh việc cùng một dữ liệu cho kết quả khác nhau khi CPU tạm thời bận.
     private static final long MAX_SEARCH_NODES = 5_000_000;
     private static final long MAX_SEARCH_MILLIS = 30_000;
+    private static final int MAX_PEER_DAY_GAP = 2;
     private static final List<String> DAYS = List.of("MON", "TUE", "WED", "THU", "FRI", "SAT");
     private static final Map<Integer, String[]> MORNING = Map.of(
             1, new String[]{"07:00", "07:45"}, 2, new String[]{"07:50", "08:35"},
@@ -31,19 +32,22 @@ public class AutomaticTimetableService {
     private final TeacherLoadRegistrationRepository registrations;
     private final StructureService structure;
     private final TimetableService timetable;
+    private final TimetableVersionService versions;
 
     public AutomaticTimetableService(TimetableRepository slots, TeachingAssignmentRepository assignments,
                                      TeacherLoadRegistrationRepository registrations,
-                                     StructureService structure, TimetableService timetable) {
+                                     StructureService structure, TimetableService timetable,
+                                     TimetableVersionService versions) {
         this.slots = slots;
         this.assignments = assignments;
         this.registrations = registrations;
         this.structure = structure;
         this.timetable = timetable;
+        this.versions = versions;
     }
 
     @Transactional
-    public AutoTimetablePlan plan(AutoTimetableRequest request) {
+    public AutoTimetablePlan plan(AutoTimetableRequest request, String actorId) {
         structure.assertSemesterWritable(request.semesterId());
         List<String> allowedDays = normalizeAllowedDays(request.allowedDays());
         List<TimetableSlot> occupied = new ArrayList<>(slots.findBySemesterId(request.semesterId()));
@@ -55,11 +59,15 @@ public class AutomaticTimetableService {
 
         List<TeachingAssignment> work = assignments.findAll().stream()
                 .filter(item -> request.semesterId().equals(item.getSemesterId()))
+                .filter(item -> request.scopeGradeLevel() == null
+                        || request.scopeGradeLevel().equals(structure.getClass(item.getClassId()).getGradeLevel()))
                 .sorted(Comparator.comparingInt((TeachingAssignment item) ->
                                 availableCandidateCount(item, loads.get(item.getTeacherId()), occupied, allowedDays))
                         .thenComparing(TeachingAssignment::getClassCode)
                         .thenComparing(TeachingAssignment::getSubjectName)).toList();
-        if (work.isEmpty()) throw ApiException.badRequest("Chưa có phân công bộ môn trong học kỳ đã chọn");
+        if (work.isEmpty()) throw ApiException.badRequest(request.scopeGradeLevel() == null
+                ? "Chưa có phân công bộ môn trong học kỳ đã chọn"
+                : "Chưa có phân công bộ môn cho " + request.scopeGradeLevel().replace("K", "khối "));
 
         List<AutoTimetableItem> result = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
@@ -77,7 +85,7 @@ public class AutomaticTimetableService {
                 for (int index = 0; index < missing; index++)
                     result.add(item(assignment, schoolClass, null, "UNSCHEDULED", message));
                 warnings.add(assignment.getClassCode() + " · " + assignment.getSubjectName() + ": " + message);
-            } else needs.add(new ScheduleNeed(assignment, schoolClass, load, missing));
+            } else needs.add(new ScheduleNeed(assignment, schoolClass, load, already, missing));
         }
 
         int baseOccupiedSize = occupied.size();
@@ -93,7 +101,8 @@ public class AutomaticTimetableService {
         for (ScheduleNeed need : needs) {
             for (Candidate candidate : need.scheduled)
                 result.add(item(need.assignment, need.schoolClass, candidate, "PROPOSED",
-                        solved ? "Đã tối ưu và kiểm tra xung đột toàn cục" : "Khung giờ khả dụng tốt nhất"));
+                        solved ? "Đã tối ưu xung đột và cân bằng tiến độ các lớp cùng khối"
+                                : "Khung giờ khả dụng tốt nhất trong ngưỡng lệch tối đa 2 ngày"));
             for (int index = 0; index < need.remaining; index++) {
                 String message = explainNoCandidate(need, occupied, allowedDays);
                 result.add(item(need.assignment, need.schoolClass, null, "UNSCHEDULED", message));
@@ -113,8 +122,12 @@ public class AutomaticTimetableService {
                     item.roomCode(), item.dayOfWeek(), item.periodNo(), item.startTime(), item.endTime(),
                     request.semesterId()));
         }
-        return new AutoTimetablePlan(request.semesterId(), existingCount, proposed, unscheduled,
-                apply, result, warnings);
+        TimetableVersion draftVersion = null;
+        if (apply && request.draftName() != null && !request.draftName().isBlank()) {
+            draftVersion = versions.snapshot(request.semesterId(), request.draftName(), actorId);
+        }
+        return new AutoTimetablePlan(request.semesterId(), request.scopeGradeLevel(), existingCount,
+                proposed, unscheduled, apply, result, warnings, draftVersion);
     }
 
     /**
@@ -183,19 +196,69 @@ public class AutomaticTimetableService {
                 ? AFTERNOON : MORNING;
         int lastIndex = need.scheduled.isEmpty() ? -1
                 : need.scheduled.stream().mapToInt(this::slotIndex).max().orElse(-1);
+        int occurrenceIndex = need.existingPeriods + need.scheduled.size();
+        List<Integer> peerDays = peerOccurrenceDays(need, occurrenceIndex, occupied);
         return allowedDays.stream().flatMap(day -> times.entrySet().stream()
                         .map(entry -> new Candidate(day, entry.getKey(), entry.getValue()[0], entry.getValue()[1])))
                 .filter(candidate -> slotIndex(candidate) > lastIndex)
                 .filter(candidate -> !unavailable.contains(candidate.day() + ":" + candidate.period()))
                 .filter(candidate -> noConflict(need.assignment, need.schoolClass, candidate, occupied))
+                .filter(candidate -> peerDays.stream().allMatch(
+                        peerDay -> Math.abs(dayIndex(candidate.day()) - peerDay) <= MAX_PEER_DAY_GAP))
                 // Các tiết của cùng một môn-lớp là tương đương. Duyệt theo thứ tự cố định
                 // kết hợp với ràng buộc slotIndex tăng dần loại bỏ các hoán vị trùng lặp
                 // và giúp kết quả không phụ thuộc tốc độ máy tại thời điểm chạy.
-                .sorted(Comparator.comparingInt(this::slotIndex)).toList();
+                .sorted(Comparator.comparingInt((Candidate candidate) -> peerGapScore(candidate, peerDays))
+                        .thenComparingInt(candidate -> classDayLoad(
+                                need.assignment.getClassId(), candidate.day(), occupied))
+                        .thenComparingInt(candidate -> subjectDayLoad(
+                                need.assignment, candidate.day(), occupied))
+                        .thenComparingInt(this::slotIndex))
+                .toList();
     }
 
     private int slotIndex(Candidate candidate) {
         return DAYS.indexOf(candidate.day()) * 10 + candidate.period();
+    }
+
+    private int slotIndex(TimetableSlot slot) {
+        return DAYS.indexOf(slot.getDayOfWeek()) * 10 + slot.getPeriodNo();
+    }
+
+    /**
+     * Lấy ngày của cùng lần học (tiết thứ n trong tuần) ở các lớp cùng khối và
+     * cùng môn. Ứng viên mới bắt buộc nằm trong khoảng ±2 ngày so với tất cả lớp
+     * đã có mốc tương ứng.
+     */
+    private List<Integer> peerOccurrenceDays(ScheduleNeed need, int occurrenceIndex,
+                                             List<TimetableSlot> occupied) {
+        Map<String, List<TimetableSlot>> peers = new LinkedHashMap<>();
+        for (TimetableSlot slot : occupied) {
+            if (need.assignment.getClassId().equals(slot.getClassId())
+                    || !need.assignment.getSubjectId().equals(slot.getSubjectId())
+                    || !need.assignment.getSemesterId().equals(slot.getSemesterId())) continue;
+            SchoolClass peerClass = structure.getClass(slot.getClassId());
+            if (!Objects.equals(need.schoolClass.getGradeLevel(), peerClass.getGradeLevel())) continue;
+            peers.computeIfAbsent(slot.getClassId(), ignored -> new ArrayList<>()).add(slot);
+        }
+        List<Integer> days = new ArrayList<>();
+        for (List<TimetableSlot> peerSlots : peers.values()) {
+            peerSlots.sort(Comparator.comparingInt(this::slotIndex));
+            if (peerSlots.size() > occurrenceIndex) {
+                days.add(dayIndex(peerSlots.get(occurrenceIndex).getDayOfWeek()));
+            }
+        }
+        return days;
+    }
+
+    private int peerGapScore(Candidate candidate, List<Integer> peerDays) {
+        int candidateDay = dayIndex(candidate.day());
+        return peerDays.stream().mapToInt(day -> Math.abs(candidateDay - day)).max().orElse(0);
+    }
+
+    private int dayIndex(String day) {
+        int index = DAYS.indexOf(day == null ? "" : day.toUpperCase(Locale.ROOT));
+        return index < 0 ? 99 : index;
     }
 
     private static TimetableSlot simulated(TeachingAssignment assignment, SchoolClass schoolClass,
@@ -211,13 +274,17 @@ public class AutomaticTimetableService {
 
     private String explainNoCandidate(ScheduleNeed need, List<TimetableSlot> occupied,
                                       List<String> allowedDays) {
-        int classBusy = 0, teacherBusy = 0, unavailable = 0;
+        int classBusy = 0, teacherBusy = 0, unavailable = 0, pacingBlocked = 0;
         Set<String> blocked = new HashSet<>(csv(need.load.getUnavailableSlots()));
         Map<Integer, String[]> times = "AFTERNOON".equalsIgnoreCase(need.schoolClass.getStudyShift())
                 ? AFTERNOON : MORNING;
+        int occurrenceIndex = need.existingPeriods + need.scheduled.size();
+        List<Integer> peerDays = peerOccurrenceDays(need, occurrenceIndex, occupied);
         for (String day : allowedDays) for (var entry : times.entrySet()) {
             Candidate candidate = new Candidate(day, entry.getKey(), entry.getValue()[0], entry.getValue()[1]);
             if (blocked.contains(day + ":" + entry.getKey())) unavailable++;
+            if (!peerDays.isEmpty() && peerDays.stream().anyMatch(
+                    peerDay -> Math.abs(dayIndex(day) - peerDay) > MAX_PEER_DAY_GAP)) pacingBlocked++;
             for (TimetableSlot slot : occupied) {
                 if (!day.equals(slot.getDayOfWeek()) || !overlaps(candidate, slot)) continue;
                 if (need.assignment.getClassId().equals(slot.getClassId())
@@ -227,7 +294,8 @@ public class AutomaticTimetableService {
         }
         return "Không có khung giờ đồng thời trống cho lớp, giáo viên và phòng"
                 + " (lớp/phòng bận " + classBusy + " lượt, giáo viên bận " + teacherBusy
-                + " lượt, giáo viên đăng ký bận " + unavailable + " khung)";
+                + " lượt, giáo viên đăng ký bận " + unavailable + " khung, lệch tiến độ quá 2 ngày "
+                + pacingBlocked + " khung)";
     }
 
     private Candidate chooseCandidate(TeachingAssignment assignment, SchoolClass schoolClass,
@@ -340,15 +408,17 @@ public class AutomaticTimetableService {
         private final TeachingAssignment assignment;
         private final SchoolClass schoolClass;
         private final TeacherLoadRegistration load;
+        private final int existingPeriods;
         private final int originalRemaining;
         private final List<Candidate> scheduled = new ArrayList<>();
         private int remaining;
 
         private ScheduleNeed(TeachingAssignment assignment, SchoolClass schoolClass,
-                             TeacherLoadRegistration load, int remaining) {
+                             TeacherLoadRegistration load, int existingPeriods, int remaining) {
             this.assignment = assignment;
             this.schoolClass = schoolClass;
             this.load = load;
+            this.existingPeriods = existingPeriods;
             this.originalRemaining = remaining;
             this.remaining = remaining;
         }

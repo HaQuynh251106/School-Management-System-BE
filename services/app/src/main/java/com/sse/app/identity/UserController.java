@@ -1,6 +1,7 @@
 package com.sse.app.identity;
 
 import com.sse.app.identity.IdentityDtos.*;
+import com.sse.app.audit.AuditService;
 import com.sse.app.common.ApiException;
 import com.sse.app.common.PageResponse;
 import com.sse.app.security.CurrentUserHolder;
@@ -10,7 +11,9 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.beans.factory.annotation.Value;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -22,11 +25,19 @@ public class UserController {
     private final UserService users;
     private final UserImportService imports;
     private final LoginHistoryService loginHistory;
+    private final PasswordResetMailer resetMailer;
+    private final AuditService audit;
+    private final boolean exposeResetToken;
 
-    public UserController(UserService users, UserImportService imports, LoginHistoryService loginHistory) {
+    public UserController(UserService users, UserImportService imports, LoginHistoryService loginHistory,
+                          PasswordResetMailer resetMailer, AuditService audit,
+                          @Value("${sse.password-reset.expose-token:false}") boolean exposeResetToken) {
         this.users = users;
         this.imports = imports;
         this.loginHistory = loginHistory;
+        this.resetMailer = resetMailer;
+        this.audit = audit;
+        this.exposeResetToken = exposeResetToken;
     }
 
     @GetMapping
@@ -152,7 +163,25 @@ public class UserController {
     public Map<String, Object> resetPassword(@PathVariable String id,
                                              @RequestBody(required = false) AdminResetPasswordRequest req) {
         CurrentUserHolder.requireRole("ADMIN");
-        String pwd = users.adminResetPassword(id, req == null ? null : req.newPassword());
-        return Map.of("ok", true, "password", pwd);
+        var actor = CurrentUserHolder.require();
+        UserService.AdminResetResult result = users.adminResetAuthentication(id);
+        Map<String, Object> body = new HashMap<>();
+        body.put("ok", true);
+        body.put("authType", result.authType());
+        body.put("action", result.action());
+        body.put("mustChangePassword", result.mustChangePassword());
+        body.put("message", result.message());
+        if (result.issue() != null) {
+            boolean delivered = resetMailer.send(result.issue().email(), result.issue().token());
+            body.put("deliveryChannel", delivered ? "EMAIL" : "UNAVAILABLE");
+            if (!delivered) {
+                body.put("message", "Yêu cầu reset đã được tạo nhưng kênh email chưa sẵn sàng; "
+                        + "hãy kiểm tra cấu hình SMTP hoặc dùng token DEV trong môi trường local.");
+            }
+            if (exposeResetToken) body.put("devResetToken", result.issue().token());
+        }
+        audit.record(actor.id(), actor.username(), actor.role(), "RESET_AUTHENTICATION",
+                "identity", "user", id, "Reset authentication: " + result.action());
+        return body;
     }
 }

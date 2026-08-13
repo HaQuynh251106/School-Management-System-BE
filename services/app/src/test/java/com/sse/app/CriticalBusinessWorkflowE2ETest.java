@@ -45,40 +45,23 @@ class CriticalBusinessWorkflowE2ETest {
     }
 
     @Test
-    @DisplayName("Phân quyền tách biệt Giáo vụ và Kế toán xuyên suốt API")
-    void roleBasedOfficesCannotCrossAdministrativeBoundaries() throws Exception {
-        String academicStaff = login("giaovu", "Giaovu123@@");
-        String accountant = login("ketoan", "Ketoan123@@");
+    @DisplayName("Quản trị truy cập thống nhất nghiệp vụ đào tạo và tài chính")
+    void adminCanAccessAcademicAndFinanceWorkflows() throws Exception {
+        String admin = login("admin", "Admin123@@");
 
-        mvc.perform(get("/exam-periods").header("Authorization", bearer(academicStaff)))
+        mvc.perform(get("/exam-periods").header("Authorization", bearer(admin)))
                 .andExpect(status().isOk());
-        mvc.perform(post("/fee-periods")
-                        .header("Authorization", bearer(academicStaff))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"code":"E2E-DENIED","name":"Không được tạo","dueDate":"2026-10-01"}
-                                """))
-                .andExpect(status().isForbidden());
-
-        mvc.perform(get("/finance/overview").header("Authorization", bearer(accountant)))
+        mvc.perform(get("/finance/overview").header("Authorization", bearer(admin)))
                 .andExpect(status().isOk());
-        mvc.perform(post("/academicYears")
-                        .header("Authorization", bearer(accountant))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"id":"ay-e2e-denied","code":"2098-2099","name":"Không được tạo",
-                                 "startDate":"2098-08-15","endDate":"2099-05-31"}
-                                """))
-                .andExpect(status().isForbidden());
     }
 
     @Test
     @DisplayName("Tạo năm học tự sinh đủ hai học kỳ")
     void academicYearCreationAutomaticallyCreatesTwoSemesters() throws Exception {
-        String academicStaff = login("giaovu", "Giaovu123@@");
+        String admin = login("admin", "Admin123@@");
 
         mvc.perform(post("/academicYears")
-                        .header("Authorization", bearer(academicStaff))
+                        .header("Authorization", bearer(admin))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"id":"ay-e2e-2028","code":"2028-2029","name":"Năm học 2028-2029",
@@ -89,7 +72,7 @@ class CriticalBusinessWorkflowE2ETest {
 
         mvc.perform(get("/semesters")
                         .queryParam("academicYearId", "ay-e2e-2028")
-                        .header("Authorization", bearer(academicStaff)))
+                        .header("Authorization", bearer(admin)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(2))
                 .andExpect(jsonPath("$[0].code").value("HK1"))
@@ -97,13 +80,13 @@ class CriticalBusinessWorkflowE2ETest {
     }
 
     @Test
-    @DisplayName("Kế toán phát hành công nợ và phụ huynh nhận mã VietQR")
+    @DisplayName("Quản trị phát hành công nợ và phụ huynh nhận mã VietQR")
     void financePublicationProducesInvoicesAndParentPaymentQr() throws Exception {
-        String accountant = login("ketoan", "Ketoan123@@");
+        String admin = login("admin", "Admin123@@");
         String parent = login("ph.nguyenvanhung", "nguyenvanhung123@");
 
         JsonNode period = response(post("/fee-periods")
-                        .header("Authorization", bearer(accountant))
+                        .header("Authorization", bearer(admin))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"code":"E2E-FIN-2026","name":"Khoản thu E2E","applyToGrades":"K10",
@@ -112,19 +95,19 @@ class CriticalBusinessWorkflowE2ETest {
         String periodId = period.path("id").asText();
 
         mvc.perform(post("/fee-periods/{id}/items", periodId)
-                        .header("Authorization", bearer(accountant))
+                        .header("Authorization", bearer(admin))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"name":"Học phí kiểm thử","amount":350000,"gradeLevel":"K10"}
                                 """))
                 .andExpect(status().isOk());
         mvc.perform(post("/fee-periods/{id}/open", periodId)
-                        .header("Authorization", bearer(accountant)))
+                        .header("Authorization", bearer(admin)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("OPEN"));
 
         JsonNode invoices = response(post("/fee-periods/{id}/generate-invoices", periodId)
-                .header("Authorization", bearer(accountant)), 200);
+                .header("Authorization", bearer(admin)), 200);
         assertFalse(invoices.isEmpty());
         String invoiceId = invoices.get(0).path("id").asText();
 

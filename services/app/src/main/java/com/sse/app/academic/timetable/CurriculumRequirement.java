@@ -12,6 +12,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import java.time.Instant;
+import java.time.LocalDate;
 
 @Entity
 @Table(name = "curriculum_requirements", uniqueConstraints =
@@ -31,6 +32,14 @@ public class CurriculumRequirement {
     private String subjectName;
     @Column(nullable = false)
     private int weeklyPeriods;
+    @Column(nullable = false)
+    private int totalPeriods;
+    private LocalDate startDate;
+    private LocalDate endDate;
+    private LocalDate examWindowStart;
+    private LocalDate examWindowEnd;
+    @Column(length = 1000)
+    private String milestone;
     @Column(nullable = false)
     private Instant createdAt;
     @Column(nullable = false)

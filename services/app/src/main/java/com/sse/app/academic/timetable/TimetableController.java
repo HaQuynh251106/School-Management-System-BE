@@ -43,7 +43,9 @@ public class TimetableController {
                                     @RequestParam(required = false) String dayOfWeek) {
         CurrentUser current = CurrentUserHolder.require();
         assertCanView(current, classId, teacherId);
-        return timetable.list(classId, teacherId, semesterId, dayOfWeek);
+        return current.canManageAcademics()
+                ? timetable.list(classId, teacherId, semesterId, dayOfWeek)
+                : timetable.publishedAudience(classId, teacherId, semesterId, dayOfWeek);
     }
 
     @PostMapping("/timetableSlots")
@@ -56,7 +58,7 @@ public class TimetableController {
     public TimetableDtos.AutoTimetablePlan autoPlan(
             @Valid @RequestBody TimetableDtos.AutoTimetableRequest request) {
         CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
-        return automaticTimetable.plan(request);
+        return automaticTimetable.plan(request, CurrentUserHolder.require().id());
     }
 
     @GetMapping("/timetable-versions")
@@ -107,10 +109,21 @@ public class TimetableController {
     @GetMapping("/me/timetable")
     public List<TimetableSlot> myTimetable() {
         CurrentUser me = CurrentUserHolder.require();
-        if (me.isTeacher()) return timetable.list(null, me.id(), null, null);
+        if (me.isTeacher()) return timetable.publishedAudience(null, me.id());
         User u = users.getById(me.id());
-        if (u.getClassId() != null) return timetable.list(u.getClassId(), null, null, null);
+        if (u.getClassId() != null) return timetable.publishedAudience(u.getClassId(), null);
         return List.of();
+    }
+
+    /** D6: Phụ huynh xem lịch đã công bố của đúng người con được liên kết. */
+    @GetMapping("/children/{studentId}/timetable")
+    public List<TimetableSlot> childTimetable(@PathVariable String studentId) {
+        CurrentUser parent = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("PARENT");
+        users.assertParentOf(parent.id(), studentId);
+        User student = users.getById(studentId);
+        if (student.getClassId() == null || student.getClassId().isBlank()) return List.of();
+        return timetable.publishedAudience(student.getClassId(), null);
     }
 
     @PutMapping("/timetableSlots/{id}")

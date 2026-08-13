@@ -16,6 +16,8 @@ public class ExamSchedule {
     @Column(nullable = false) private String startTime;
     @Column(nullable = false) private int durationMinutes;
     @Column(length = 1000) private String notes;
+    private String planOperationKey;
+    private String planRequestHash;
     @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "exam_schedule_classes", joinColumns = @JoinColumn(name = "schedule_id"))
     @Column(name = "class_id", nullable = false)

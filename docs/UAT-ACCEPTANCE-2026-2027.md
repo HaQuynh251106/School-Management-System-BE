@@ -40,13 +40,13 @@
 | # | Người thực hiện | Kịch bản | Kết quả | Ghi chú |
 |---:|---|---|---|---|
 | 1 | Admin | Kiểm tra dashboard, người dùng, phân quyền và báo cáo toàn trường |  |  |
-| 2 | Giáo vụ | Tạo cơ cấu năm học, phân công, tạo–phát hành–khôi phục phiên bản thời khóa biểu |  |  |
-| 3 | Kế toán | Tạo đợt thu, phát hành hóa đơn, lọc công nợ, đối soát VietQR |  |  |
+| 2 | Admin | Tạo cơ cấu năm học, phân công, tạo–phát hành–khôi phục phiên bản thời khóa biểu |  |  |
+| 3 | Admin | Tạo đợt thu, phát hành hóa đơn, lọc công nợ, đối soát VietQR |  |  |
 | 4 | Giáo viên | Điểm danh, xử lý đơn nghỉ, nhập điểm, bài tập, khảo thí và tổng kết lớp |  |  |
 | 5 | Học sinh | Xem lịch, điểm, bài tập, xin nghỉ, thông báo và phúc khảo |  |  |
 | 6 | Phụ huynh | Xem dữ liệu con, duyệt đơn nghỉ, nhận nhắc nợ và mở VietQR |  |  |
-| 7 | Cả sáu vai trò | Reload giữ phiên; URL ngoài quyền bị từ chối đúng |  |  |
-| 8 | Giáo vụ + giáo viên | Lịch phát hành hiển thị đúng phiên bản, không lộ bản nháp |  |  |
+| 7 | Cả bốn vai trò | Reload giữ phiên; URL ngoài quyền bị từ chối đúng |  |  |
+| 8 | Admin + giáo viên | Lịch phát hành hiển thị đúng phiên bản, không lộ bản nháp |  |  |
 | 9 | Giáo viên + phụ huynh | Thông báo điểm danh/điểm số/đơn nghỉ đúng đối tượng |  |  |
 | 10 | Vận hành | Cảnh báo thử, tìm log theo `X-Request-ID`, restore một backup gần nhất |  |  |
 
@@ -66,8 +66,6 @@ Chỉ **GO** khi:
 | Vai trò | Họ tên | Kết luận | Ngày | Chữ ký/xác nhận điện tử |
 |---|---|---|---|---|
 | Đại diện Admin |  |  |  |  |
-| Đại diện Giáo vụ |  |  |  |  |
-| Đại diện Kế toán |  |  |  |  |
 | Đại diện Giáo viên |  |  |  |  |
 | Đại diện Phụ huynh/học sinh |  |  |  |  |
 | Người phụ trách kỹ thuật |  |  |  |  |

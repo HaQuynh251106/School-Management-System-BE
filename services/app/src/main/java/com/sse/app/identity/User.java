@@ -21,6 +21,10 @@ public class User {
     @Column(unique = true, nullable = false)
     private String username;
 
+    /** Mã nghiệp vụ do hệ thống cấp: AD/GV/HS/PH + 6 chữ số. */
+    @Column(unique = true, nullable = false)
+    private String userCode;
+
     @Column(nullable = false)
     private String passwordHash;
 
@@ -38,6 +42,11 @@ public class User {
     @Column(nullable = false)
     private String status;
 
+    /** LOCAL | SSO. SSO accounts never receive or validate a local password. */
+    @Builder.Default
+    @Column(nullable = false)
+    private String authType = "LOCAL";
+
     /** Tài khoản tạm/import/reset phải đổi mật khẩu trước khi tiếp tục sử dụng. */
     @Builder.Default
     private boolean passwordChangeRequired = false;
@@ -46,7 +55,9 @@ public class User {
     private int tokenVersion = 0;
 
     // Teacher
+    @Column(unique = true)
     private String teacherCode;
+    private String mainSubjectId;
     private String mainSubject;
 
     // Student

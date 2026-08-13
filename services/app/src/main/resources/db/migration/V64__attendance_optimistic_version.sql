@@ -1,0 +1,2 @@
+ALTER TABLE attendance_records
+    ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;

@@ -46,6 +46,32 @@ public class TimetableService {
                 .toList();
     }
 
+    /**
+     * Lịch dành cho Giáo viên/Học sinh chỉ gồm các slot thuộc phiên bản đã phát
+     * hành. Các slot null publishedPlanId là workspace nháp của Admin/Giáo vụ.
+     */
+    public List<TimetableSlot> publishedAudience(String classId, String teacherId) {
+        return publishedAudience(classId, teacherId, null, null);
+    }
+
+    public List<TimetableSlot> publishedAudience(String classId, String teacherId,
+                                                  String semesterId, String dayOfWeek) {
+        List<TimetableSlot> base = classId != null
+                ? slots.findByClassId(classId)
+                : slots.findByTeacherId(teacherId);
+        return base.stream()
+                .filter(slot -> slot.getPublishedPlanId() != null
+                        && !slot.getPublishedPlanId().isBlank())
+                .filter(slot -> semesterId == null || semesterId.equals(slot.getSemesterId()))
+                .filter(slot -> dayOfWeek == null || dayOfWeek.equalsIgnoreCase(slot.getDayOfWeek()))
+                .peek(this::attachClassCode)
+                .sorted((left, right) -> {
+                    int day = dayIndex(left.getDayOfWeek()) - dayIndex(right.getDayOfWeek());
+                    return day != 0 ? day : Integer.compare(left.getPeriodNo(), right.getPeriodNo());
+                })
+                .toList();
+    }
+
     @Transactional
     public TimetableSlot create(CreateSlotRequest request) {
         SlotContext context = validateSlot(request, null);
@@ -71,6 +97,7 @@ public class TimetableService {
     @Transactional
     public TimetableSlot update(String id, CreateSlotRequest request) {
         TimetableSlot slot = slots.findById(id).orElseThrow(() -> ApiException.notFound("Tiết học"));
+        assertDraftSlot(slot);
         SlotContext context = validateSlot(request, id);
         checkConflicts(request, id);
         slot.setClassId(request.classId());
@@ -160,8 +187,16 @@ public class TimetableService {
 
     public void delete(String id) {
         TimetableSlot slot = slots.findById(id).orElseThrow(() -> ApiException.notFound("Tiết học"));
+        assertDraftSlot(slot);
         structure.assertSemesterWritable(slot.getSemesterId());
         slots.delete(slot);
+    }
+
+    private void assertDraftSlot(TimetableSlot slot) {
+        if (slot.getPublishedPlanId() != null && !slot.getPublishedPlanId().isBlank()) {
+            throw ApiException.conflict(
+                    "Lịch đã phát hành chỉ được thay đổi bằng phiên bản nháp mới rồi phát hành lại");
+        }
     }
 
     public TimetableSlot findSlot(String id) {

@@ -6,6 +6,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Min;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -16,7 +17,8 @@ public final class AttendanceDtos {
     public record Mark(
             @NotBlank String studentId,
             @NotBlank @Pattern(regexp = "PRESENT|LATE|ABSENT_UNEXCUSED|ABSENT_EXCUSED") String status,
-            @Size(max = 255) String note
+            @Size(max = 255) String note,
+            @Min(0) Long expectedVersion
     ) {}
 
     public record BulkAttendanceRequest(

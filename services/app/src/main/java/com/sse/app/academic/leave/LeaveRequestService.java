@@ -12,6 +12,7 @@ import com.sse.app.identity.UserService;
 import com.sse.app.notification.NotificationService;
 import com.sse.app.security.CurrentUser;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
@@ -28,15 +29,18 @@ public class LeaveRequestService {
     private final StructureService structure;
     private final NotificationService notifications;
     private final ApprovedLeaveAttendanceService approvedLeaveAttendance;
+    private final ApplicationEventPublisher events;
 
     public LeaveRequestService(LeaveRequestRepository requests, UserService users,
                                StructureService structure, NotificationService notifications,
-                               ApprovedLeaveAttendanceService approvedLeaveAttendance) {
+                               ApprovedLeaveAttendanceService approvedLeaveAttendance,
+                               ApplicationEventPublisher events) {
         this.requests = requests;
         this.users = users;
         this.structure = structure;
         this.notifications = notifications;
         this.approvedLeaveAttendance = approvedLeaveAttendance;
+        this.events = events;
     }
 
     public List<LeaveRequest> list(CurrentUser actor) {
@@ -74,6 +78,7 @@ public class LeaveRequestService {
         notifications.notifyUsers(users.parentIdsOf(studentId), "LEAVE_REQUEST", "IMPORTANT",
                 "Cần xác nhận đơn xin nghỉ", student.getFullName() + " xin nghỉ từ " + input.startDate() + " đến " + input.endDate(),
                 "LEAVE_REQUEST", request.getId());
+        events.publishEvent(new LeaveRequestChangedEvent(request.getId(), "CREATED"));
         return request;
     }
 
@@ -95,6 +100,8 @@ public class LeaveRequestService {
                     "Đơn xin nghỉ chờ duyệt", request.getStudentName() + " · " + request.getClassCode()
                             + " · " + request.getStartDate() + " đến " + request.getEndDate(), "LEAVE_REQUEST", id);
         } else notifyStudentAndParents(request, "Đơn xin nghỉ chưa được xác nhận", "Phụ huynh đã từ chối xác nhận đơn.");
+        events.publishEvent(new LeaveRequestChangedEvent(request.getId(),
+                confirm ? "PARENT_CONFIRMED" : "PARENT_REJECTED"));
         return request;
     }
 
@@ -113,6 +120,8 @@ public class LeaveRequestService {
         }
         notifyStudentAndParents(request, approve ? "Đơn xin nghỉ đã được duyệt" : "Đơn xin nghỉ bị từ chối",
                 request.getStartDate() + " đến " + request.getEndDate() + (clean(note) == null ? "" : " · " + clean(note)));
+        events.publishEvent(new LeaveRequestChangedEvent(request.getId(),
+                approve ? "APPROVED" : "REJECTED"));
         return request;
     }
 
@@ -130,6 +139,7 @@ public class LeaveRequestService {
         if (request.getHomeroomTeacherId() != null) recipients.add(request.getHomeroomTeacherId());
         notifications.notifyUsers(recipients.stream().toList(), "LEAVE_REQUEST", "Đơn xin nghỉ đã hủy",
                 request.getStudentName() + " đã hủy đơn " + request.getStartDate() + " đến " + request.getEndDate(), "LEAVE_REQUEST", id);
+        events.publishEvent(new LeaveRequestChangedEvent(request.getId(), "CANCELLED"));
         return request;
     }
 

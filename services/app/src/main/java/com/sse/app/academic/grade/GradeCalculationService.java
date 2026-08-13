@@ -9,8 +9,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+
+import com.sse.app.academic.grade.GradeDtos.GradeSubjectSummary;
 
 /** Nguồn công thức điểm duy nhất cho dashboard, báo cáo, học bạ và tổng kết năm. */
 @Service
@@ -63,6 +66,52 @@ public class GradeCalculationService {
         grouped.forEach((subject, values) -> result.put(subject,
                 roundOneDecimal(values.stream().mapToDouble(Double::doubleValue).average().orElse(0))));
         return result;
+    }
+
+    /**
+     * Canonical subject/semester result consumed by Web and Mobile. Averages
+     * are intentionally null until every configured assessment slot exists.
+     */
+    public List<GradeSubjectSummary> subjectSummaries(String studentId, String semesterId) {
+        List<ExamCategory> configured = categories.findAll();
+        List<Grade> rows = semesterId == null || semesterId.isBlank()
+                ? grades.findByStudentId(studentId)
+                : grades.findByStudentIdAndSemesterId(studentId, semesterId);
+        Map<String, List<Grade>> grouped = rows.stream()
+                .filter(grade -> grade.getSubjectId() != null && grade.getSemesterId() != null)
+                .collect(Collectors.groupingBy(
+                        grade -> grade.getSubjectId() + "|" + grade.getSemesterId(),
+                        LinkedHashMap::new,
+                        Collectors.toList()));
+        return grouped.values().stream().map(values -> {
+            Grade first = values.get(0);
+            List<String> missing = missingAssessmentKeys(values, configured);
+            Double average = missing.isEmpty() ? subjectAverage(values, configured) : null;
+            return new GradeSubjectSummary(
+                    studentId,
+                    first.getSubjectId(),
+                    first.getSubjectName(),
+                    first.getSemesterId(),
+                    average,
+                    missing.isEmpty(),
+                    missing);
+        }).toList();
+    }
+
+    private List<String> missingAssessmentKeys(List<Grade> values, List<ExamCategory> configured) {
+        Set<String> present = values.stream()
+                .filter(grade -> grade.getScore() != null && Double.isFinite(grade.getScore()))
+                .map(grade -> grade.getCategory() + "#"
+                        + (grade.getAssessmentIndex() == null ? 1 : grade.getAssessmentIndex()))
+                .collect(Collectors.toSet());
+        List<String> missing = new ArrayList<>();
+        for (ExamCategory category : configured) {
+            for (int index = 1; index <= Math.max(1, category.getRequiredCount()); index++) {
+                String key = category.getCode() + "#" + index;
+                if (!present.contains(key)) missing.add(key);
+            }
+        }
+        return missing;
     }
 
     private List<SubjectSemesterAverage> completeSubjectSemesterAverages(Collection<String> studentIds) {

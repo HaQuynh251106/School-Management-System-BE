@@ -16,8 +16,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** E1 + A1: đăng nhập, refresh token, quên/đặt lại mật khẩu. */
 @RestController
@@ -35,6 +37,7 @@ public class AuthController {
     private final LoginHistoryService loginHistory;
     private final LoginAttemptService loginAttempts;
     private final boolean secureRefreshCookie;
+    private final ConcurrentHashMap<String, ForgotWindow> forgotWindows = new ConcurrentHashMap<>();
 
     public AuthController(UserService users, JwtService jwt, AuditService audit,
                           RefreshTokenService refreshTokens,
@@ -114,16 +117,36 @@ public class AuthController {
     }
 
     @PostMapping("/forgot-password")
-    public Map<String, Object> forgotPassword(@RequestBody ForgotPasswordRequest req) {
+    public Map<String, Object> forgotPassword(@RequestBody ForgotPasswordRequest req,
+                                              HttpServletRequest request) {
+        assertForgotAllowed(clientIp(request));
         UserService.PasswordResetIssue issue = users.requestPasswordReset(req.email(), req.username());
         Map<String, Object> body = new HashMap<>();
         body.put("ok", true);
-        body.put("message", "Nếu email tồn tại, link reset đã được gửi.");
-        // DEV: không có email server nên trả token trực tiếp để test luồng reset.
+        body.put("message", "Nếu tài khoản hợp lệ, yêu cầu đặt lại mật khẩu đã được tiếp nhận.");
         if (issue != null) resetMailer.send(issue.email(), issue.token());
+        // Không tiết lộ tài khoản có tồn tại hay không: trạng thái này chỉ phụ
+        // thuộc cấu hình môi trường và giống nhau với mọi địa chỉ đầu vào.
+        body.put("deliveryChannel", resetMailer.isEnabled() ? "EMAIL" : "UNAVAILABLE");
         if (exposeResetToken && issue != null) body.put("devResetToken", issue.token());
         return body;
     }
+
+    private void assertForgotAllowed(String ipAddress) {
+        Instant now = Instant.now();
+        ForgotWindow window = forgotWindows.compute(ipAddress, (key, current) -> {
+            if (current == null || current.startedAt().plus(Duration.ofMinutes(15)).isBefore(now)) {
+                return new ForgotWindow(now, 1);
+            }
+            return new ForgotWindow(current.startedAt(), current.count() + 1);
+        });
+        if (window.count() > 5) {
+            throw new ApiException(HttpStatus.TOO_MANY_REQUESTS,
+                    "Bạn đã gửi quá nhiều yêu cầu. Vui lòng thử lại sau.");
+        }
+    }
+
+    private record ForgotWindow(Instant startedAt, int count) {}
 
     @PostMapping("/reset-password")
     public Map<String, Object> resetPassword(@Valid @RequestBody ResetPasswordRequest req) {

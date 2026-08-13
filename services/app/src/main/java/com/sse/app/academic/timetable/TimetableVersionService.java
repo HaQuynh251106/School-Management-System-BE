@@ -8,6 +8,7 @@ import com.sse.app.common.Ids;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -20,10 +21,13 @@ import java.util.List;
 public class TimetableVersionService {
     private final JdbcTemplate jdbc;
     private final StructureService structure;
+    private final ApplicationEventPublisher events;
 
-    public TimetableVersionService(JdbcTemplate jdbc, StructureService structure) {
+    public TimetableVersionService(JdbcTemplate jdbc, StructureService structure,
+                                   ApplicationEventPublisher events) {
         this.jdbc = jdbc;
         this.structure = structure;
+        this.events = events;
     }
 
     public List<TimetableVersion> list(String semesterId) {
@@ -106,7 +110,9 @@ public class TimetableVersionService {
     /** Phát hành nguyên tử: chỉ thay lịch trực tiếp khi toàn bộ phiên bản hợp lệ. */
     @Transactional
     public TimetableVersion publish(String planId, String actorId) {
-        TimetableVersion plan = require(planId);
+        // Khóa bản nháp trong suốt giao dịch để hai lần bấm phát hành đồng thời
+        // không cùng thay thế lịch đang áp dụng.
+        TimetableVersion plan = requireForUpdate(planId);
         if (!List.of("DRAFT", "VALIDATED").contains(plan.status())) {
             throw ApiException.conflict("Chỉ có thể phát hành phiên bản nháp hoặc đã kiểm tra");
         }
@@ -134,7 +140,10 @@ public class TimetableVersionService {
                 update timetable_plans set status='PUBLISHED',quality_score=100,conflict_summary=null,
                     published_by=?,published_at=?,updated_at=? where id=?
                 """, actorId, sqlTime(now), sqlTime(now), planId);
-        return require(planId);
+        TimetableVersion published = require(planId);
+        events.publishEvent(new TimetablePublishedEvent(
+                published.id(), published.semesterId(), published.versionNo()));
+        return published;
     }
 
     @Transactional
@@ -166,6 +175,13 @@ public class TimetableVersionService {
 
     private TimetableVersion require(String id) {
         List<TimetableVersion> rows = jdbc.query("select * from timetable_plans where id=?",
+                (rs, row) -> version(rs), id);
+        if (rows.isEmpty()) throw ApiException.notFound("Phiên bản thời khóa biểu");
+        return rows.get(0);
+    }
+
+    private TimetableVersion requireForUpdate(String id) {
+        List<TimetableVersion> rows = jdbc.query("select * from timetable_plans where id=? for update",
                 (rs, row) -> version(rs), id);
         if (rows.isEmpty()) throw ApiException.notFound("Phiên bản thời khóa biểu");
         return rows.get(0);

@@ -26,10 +26,10 @@ public class PasswordResetMailer {
         this.resetUrl = resetUrl;
     }
 
-    public void send(String recipient, String token) {
+    public boolean send(String recipient, String token) {
         if (!enabled || recipient == null || recipient.isBlank()) {
             log.info("Password reset email delivery skipped because mail is disabled or the account has no email");
-            return;
+            return false;
         }
         SimpleMailMessage message = new SimpleMailMessage();
         message.setFrom(from);
@@ -38,8 +38,15 @@ public class PasswordResetMailer {
         message.setText("Liên kết đặt lại mật khẩu (hết hạn sau 30 phút):\n" + resetUrl + "?token=" + token);
         try {
             sender.send(message);
+            return true;
         } catch (MailException e) {
             log.error("Password reset email delivery failed", e);
+            return false;
         }
+    }
+
+    /** Trạng thái cấu hình, không phụ thuộc email/tài khoản người yêu cầu. */
+    public boolean isEnabled() {
+        return enabled;
     }
 }

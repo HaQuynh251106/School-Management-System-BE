@@ -15,6 +15,7 @@ import com.sse.app.notification.NotificationService;
 import com.sse.app.notification.Announcement;
 import com.sse.app.security.CurrentUser;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
@@ -43,11 +44,13 @@ public class AttendanceService {
     private final AttendanceSessionAccessRepository sessionAccesses;
     private final LeaveRequestService leaveRequests;
     private final Clock clock;
+    private final ApplicationEventPublisher events;
 
     public AttendanceService(AttendanceRepository records, TimetableService timetable,
                              UserService users, NotificationService notifications,
                              StructureService structure, AttendanceSessionAccessRepository sessionAccesses,
-                             LeaveRequestService leaveRequests, Clock clock) {
+                             LeaveRequestService leaveRequests, Clock clock,
+                             ApplicationEventPublisher events) {
         this.records = records;
         this.timetable = timetable;
         this.users = users;
@@ -56,6 +59,7 @@ public class AttendanceService {
         this.sessionAccesses = sessionAccesses;
         this.leaveRequests = leaveRequests;
         this.clock = clock;
+        this.events = events;
     }
 
     public List<AttendanceRecord> list(String studentId, String classId, String slotId, LocalDate date) {
@@ -206,11 +210,21 @@ public class AttendanceService {
         }
 
         List<AttendanceRecord> saved = new ArrayList<>();
+        List<String> changedRecordIds = new ArrayList<>();
         for (Mark m : req.marks()) {
-            AttendanceRecord rec = records
-                    .findBySlotIdAndDateAndStudentId(req.slotId(), req.date(), m.studentId())
-                    .orElseGet(() -> AttendanceRecord.builder().id(Ids.gen("att")).build());
+            var existing = records.findBySlotIdAndDateAndStudentId(
+                    req.slotId(), req.date(), m.studentId());
+            if (existing.isPresent() && m.expectedVersion() == null) {
+                throw ApiException.badRequest("expectedVersion là bắt buộc khi sửa điểm danh đã tồn tại");
+            }
+            if (existing.isPresent() && !m.expectedVersion().equals(existing.get().getVersion())) {
+                throw ApiException.conflict("Điểm danh đã được người khác cập nhật, vui lòng tải lại");
+            }
+            AttendanceRecord rec = existing.orElseGet(() ->
+                    AttendanceRecord.builder().id(Ids.gen("att")).build());
             String previousStatus = rec.getStatus();
+            String previousNote = rec.getNote();
+            boolean created = rec.getStudentId() == null;
             rec.setStudentId(m.studentId());
             rec.setClassId(slot.getClassId());
             rec.setSlotId(req.slotId());
@@ -220,11 +234,18 @@ public class AttendanceService {
             String resolvedStatus = approvedAbsence ? "ABSENT_EXCUSED" : m.status();
             String resolvedNote = approvedAbsence
                     ? "Đơn xin nghỉ đã được GVCN duyệt" : normalizeNote(m.note());
+            if (!created && Objects.equals(previousStatus, resolvedStatus)
+                    && Objects.equals(previousNote, resolvedNote)) {
+                saved.add(rec);
+                continue;
+            }
             rec.setStatus(resolvedStatus);
             rec.setNote(resolvedNote);
             rec.setSubjectName(slot.getSubjectName());
             rec.setPeriodNo(slot.getPeriodNo());
-            saved.add(records.save(rec));
+            AttendanceRecord persisted = records.save(rec);
+            saved.add(persisted);
+            changedRecordIds.add(persisted.getId());
 
             if (approvedAbsence) {
                 // Đơn duyệt đã thông báo cho gia đình; không phát thêm cảnh báo chuyên cần trùng/lệch nghĩa.
@@ -239,6 +260,9 @@ public class AttendanceService {
                 sessionAccesses.save(access);
             }
         });
+        if (!changedRecordIds.isEmpty()) {
+            events.publishEvent(new AttendanceChangedEvent(List.copyOf(changedRecordIds)));
+        }
         return saved;
     }
 

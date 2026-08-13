@@ -545,11 +545,17 @@ public class NotificationService {
     public List<NotificationTemplate> listTemplates() { return templates.findAll(); }
 
     public NotificationTemplate createTemplate(CreateTemplateRequest r) {
-        return templates.save(NotificationTemplate.builder()
-                .id(r.id() == null || r.id().isBlank() ? Ids.gen("tpl") : r.id())
-                .code(r.code()).name(r.name())
-                .channel(r.channel() == null ? "IN_APP" : r.channel())
-                .titleTemplate(r.titleTemplate()).bodyTemplate(r.bodyTemplate())
-                .active(r.active() == null || r.active()).build());
+        String code = r.code().trim().toUpperCase();
+        NotificationTemplate template = r.id() == null || r.id().isBlank()
+                ? templates.findByCodeIgnoreCase(code).orElseGet(NotificationTemplate::new)
+                : templates.findById(r.id()).orElseThrow(() -> ApiException.notFound("Mẫu thông báo"));
+        if (template.getId() == null) template.setId(Ids.gen("tpl"));
+        template.setCode(code);
+        template.setName(r.name());
+        template.setChannel(r.channel() == null ? "IN_APP" : r.channel().trim().toUpperCase());
+        template.setTitleTemplate(r.titleTemplate());
+        template.setBodyTemplate(r.bodyTemplate());
+        template.setActive(r.active() == null || r.active());
+        return templates.save(template);
     }
 }
