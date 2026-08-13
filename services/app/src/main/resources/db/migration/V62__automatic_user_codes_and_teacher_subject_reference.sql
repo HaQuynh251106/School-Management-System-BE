@@ -7,6 +7,14 @@ SET user_code = CASE account.role
         SELECT COUNT(*) FROM users ranked
         WHERE ranked.role = 'ADMIN' AND ranked.id <= account.id
     ) AS VARCHAR), 6, '0'))
+    WHEN 'ACADEMIC_STAFF' THEN CONCAT('GVU', LPAD(CAST((
+        SELECT COUNT(*) FROM users ranked
+        WHERE ranked.role = 'ACADEMIC_STAFF' AND ranked.id <= account.id
+    ) AS VARCHAR), 6, '0'))
+    WHEN 'ACCOUNTANT' THEN CONCAT('KT', LPAD(CAST((
+        SELECT COUNT(*) FROM users ranked
+        WHERE ranked.role = 'ACCOUNTANT' AND ranked.id <= account.id
+    ) AS VARCHAR), 6, '0'))
     WHEN 'TEACHER' THEN CONCAT('GV', LPAD(CAST((
         SELECT COUNT(*) FROM users ranked
         WHERE ranked.role = 'TEACHER' AND ranked.id <= account.id
@@ -33,6 +41,14 @@ SELECT 'ADMIN', 1 WHERE NOT EXISTS (
     SELECT 1 FROM business_code_counters WHERE code_type = 'ADMIN'
 );
 INSERT INTO business_code_counters (code_type, next_value)
+SELECT 'ACADEMIC_STAFF', 1 WHERE NOT EXISTS (
+    SELECT 1 FROM business_code_counters WHERE code_type = 'ACADEMIC_STAFF'
+);
+INSERT INTO business_code_counters (code_type, next_value)
+SELECT 'ACCOUNTANT', 1 WHERE NOT EXISTS (
+    SELECT 1 FROM business_code_counters WHERE code_type = 'ACCOUNTANT'
+);
+INSERT INTO business_code_counters (code_type, next_value)
 SELECT 'STUDENT', 1 WHERE NOT EXISTS (
     SELECT 1 FROM business_code_counters WHERE code_type = 'STUDENT'
 );
@@ -45,7 +61,9 @@ UPDATE business_code_counters AS counters
 SET next_value = (
     SELECT COUNT(*) + 1 FROM users WHERE role = counters.code_type
 )
-WHERE counters.code_type IN ('ADMIN', 'TEACHER', 'STUDENT', 'PARENT');
+WHERE counters.code_type IN (
+    'ADMIN', 'ACADEMIC_STAFF', 'ACCOUNTANT', 'TEACHER', 'STUDENT', 'PARENT'
+);
 
 UPDATE users AS teacher
 SET main_subject_id = (

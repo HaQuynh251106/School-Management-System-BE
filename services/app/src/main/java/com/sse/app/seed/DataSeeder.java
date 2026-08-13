@@ -86,6 +86,10 @@ public class DataSeeder {
     private void seedUsers(UserRepository users, ParentStudentRepository relations, PasswordEncoder enc) {
         users.save(base("u-admin-1", "admin", enc.encode("Admin123@@"), "Nguyễn Văn Quản",
                 "admin@sse.edu.vn", "0900000001", "ADMIN", "AD000001"));
+        users.save(base("u-academic-staff-1", "giaovu", enc.encode("Giaovu123@@"), "Nguyễn Thu Hà",
+                "giaovu@sse.edu.vn", "0900000004", "ACADEMIC_STAFF", "GVU000001"));
+        users.save(base("u-accountant-1", "ketoan", enc.encode("Ketoan123@@"), "Trần Minh Anh",
+                "ketoan@sse.edu.vn", "0900000005", "ACCOUNTANT", "KT000001"));
         users.save(teacher("u-teacher-1", "gv.nguyenminh", enc.encode("nguyenminh123@"), "Nguyễn Đức Minh",
                 "hoa.tran@sse.edu.vn", "0900000002", "GV000001", "Toán"));
         users.save(teacher("u-teacher-2", "gv.minh", enc.encode("teacher@123"), "Lê Văn Minh",

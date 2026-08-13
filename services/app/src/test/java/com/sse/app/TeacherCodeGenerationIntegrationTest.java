@@ -64,12 +64,14 @@ class TeacherCodeGenerationIntegrationTest {
     }
 
     @Test
-    void backendGeneratesImmutableCodesForAllFourRoles() {
-        Map<String, String> expectedPatterns = Map.of(
-                "ADMIN", "AD\\d{6}",
-                "TEACHER", "GV\\d{6}",
-                "STUDENT", "HS\\d{6}",
-                "PARENT", "PH\\d{6}");
+    void backendGeneratesImmutableCodesForAllSixRoles() {
+        Map<String, String> expectedPatterns = Map.ofEntries(
+                Map.entry("ADMIN", "AD\\d{6}"),
+                Map.entry("ACADEMIC_STAFF", "GVU\\d{6}"),
+                Map.entry("ACCOUNTANT", "KT\\d{6}"),
+                Map.entry("TEACHER", "GV\\d{6}"),
+                Map.entry("STUDENT", "HS\\d{6}"),
+                Map.entry("PARENT", "PH\\d{6}"));
 
         expectedPatterns.forEach((role, pattern) -> {
             var created = users.create(account(role));

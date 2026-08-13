@@ -113,6 +113,22 @@ class SecurityIntegrationTest {
     }
 
     @Test
+    void academicStaffAndAccountantKeepDedicatedWorkspaces() throws Exception {
+        String academicStaff = login("giaovu", "Giaovu123@@");
+        String accountant = login("ketoan", "Ketoan123@@");
+
+        mvc.perform(get("/dashboard").header("Authorization", "Bearer " + academicStaff))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.scope.role").value("ACADEMIC_STAFF"))
+                .andExpect(jsonPath("$.scope.objectType").value("SCHOOL"));
+
+        mvc.perform(get("/dashboard").header("Authorization", "Bearer " + accountant))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.scope.role").value("ACCOUNTANT"))
+                .andExpect(jsonPath("$.scope.objectType").value("SCHOOL"));
+    }
+
+    @Test
     void dashboardUsesRoleAndObjectScopeWithoutLeakingAnotherStudent() throws Exception {
         String teacher = login("gv.hoa", "teacher@123");
         String student = login("hs.an", "student@123");

@@ -484,8 +484,10 @@ public class UserService {
 
     private String nextUserCode(String role) {
         String prefix = switch (role) {
-            case "ADMIN" -> "AD";
-            case "TEACHER" -> "GV";
+              case "ADMIN" -> "AD";
+              case "ACADEMIC_STAFF" -> "GVU";
+              case "ACCOUNTANT" -> "KT";
+              case "TEACHER" -> "GV";
             case "STUDENT" -> "HS";
             case "PARENT" -> "PH";
             default -> throw ApiException.badRequest("Vai trò không hợp lệ");
