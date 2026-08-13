@@ -16,12 +16,14 @@ import java.time.LocalDate;
 
 @Entity
 @Table(name = "curriculum_requirements", uniqueConstraints =
-        @UniqueConstraint(name = "uk_curriculum_requirement",
-                columnNames = {"semesterId", "gradeLevel", "subjectId"}))
+        @UniqueConstraint(name = "uk_curriculum_requirement_plan",
+                columnNames = {"planId", "semesterId", "subjectId"}))
 @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
 public class CurriculumRequirement {
     @Id
     private String id;
+    @Column(nullable = false)
+    private String planId;
     @Column(nullable = false)
     private String semesterId;
     @Column(nullable = false)

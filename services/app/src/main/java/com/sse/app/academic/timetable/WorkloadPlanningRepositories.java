@@ -7,6 +7,10 @@ import java.util.Optional;
 
 interface CurriculumRequirementRepository extends JpaRepository<CurriculumRequirement, String> {
     List<CurriculumRequirement> findBySemesterId(String semesterId);
+    List<CurriculumRequirement> findByPlanId(String planId);
+    List<CurriculumRequirement> findByPlanIdAndSemesterId(String planId, String semesterId);
+    Optional<CurriculumRequirement> findByPlanIdAndSemesterIdAndSubjectId(
+            String planId, String semesterId, String subjectId);
     Optional<CurriculumRequirement> findBySemesterIdAndGradeLevelAndSubjectId(
             String semesterId, String gradeLevel, String subjectId);
 }

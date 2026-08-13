@@ -33,23 +33,37 @@ public class AutomaticTimetableService {
     private final StructureService structure;
     private final TimetableService timetable;
     private final TimetableVersionService versions;
+    private final EducationPlanService educationPlans;
+    private final TimetableReadinessService readiness;
 
     public AutomaticTimetableService(TimetableRepository slots, TeachingAssignmentRepository assignments,
                                      TeacherLoadRegistrationRepository registrations,
                                      StructureService structure, TimetableService timetable,
-                                     TimetableVersionService versions) {
+                                     TimetableVersionService versions,
+                                     EducationPlanService educationPlans,
+                                     TimetableReadinessService readiness) {
         this.slots = slots;
         this.assignments = assignments;
         this.registrations = registrations;
         this.structure = structure;
         this.timetable = timetable;
         this.versions = versions;
+        this.educationPlans = educationPlans;
+        this.readiness = readiness;
     }
 
     @Transactional
     public AutoTimetablePlan plan(AutoTimetableRequest request, String actorId) {
         structure.assertSemesterWritable(request.semesterId());
         List<String> allowedDays = normalizeAllowedDays(request.allowedDays());
+        TimetableReadiness precheck = readiness.check(
+                request.semesterId(), request.scopeGradeLevel(), allowedDays);
+        if (!precheck.ready()) {
+            throw ApiException.conflict("Chưa đủ dữ liệu để tạo thời khóa biểu: "
+                    + precheck.issues().stream().limit(5)
+                    .map(TimetableReadinessIssue::message)
+                    .collect(java.util.stream.Collectors.joining("; ")));
+        }
         List<TimetableSlot> occupied = new ArrayList<>(slots.findBySemesterId(request.semesterId()));
         int existingCount = occupied.size();
         Map<String, TeacherLoadRegistration> loads = new HashMap<>();
@@ -69,12 +83,25 @@ public class AutomaticTimetableService {
                 ? "Chưa có phân công bộ môn trong học kỳ đã chọn"
                 : "Chưa có phân công bộ môn cho " + request.scopeGradeLevel().replace("K", "khối "));
 
+        Map<String, CurriculumRequirement> requirementByAssignment = new HashMap<>();
+        for (CurriculumRequirement requirement : educationPlans.publishedRequirements(request.semesterId())) {
+            for (TeachingAssignment assignment : work) {
+                SchoolClass schoolClass = structure.getClass(assignment.getClassId());
+                if (requirement.getGradeLevel().equals(schoolClass.getGradeLevel())
+                        && requirement.getSubjectId().equals(assignment.getSubjectId())) {
+                    requirementByAssignment.put(assignment.getId(), requirement);
+                }
+            }
+        }
+
         List<AutoTimetableItem> result = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
         List<ScheduleNeed> needs = new ArrayList<>();
         for (TeachingAssignment assignment : work) {
+            CurriculumRequirement requirement = requirementByAssignment.get(assignment.getId());
+            if (requirement == null) continue;
             int already = (int) occupied.stream().filter(slot -> sameAssignment(slot, assignment)).count();
-            int missing = Math.max(0, assignment.getWeeklyPeriods() - already);
+            int missing = Math.max(0, requirement.getWeeklyPeriods() - already);
             if (missing == 0) continue;
             TeacherLoadRegistration load = loads.get(assignment.getTeacherId());
             SchoolClass schoolClass = structure.getClass(assignment.getClassId());
@@ -113,7 +140,7 @@ public class AutomaticTimetableService {
         int proposed = (int) result.stream().filter(item -> "PROPOSED".equals(item.status())).count();
         int unscheduled = (int) result.stream().filter(item -> "UNSCHEDULED".equals(item.status())).count();
         boolean apply = Boolean.TRUE.equals(request.apply());
-        if (apply && unscheduled > 0 && !Boolean.TRUE.equals(request.allowPartial())) {
+        if (apply && unscheduled > 0) {
             throw ApiException.conflict("Còn " + unscheduled
                     + " tiết chưa xếp được. Hãy xử lý cảnh báo trước khi áp dụng.");
         }
@@ -124,10 +151,12 @@ public class AutomaticTimetableService {
         }
         TimetableVersion draftVersion = null;
         if (apply && request.draftName() != null && !request.draftName().isBlank()) {
-            draftVersion = versions.snapshot(request.semesterId(), request.draftName(), actorId);
+            draftVersion = versions.snapshot(request.semesterId(), request.draftName(), actorId,
+                    precheck.sourceEducationPlanIds());
         }
         return new AutoTimetablePlan(request.semesterId(), request.scopeGradeLevel(), existingCount,
-                proposed, unscheduled, apply, result, warnings, draftVersion);
+                proposed, unscheduled, apply, result, warnings,
+                precheck.sourceEducationPlanIds(), draftVersion);
     }
 
     /**

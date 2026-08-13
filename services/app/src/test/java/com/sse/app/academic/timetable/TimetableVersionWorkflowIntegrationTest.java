@@ -47,7 +47,9 @@ class TimetableVersionWorkflowIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.applied").value(true))
                 .andExpect(jsonPath("$.scopeGradeLevel").value("K10"))
+                .andExpect(jsonPath("$.sourceEducationPlanIds.length()", greaterThan(0)))
                 .andExpect(jsonPath("$.draftVersion.status").value("VALIDATED"))
+                .andExpect(jsonPath("$.draftVersion.sourceEducationPlanIds.length()", greaterThan(0)))
                 .andExpect(jsonPath("$.draftVersion.totalPeriods", greaterThan(0)))
                 .andReturn().getResponse().getContentAsString();
         String firstId = json.readTree(firstPayload).path("draftVersion").path("id").asText();

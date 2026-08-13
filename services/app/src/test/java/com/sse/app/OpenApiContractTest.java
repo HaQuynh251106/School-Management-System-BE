@@ -187,6 +187,20 @@ class OpenApiContractTest {
         assertOperation(paths, "/teaching-assignments", "post", "createTeachingAssignment");
         assertOperation(paths, "/timetableSlots", "post", "createTimetableSlot");
         assertOperation(paths, "/timetableSlots/auto-plan", "post", "autoPlanTimetable");
+        assertOperation(paths, "/timetable/generation-readiness", "get",
+                "getTimetableGenerationReadiness");
+        assertOperation(paths, "/education-plans", "get", "listEducationPlans");
+        assertOperation(paths, "/education-plans", "post", "createEducationPlanVersion");
+        assertOperation(paths, "/education-plans/{id}/requirements", "put",
+                "saveEducationPlanRequirement");
+        assertOperation(paths, "/education-plans/{id}/validation", "get",
+                "validateEducationPlan");
+        assertOperation(paths, "/education-plans/{id}/submit", "post", "submitEducationPlan");
+        assertOperation(paths, "/education-plans/{id}/approve", "post", "approveEducationPlan");
+        assertOperation(paths, "/education-plans/{id}/request-revision", "post",
+                "requestEducationPlanRevision");
+        assertOperation(paths, "/education-plans/{id}/publish", "post", "publishEducationPlan");
+        assertOperation(paths, "/education-plans/{id}/lock", "post", "lockEducationPlan");
         assertOperation(paths, "/attendance", "get", "listAttendance");
         assertOperation(paths, "/attendance/bulk", "post", "bulkMarkAttendance");
         assertOperation(paths, "/attendance/day-status", "get", "getAttendanceDayStatus");

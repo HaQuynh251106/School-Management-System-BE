@@ -2593,6 +2593,17 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(extraSlot))
+                .andExpect(status().isOk());
+
+        String overEducationPlanSlot = """
+                {"classId":"c-10a2","subjectId":"sj-math","teacherId":"u-teacher-1",
+                 "roomCode":"P201","dayOfWeek":"WED","periodNo":2,
+                 "startTime":"07:50","endTime":"08:35","semesterId":"sm-2026-2"}
+                """;
+        mvc.perform(post("/timetableSlots")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(overEducationPlanSlot))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("đã xếp đủ")));
 
@@ -2603,7 +2614,7 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + admin))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].id").value(assignment.path("id").asText()))
-                .andExpect(jsonPath("$[0].scheduledPeriods").value(1))
+                .andExpect(jsonPath("$[0].scheduledPeriods").value(2))
                 .andExpect(jsonPath("$[0].fullyScheduled").value(true))
                 .andExpect(jsonPath("$[0].canSchedule").value(false));
 

@@ -257,7 +257,10 @@ public class StructureService {
         if (academicYearId != null) result = classes.findByAcademicYearId(academicYearId);
         else if (gradeLevel != null) result = classes.findByGradeLevel(gradeLevel);
         else result = classes.findAll();
-        return result.stream().sorted(Comparator.comparing(SchoolClass::getCode)).toList();
+        return result.stream()
+                .filter(item -> academicYearId == null || academicYearId.equals(item.getAcademicYearId()))
+                .filter(item -> gradeLevel == null || gradeLevel.equalsIgnoreCase(item.getGradeLevel()))
+                .sorted(Comparator.comparing(SchoolClass::getCode)).toList();
     }
 
     public SchoolClass getClass(String id) {
@@ -719,8 +722,8 @@ public class StructureService {
     // ---------- Seed (raw insert, dùng bởi DataSeeder) ----------
     public void seedAll(List<AcademicYear> y, List<Semester> s, List<SchoolClass> c,
                         List<Subject> sj, List<Room> rm) {
-        years.saveAll(y); semesters.saveAll(s); classes.saveAll(c);
-        subjects.saveAll(sj); rooms.saveAll(rm);
+        years.saveAll(y); semesters.saveAll(s); subjects.saveAll(sj);
+        rooms.saveAll(rm); classes.saveAll(c);
     }
 
     // ---------- Helper ----------

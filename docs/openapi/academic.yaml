@@ -150,6 +150,130 @@ paths:
         '200': { description: Phuong an xep lich, content: { application/json: { schema: { $ref: '#/components/schemas/AutoTimetablePlan' } } } }
         '400': { $ref: '#/components/responses/ApiErrorResponse' }
         '409': { $ref: '#/components/responses/ApiErrorResponse' }
+  /timetable/generation-readiness:
+    get:
+      tags: [Academic]
+      operationId: getTimetableGenerationReadiness
+      x-roles: [ADMIN, ACADEMIC_STAFF]
+      x-object-permission: Chi Admin va Giao vu kiem tra du lieu dau vao truoc khi tao TKB.
+      x-idempotency: Read-only; ket qua duoc tinh tu phien ban GD3 da cong bo va du lieu hien tai.
+      x-owners: { backend: Academic, client: Mobile }
+      parameters:
+        - { name: semesterId, in: query, required: true, schema: { type: string } }
+        - { name: scopeGradeLevel, in: query, schema: { type: string } }
+        - { name: allowedDays, in: query, schema: { type: array, minItems: 1, uniqueItems: true, items: { type: string, enum: [MON, TUE, WED, THU, FRI, SAT] } } }
+      responses:
+        '200': { description: Ket qua kiem tra kha nang tao TKB, content: { application/json: { schema: { $ref: '#/components/schemas/TimetableReadiness' } } } }
+  /education-plans:
+    get:
+      tags: [Academic]
+      operationId: listEducationPlans
+      x-roles: [ADMIN, ACADEMIC_STAFF]
+      x-object-permission: Chi Admin va Giao vu doc lich su phien ban ke hoach GD3.
+      x-idempotency: Read-only.
+      x-owners: { backend: Academic, client: Mobile }
+      parameters:
+        - { name: academicYearId, in: query, required: true, schema: { type: string } }
+        - { name: gradeLevel, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Lich su phien ban GD3, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/EducationPlan' } } } } }
+    post:
+      tags: [Academic]
+      operationId: createEducationPlanVersion
+      x-roles: [ADMIN, ACADEMIC_STAFF]
+      x-object-permission: Chi Admin va Giao vu tao ban nhap; dieu chinh ban cong bo phai co ly do.
+      x-idempotency: Moi lan goi tao mot phien ban moi co versionNo tang dan.
+      x-owners: { backend: Academic, client: Mobile }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateEducationPlanRequest' } } } }
+      responses:
+        '200': { description: Phien ban GD3 moi, content: { application/json: { schema: { $ref: '#/components/schemas/EducationPlan' } } } }
+        '400': { $ref: '#/components/responses/ApiErrorResponse' }
+  /education-plans/{id}/requirements:
+    get:
+      tags: [Academic]
+      operationId: listEducationPlanRequirements
+      x-roles: [ADMIN, ACADEMIC_STAFF]
+      x-object-permission: Doc dinh muc mon hoc cua phien ban GD3.
+      x-idempotency: Read-only.
+      x-owners: { backend: Academic, client: Mobile }
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Dinh muc mon hoc theo hoc ky, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/CurriculumRequirement' } } } } }
+    put:
+      tags: [Academic]
+      operationId: saveEducationPlanRequirement
+      x-roles: [ADMIN, ACADEMIC_STAFF]
+      x-object-permission: Chi sua DRAFT hoac REVISION_REQUESTED; ban da gui duyet hoac cong bo la bat bien.
+      x-idempotency: Upsert duy nhat theo planId, semesterId va subjectId.
+      x-owners: { backend: Academic, client: Mobile }
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SaveCurriculumRequirementRequest' } } } }
+      responses:
+        '200': { description: Dinh muc sau khi luu, content: { application/json: { schema: { $ref: '#/components/schemas/CurriculumRequirement' } } } }
+        '409': { $ref: '#/components/responses/ApiErrorResponse' }
+  /education-plans/{id}/validation:
+    get:
+      tags: [Academic]
+      operationId: validateEducationPlan
+      x-roles: [ADMIN, ACADEMIC_STAFF]
+      x-object-permission: Kiem tra GD3 truoc khi gui duyet va cong bo.
+      x-idempotency: Read-only.
+      x-owners: { backend: Academic, client: Mobile }
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Loi va canh bao GD3, content: { application/json: { schema: { $ref: '#/components/schemas/EducationPlanValidation' } } } } }
+  /education-plans/{id}/submit:
+    post:
+      tags: [Academic]
+      operationId: submitEducationPlan
+      x-roles: [ADMIN, ACADEMIC_STAFF]
+      x-object-permission: Chuyen DRAFT hoac REVISION_REQUESTED sang SUBMITTED khi khong con loi.
+      x-idempotency: Goi lai sau khi da submit tra 409.
+      x-owners: { backend: Academic, client: Mobile }
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: GD3 da gui duyet, content: { application/json: { schema: { $ref: '#/components/schemas/EducationPlan' } } } }, '409': { $ref: '#/components/responses/ApiErrorResponse' } }
+  /education-plans/{id}/approve:
+    post:
+      tags: [Academic]
+      operationId: approveEducationPlan
+      x-roles: [ADMIN, ACADEMIC_STAFF]
+      x-object-permission: Chi phan ban SUBMITTED hop le moi duoc phe duyet.
+      x-idempotency: Goi lai sau khi da duyet tra 409.
+      x-owners: { backend: Academic, client: Mobile }
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: GD3 da phe duyet, content: { application/json: { schema: { $ref: '#/components/schemas/EducationPlan' } } } }, '409': { $ref: '#/components/responses/ApiErrorResponse' } }
+  /education-plans/{id}/request-revision:
+    post:
+      tags: [Academic]
+      operationId: requestEducationPlanRevision
+      x-roles: [ADMIN, ACADEMIC_STAFF]
+      x-object-permission: Dua SUBMITTED hoac APPROVED ve REVISION_REQUESTED kem ly do.
+      x-idempotency: Goi lai khi da o REVISION_REQUESTED tra 409.
+      x-owners: { backend: Academic, client: Mobile }
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/EducationPlanActionRequest' } } } }
+      responses: { '200': { description: GD3 can chinh sua, content: { application/json: { schema: { $ref: '#/components/schemas/EducationPlan' } } } }, '409': { $ref: '#/components/responses/ApiErrorResponse' } }
+  /education-plans/{id}/publish:
+    post:
+      tags: [Academic]
+      operationId: publishEducationPlan
+      x-roles: [ADMIN, ACADEMIC_STAFF]
+      x-object-permission: Chi cong bo ban APPROVED hop le; ban cong bo cu chuyen SUPERSEDED.
+      x-idempotency: Goi lai sau khi da cong bo tra 409.
+      x-owners: { backend: Academic, client: Mobile }
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: GD3 da cong bo, content: { application/json: { schema: { $ref: '#/components/schemas/EducationPlan' } } } }, '409': { $ref: '#/components/responses/ApiErrorResponse' } }
+  /education-plans/{id}/lock:
+    post:
+      tags: [Academic]
+      operationId: lockEducationPlan
+      x-roles: [ADMIN, ACADEMIC_STAFF]
+      x-object-permission: Chi khoa phien ban PUBLISHED de dong bang nguon lich su.
+      x-idempotency: Goi lai sau khi da khoa tra 409.
+      x-owners: { backend: Academic, client: Mobile }
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: GD3 da khoa, content: { application/json: { schema: { $ref: '#/components/schemas/EducationPlan' } } } }
+        '409': { $ref: '#/components/responses/ApiErrorResponse' }
   /teaching-assignments:
     get:
       tags: [Academic]
@@ -1013,6 +1137,8 @@ components:
         semesterId: { type: string, minLength: 1 }
         apply: { type: boolean }
         allowPartial: { type: [boolean, 'null'], default: false }
+        scopeGradeLevel: { type: [string, 'null'] }
+        draftName: { type: [string, 'null'], maxLength: 255 }
         allowedDays:
           type: [array, 'null']
           minItems: 1
@@ -1044,8 +1170,108 @@ components:
         proposedSlots: { type: integer }
         unscheduledSlots: { type: integer }
         applied: { type: boolean }
+        scopeGradeLevel: { type: [string, 'null'] }
+        sourceEducationPlanIds: { type: array, items: { type: string } }
         items: { type: array, items: { $ref: '#/components/schemas/AutoTimetableItem' } }
         warnings: { type: array, items: { type: string } }
+    EducationPlan:
+      type: object
+      required: [id, academicYearId, gradeLevel, name, versionNo, status]
+      properties:
+        id: { type: string }
+        academicYearId: { type: string }
+        gradeLevel: { type: string }
+        name: { type: string }
+        versionNo: { type: integer, minimum: 1 }
+        status: { type: string, enum: [DRAFT, SUBMITTED, REVISION_REQUESTED, APPROVED, PUBLISHED, LOCKED, SUPERSEDED] }
+        description: { type: [string, 'null'] }
+        sourcePlanId: { type: [string, 'null'] }
+        revisionReason: { type: [string, 'null'] }
+        createdBy: { type: [string, 'null'] }
+        createdAt: { type: [string, 'null'], format: date-time }
+        submittedBy: { type: [string, 'null'] }
+        submittedAt: { type: [string, 'null'], format: date-time }
+        approvedBy: { type: [string, 'null'] }
+        approvedAt: { type: [string, 'null'], format: date-time }
+        publishedBy: { type: [string, 'null'] }
+        publishedAt: { type: [string, 'null'], format: date-time }
+    CreateEducationPlanRequest:
+      type: object
+      required: [academicYearId, gradeLevel, name]
+      properties:
+        academicYearId: { type: string, minLength: 1 }
+        gradeLevel: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1, maxLength: 255 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        sourcePlanId: { type: [string, 'null'] }
+        revisionReason: { type: [string, 'null'], maxLength: 1000 }
+    EducationPlanActionRequest:
+      type: object
+      properties: { comment: { type: [string, 'null'], maxLength: 1000 } }
+    SaveCurriculumRequirementRequest:
+      type: object
+      required: [semesterId, gradeLevel, subjectId, weeklyPeriods]
+      properties:
+        semesterId: { type: string }
+        gradeLevel: { type: string }
+        subjectId: { type: string }
+        weeklyPeriods: { type: integer, minimum: 1, maximum: 20 }
+        totalPeriods: { type: [integer, 'null'], minimum: 1, maximum: 500 }
+        startDate: { type: [string, 'null'], format: date }
+        endDate: { type: [string, 'null'], format: date }
+        examWindowStart: { type: [string, 'null'], format: date }
+        examWindowEnd: { type: [string, 'null'], format: date }
+        milestone: { type: [string, 'null'], maxLength: 1000 }
+    CurriculumRequirement:
+      type: object
+      required: [id, planId, semesterId, gradeLevel, subjectId, subjectName, weeklyPeriods, totalPeriods]
+      properties:
+        id: { type: string }
+        planId: { type: string }
+        semesterId: { type: string }
+        gradeLevel: { type: string }
+        subjectId: { type: string }
+        subjectName: { type: string }
+        weeklyPeriods: { type: integer }
+        totalPeriods: { type: integer }
+        startDate: { type: [string, 'null'], format: date }
+        endDate: { type: [string, 'null'], format: date }
+        examWindowStart: { type: [string, 'null'], format: date }
+        examWindowEnd: { type: [string, 'null'], format: date }
+        milestone: { type: [string, 'null'] }
+    EducationPlanIssue:
+      type: object
+      required: [severity, code, entityType, message]
+      properties:
+        severity: { type: string, enum: [ERROR, WARNING] }
+        code: { type: string }
+        entityType: { type: string }
+        entityId: { type: [string, 'null'] }
+        message: { type: string }
+    EducationPlanValidation:
+      type: object
+      required: [planId, valid, errorCount, warningCount, issues]
+      properties:
+        planId: { type: string }
+        valid: { type: boolean }
+        errorCount: { type: integer }
+        warningCount: { type: integer }
+        issues: { type: array, items: { $ref: '#/components/schemas/EducationPlanIssue' } }
+    TimetableReadiness:
+      type: object
+      required: [academicYearId, semesterId, ready, classCount, teacherCount, assignmentCount, requiredPeriods, availableSlots, sourceEducationPlanIds, issues]
+      properties:
+        academicYearId: { type: string }
+        semesterId: { type: string }
+        scopeGradeLevel: { type: [string, 'null'] }
+        ready: { type: boolean }
+        classCount: { type: integer }
+        teacherCount: { type: integer }
+        assignmentCount: { type: integer }
+        requiredPeriods: { type: integer }
+        availableSlots: { type: integer }
+        sourceEducationPlanIds: { type: array, items: { type: string } }
+        issues: { type: array, items: { $ref: '#/components/schemas/EducationPlanIssue' } }
     AttendanceStatus:
       type: string
       enum: [PRESENT, LATE, ABSENT_UNEXCUSED, ABSENT_EXCUSED]

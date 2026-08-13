@@ -34,15 +34,21 @@ public class TeachingAssignmentService {
     private final TimetableRepository slots;
     private final StructureService structure;
     private final UserService users;
+    private final EducationPlanService educationPlans;
+    private final TeacherSubjectQualificationRepository qualifications;
 
     public TeachingAssignmentService(TeachingAssignmentRepository assignments,
                                      TimetableRepository slots,
-                                     StructureService structure,
-                                     UserService users) {
+                                      StructureService structure,
+                                      UserService users,
+                                      EducationPlanService educationPlans,
+                                      TeacherSubjectQualificationRepository qualifications) {
         this.assignments = assignments;
         this.slots = slots;
         this.structure = structure;
         this.users = users;
+        this.educationPlans = educationPlans;
+        this.qualifications = qualifications;
     }
 
     public List<TeachingAssignmentResponse> list(String classId, String subjectId, String teacherId,
@@ -217,6 +223,22 @@ public class TeachingAssignmentService {
         }
     }
 
+    public void assertCanScheduleFromPublishedPlan(TeachingAssignment assignment, String ignoredSlotId) {
+        int scheduled = scheduledCount(assignment, ignoredSlotId);
+        int requiredPeriods = educationPlans.publishedRequirements(assignment.getSemesterId()).stream()
+                .filter(item -> item.getGradeLevel().equals(
+                        structure.getClass(assignment.getClassId()).getGradeLevel()))
+                .filter(item -> item.getSubjectId().equals(assignment.getSubjectId()))
+                .mapToInt(CurriculumRequirement::getWeeklyPeriods).findFirst()
+                .orElseThrow(() -> ApiException.conflict(
+                        "Môn học chưa có trong kế hoạch GĐ3 đã công bố của lớp"));
+        if (scheduled >= requiredPeriods) {
+            throw ApiException.conflict("Phân công " + assignment.getSubjectName() + " - lớp "
+                    + assignment.getClassCode() + " đã xếp đủ " + scheduled + "/"
+                    + requiredPeriods + " tiết/tuần theo GĐ3; không thể xếp thêm");
+        }
+    }
+
     public boolean isAssigned(String teacherId, String classId) {
         if (teacherId == null || classId == null) return false;
         return assignments.findByTeacherId(teacherId).stream()
@@ -283,6 +305,9 @@ public class TeachingAssignmentService {
     }
 
     public boolean teacherSupportsSubject(User teacher, String subjectId) {
+        if (teacher != null && qualifications.existsByTeacherIdAndSubjectId(teacher.getId(), subjectId)) {
+            return true;
+        }
         if (teacher == null || teacher.getMainSubject() == null || teacher.getMainSubject().isBlank()) return false;
         var subject = structure.listSubjects().stream()
                 .filter(item -> item.getId().equals(subjectId)).findFirst().orElse(null);

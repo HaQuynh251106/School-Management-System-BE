@@ -19,6 +19,9 @@ public class SchoolClass {
     @Builder.Default
     @Column(nullable = false)
     private String studyShift = "MORNING";
+    @Builder.Default
+    @Column(nullable = false)
+    private String status = "ACTIVE";
     @Column(nullable = false)
     private String academicYearId;
     private String cohortId;

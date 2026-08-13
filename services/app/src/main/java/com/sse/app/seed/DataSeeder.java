@@ -8,6 +8,9 @@ import com.sse.app.academic.grade.GradeService;
 import com.sse.app.academic.structure.*;
 import com.sse.app.academic.timetable.TimetableService;
 import com.sse.app.academic.timetable.TimetableSlot;
+import com.sse.app.academic.timetable.EducationPlanService;
+import com.sse.app.academic.timetable.TeacherSubjectQualification;
+import com.sse.app.academic.timetable.TeacherSubjectQualificationRepository;
 import com.sse.app.identity.ParentStudent;
 import com.sse.app.identity.ParentStudentRepository;
 import com.sse.app.identity.User;
@@ -45,7 +48,9 @@ public class DataSeeder {
                                  PasswordEncoder enc, StructureService structure,
                                  TimetableService timetable, GradeService grades,
                                  AttendanceService attendance, NotificationService notifications,
-                                 AuditService audit, ChatService chat, FinanceService finance) {
+                                  AuditService audit, ChatService chat, FinanceService finance,
+                                   EducationPlanService educationPlans,
+                                   TeacherSubjectQualificationRepository qualifications) {
         return args -> {
             if (users.count() > 0) {
                 log.info("[seed] DB đã có dữ liệu — bỏ qua seed.");
@@ -62,6 +67,7 @@ public class DataSeeder {
                         teacher.setMainSubjectId(subject.getId());
                         users.save(teacher);
                     }));
+            seedTeacherQualifications(qualifications);
             users.findByRole("STUDENT").forEach(student -> {
                 if (student.getClassId() != null) {
                     student.setCohortId(structure.cohortIdForClass(student.getClassId()));
@@ -71,6 +77,7 @@ public class DataSeeder {
                 }
             });
             seedTimetable(timetable);
+            educationPlans.bootstrapDemoPlans();
             seedGrades(grades);
             seedAttendance(attendance);
             seedNotifications(notifications);
@@ -155,7 +162,9 @@ public class DataSeeder {
         var rooms = List.of(
                 Room.builder().id("rm-201").code("P201").name("Phòng 201").capacity(45).build(),
                 Room.builder().id("rm-105").code("P105").name("Phòng 105").capacity(45).build(),
-                Room.builder().id("rm-lab1").code("LAB1").name("Phòng thí nghiệm 1").capacity(30).build());
+                Room.builder().id("rm-lab1").code("LAB1").name("Phòng thí nghiệm 1").capacity(45).build(),
+                Room.builder().id("rm-301").code("P301").name("Phòng chủ nhiệm 10A1").capacity(45).build(),
+                Room.builder().id("rm-302").code("P302").name("Phòng chủ nhiệm 8A1").capacity(45).build());
 
         structure.seedAll(List.of(year), sems, classes, subjects, rooms);
     }
@@ -171,6 +180,16 @@ public class DataSeeder {
                 slot("tt-6", "c-10a1", "sj-math", "Toán", "u-teacher-1", "Trần Thị Hoa", "P201", "WED", 1, "07:00", "07:45"),
                 slot("tt-7", "c-8a1", "sj-math", "Toán", "u-teacher-1", "Trần Thị Hoa", "P105", "MON", 4, "09:35", "10:20"),
                 slot("tt-8", "c-8a1", "sj-eng", "Tiếng Anh", "u-teacher-2", "Lê Văn Minh", "P105", "TUE", 4, "09:35", "10:20")));
+    }
+
+    private void seedTeacherQualifications(TeacherSubjectQualificationRepository qualifications) {
+        Instant now = Instant.now();
+        qualifications.saveAll(List.of(
+                qualification("tsq-1", "u-teacher-1", "sj-math", now),
+                qualification("tsq-2", "u-teacher-1", "sj-lit", now),
+                qualification("tsq-3", "u-teacher-1", "sj-bio", now),
+                qualification("tsq-4", "u-teacher-2", "sj-phys", now),
+                qualification("tsq-5", "u-teacher-2", "sj-eng", now)));
     }
 
     // ---------- Grades + exam categories ----------
@@ -294,10 +313,13 @@ public class DataSeeder {
     }
 
     private static SchoolClass cls(String id, String code, String name, String grade, String hr, int count) {
+        String roomId = "c-10a1".equals(id) ? "rm-301" : "c-8a1".equals(id) ? "rm-302" : null;
+        String roomCode = "c-10a1".equals(id) ? "P301" : "c-8a1".equals(id) ? "P302" : null;
         SchoolClass.SchoolClassBuilder builder = SchoolClass.builder()
                 .id(id).code(code).name(name).gradeLevel(grade)
                 .academicYearId("ay-2026").homeroomTeacherId(hr)
-                .studentCount(count);
+                .roomId(roomId).roomCode(roomCode).studentCount(count)
+                .status("c-10a2".equals(id) ? "PLANNED" : "ACTIVE");
         if (hr != null) {
             builder.homeroomTeacherName("u-teacher-1".equals(hr) ? "Trần Thị Hoa" : "Lê Văn Minh")
                     .homeroomAssignedAt(Instant.now()).homeroomAssignedBy("u-admin-1");
@@ -307,6 +329,12 @@ public class DataSeeder {
 
     private static Subject subj(String id, String code, String name) {
         return Subject.builder().id(id).code(code).name(name).build();
+    }
+
+    private static TeacherSubjectQualification qualification(
+            String id, String teacherId, String subjectId, Instant createdAt) {
+        return TeacherSubjectQualification.builder().id(id).teacherId(teacherId)
+                .subjectId(subjectId).createdAt(createdAt).build();
     }
 
     private static TimetableSlot slot(String id, String classId, String subjectId, String subjectName,

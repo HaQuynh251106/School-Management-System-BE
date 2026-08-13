@@ -14,6 +14,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.List;
 
 /** Vòng đời phiên bản TKB: snapshot nháp, kiểm tra, phát hành và khôi phục. */
@@ -52,6 +53,12 @@ public class TimetableVersionService {
     /** Chụp lịch làm việc hiện tại thành một bản nháp bất biến. */
     @Transactional
     public TimetableVersion snapshot(String semesterId, String name, String actorId) {
+        return snapshot(semesterId, name, actorId, List.of());
+    }
+
+    @Transactional
+    public TimetableVersion snapshot(String semesterId, String name, String actorId,
+                                     List<String> sourceEducationPlanIds) {
         structure.assertSemesterWritable(semesterId);
         int slotCount = count("select count(*) from timetable_slots where semester_id=?", semesterId);
         if (slotCount == 0) throw ApiException.badRequest("Học kỳ chưa có tiết học để tạo phiên bản");
@@ -62,9 +69,10 @@ public class TimetableVersionService {
                 insert into timetable_plans
                 (id,semester_id,name,status,version_no,option_no,quality_score,progress_percent,
                  total_assignments,total_periods,scheduled_periods,unscheduled_periods,conflict_summary,
-                 configuration_json,created_by,created_at,updated_at)
-                values (?,?,?,'DRAFT',?,1,0,100,0,?,?,0,null,'{}',?,?,?)
-                """, id, semesterId, cleanName(name), versionNo, slotCount, slotCount, actorId, sqlTime(now), sqlTime(now));
+                 configuration_json,source_education_plan_ids,created_by,created_at,updated_at)
+                values (?,?,?,'DRAFT',?,1,0,100,0,?,?,0,null,'{}',?,?,?,?)
+                """, id, semesterId, cleanName(name), versionNo, slotCount, slotCount,
+                csv(sourceEducationPlanIds), actorId, sqlTime(now), sqlTime(now));
         List<TimetableVersionSlot> current = jdbc.query("""
                 select t.id,null as plan_id,t.class_id,c.code as class_code,c.study_shift,
                        t.subject_id,t.subject_name,t.teacher_id,t.teacher_name,t.room_code,
@@ -95,10 +103,10 @@ public class TimetableVersionService {
                 insert into timetable_plans
                 (id,semester_id,name,status,version_no,option_no,quality_score,progress_percent,
                  total_assignments,total_periods,scheduled_periods,unscheduled_periods,conflict_summary,
-                 configuration_json,source_plan_id,created_by,created_at,updated_at)
-                values (?,?,?,'DRAFT',?,1,0,100,0,?,?,0,null,'{}',?,?,?,?)
+                 configuration_json,source_plan_id,source_education_plan_ids,created_by,created_at,updated_at)
+                values (?,?,?,'DRAFT',?,1,0,100,0,?,?,0,null,'{}',?,?,?,?,?)
                 """, id, source.semesterId(), cleanName(name), versionNo, sourceSlots.size(), sourceSlots.size(),
-                sourcePlanId, actorId, sqlTime(now), sqlTime(now));
+                sourcePlanId, csv(source.sourceEducationPlanIds()), actorId, sqlTime(now), sqlTime(now));
         sourceSlots.forEach(item -> insertPlanSlot(id, item));
         Validation validation = validate(id);
         jdbc.update("update timetable_plans set status=?,quality_score=?,conflict_summary=?,updated_at=? where id=?",
@@ -214,7 +222,8 @@ public class TimetableVersionService {
                 rs.getString("status"), rs.getObject("version_no", Integer.class),
                 rs.getObject("quality_score", Integer.class), rs.getObject("total_periods", Integer.class),
                 rs.getObject("scheduled_periods", Integer.class), rs.getObject("unscheduled_periods", Integer.class),
-                rs.getString("conflict_summary"), rs.getString("source_plan_id"), rs.getString("created_by"),
+                rs.getString("conflict_summary"), rs.getString("source_plan_id"),
+                parseCsv(rs.getString("source_education_plan_ids")), rs.getString("created_by"),
                 instant(rs, "created_at"), instant(rs, "updated_at"), rs.getString("published_by"),
                 instant(rs, "published_at"));
     }
@@ -234,6 +243,15 @@ public class TimetableVersionService {
 
     private Timestamp sqlTime(Instant value) {
         return Timestamp.from(value);
+    }
+
+    private static String csv(List<String> values) {
+        return values == null || values.isEmpty() ? null : String.join(",", values);
+    }
+
+    private static List<String> parseCsv(String value) {
+        return value == null || value.isBlank() ? List.of()
+                : Arrays.stream(value.split(",")).map(String::trim).filter(item -> !item.isBlank()).toList();
     }
 
     private record Validation(boolean valid, String summary) {}

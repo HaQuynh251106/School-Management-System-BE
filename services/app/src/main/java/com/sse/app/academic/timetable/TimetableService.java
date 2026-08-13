@@ -132,7 +132,7 @@ public class TimetableService {
         }
         TeachingAssignment assignment = teachingAssignments.requireForSlot(
                 request.classId(), request.subjectId(), request.teacherId(), request.semesterId());
-        teachingAssignments.assertCanSchedule(assignment, ignoredSlotId);
+        teachingAssignments.assertCanScheduleFromPublishedPlan(assignment, ignoredSlotId);
         // Kiểm tra điều kiện nghiệp vụ cốt lõi trước điều kiện phòng học để thông báo
         // đúng việc người dùng cần xử lý (phân công giáo viên) thay vì lỗi thứ cấp.
         structure.requireRoomForClass(request.roomCode(), request.classId());

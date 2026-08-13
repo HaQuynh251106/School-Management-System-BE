@@ -46,7 +46,18 @@ public final class TimetableDtos {
             String semesterId, String scopeGradeLevel, int existingSlots, int proposedSlots,
             int unscheduledSlots, boolean applied,
             List<AutoTimetableItem> items, List<String> warnings,
+            List<String> sourceEducationPlanIds,
             TimetableVersion draftVersion
+    ) {}
+
+    public record TimetableReadinessIssue(
+            String severity, String code, String entityType, String entityId, String message) {}
+
+    public record TimetableReadiness(
+            String academicYearId, String semesterId, String scopeGradeLevel,
+            boolean ready, int activeClassCount, int activeTeacherCount,
+            int assignmentCount, int requiredPeriodsPerWeek, int availableSlotsPerWeek,
+            List<String> sourceEducationPlanIds, List<TimetableReadinessIssue> issues
     ) {}
 
     public record CreateVersionRequest(
@@ -61,6 +72,7 @@ public final class TimetableDtos {
             Integer versionNo, Integer qualityScore, Integer totalPeriods,
             Integer scheduledPeriods, Integer unscheduledPeriods,
             String conflictSummary, String sourcePlanId,
+            List<String> sourceEducationPlanIds,
             String createdBy, Instant createdAt, Instant updatedAt,
             String publishedBy, Instant publishedAt
     ) {}

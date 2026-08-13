@@ -23,17 +23,20 @@ public class TimetableController {
     private final TeachingAssignmentService teachingAssignments;
     private final AutomaticTimetableService automaticTimetable;
     private final TimetableVersionService versions;
+    private final TimetableReadinessService readiness;
 
     public TimetableController(TimetableService timetable, UserService users, StructureService structure,
                                TeachingAssignmentService teachingAssignments,
                                AutomaticTimetableService automaticTimetable,
-                               TimetableVersionService versions) {
+                               TimetableVersionService versions,
+                               TimetableReadinessService readiness) {
         this.timetable = timetable;
         this.users = users;
         this.structure = structure;
         this.teachingAssignments = teachingAssignments;
         this.automaticTimetable = automaticTimetable;
         this.versions = versions;
+        this.readiness = readiness;
     }
 
     @GetMapping("/timetableSlots")
@@ -59,6 +62,15 @@ public class TimetableController {
             @Valid @RequestBody TimetableDtos.AutoTimetableRequest request) {
         CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
         return automaticTimetable.plan(request, CurrentUserHolder.require().id());
+    }
+
+    @GetMapping("/timetable/generation-readiness")
+    public TimetableDtos.TimetableReadiness readiness(
+            @RequestParam String semesterId,
+            @RequestParam(required = false) String scopeGradeLevel,
+            @RequestParam(required = false) List<String> allowedDays) {
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        return readiness.check(semesterId, scopeGradeLevel, allowedDays);
     }
 
     @GetMapping("/timetable-versions")

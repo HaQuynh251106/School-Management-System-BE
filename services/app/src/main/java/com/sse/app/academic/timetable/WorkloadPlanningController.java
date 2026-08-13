@@ -24,7 +24,14 @@ public class WorkloadPlanningController {
     @PutMapping("/curriculum-requirements")
     public CurriculumRequirement saveRequirement(@Valid @RequestBody SaveCurriculumRequirementRequest request) {
         CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
-        return planning.saveRequirement(request);
+        return planning.saveRequirement(request, CurrentUserHolder.require().id());
+    }
+
+    @PutMapping("/education-plans/{planId}/requirements")
+    public CurriculumRequirement savePlanRequirement(@PathVariable String planId,
+            @Valid @RequestBody SaveCurriculumRequirementRequest request) {
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        return planning.saveRequirement(planId, request);
     }
 
     @DeleteMapping("/curriculum-requirements/{id}")
