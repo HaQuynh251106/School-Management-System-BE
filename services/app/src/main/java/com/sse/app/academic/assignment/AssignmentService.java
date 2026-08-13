@@ -12,6 +12,7 @@ import com.sse.app.identity.UserDto;
 import com.sse.app.identity.UserService;
 import com.sse.app.notification.NotificationService;
 import com.sse.app.security.CurrentUser;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -34,12 +35,14 @@ public class AssignmentService {
     private final UserService users;
     private final NotificationService notifications;
     private final FileStorageService storage;
+    private final ApplicationEventPublisher events;
 
     public AssignmentService(AssignmentRepository assignments, AssignmentSubmissionRepository submissions,
                              AssignmentSubmissionAttemptRepository attempts,
                              StructureService structure, TeachingAssignmentService teachingAssignments,
                              UserService users,
-                             NotificationService notifications, FileStorageService storage) {
+                             NotificationService notifications, FileStorageService storage,
+                             ApplicationEventPublisher events) {
         this.assignments = assignments;
         this.submissions = submissions;
         this.attempts = attempts;
@@ -48,6 +51,7 @@ public class AssignmentService {
         this.users = users;
         this.notifications = notifications;
         this.storage = storage;
+        this.events = events;
     }
 
     public List<Assignment> list(String classId, String teacherId, String status, boolean onlyPublished) {
@@ -94,7 +98,10 @@ public class AssignmentService {
                 .attachmentFileId(attachment == null ? null : attachment.getId())
                 .attachmentName(attachment == null ? null : attachment.getOriginalName())
                 .createdAt(Instant.now()).updatedAt(Instant.now()).build());
-        if (publish) notifyClass(assignment);
+        if (publish) {
+            notifyClass(assignment);
+            changed(assignment, null, "PUBLISHED");
+        }
         return assignment;
     }
 
@@ -111,6 +118,7 @@ public class AssignmentService {
         assignment.setUpdatedAt(Instant.now());
         assignments.save(assignment);
         notifyClass(assignment);
+        changed(assignment, null, "PUBLISHED");
         return assignment;
     }
 
@@ -142,7 +150,10 @@ public class AssignmentService {
         }
         assignment.setUpdatedAt(Instant.now());
         assignments.save(assignment);
-        if ("PUBLISHED".equals(assignment.getStatus())) notifyAssignmentChanged(assignment, "Bài tập đã được cập nhật");
+        if ("PUBLISHED".equals(assignment.getStatus())) {
+            notifyAssignmentChanged(assignment, "Bài tập đã được cập nhật");
+            changed(assignment, null, "UPDATED");
+        }
         return assignment;
     }
 
@@ -171,6 +182,7 @@ public class AssignmentService {
         assignment.setUpdatedAt(Instant.now());
         assignments.save(assignment);
         notifyAssignmentChanged(assignment, "Bài tập đã được gia hạn");
+        changed(assignment, null, "UPDATED");
         return assignment;
     }
 
@@ -186,6 +198,7 @@ public class AssignmentService {
         assignment.setUpdatedAt(Instant.now());
         assignments.save(assignment);
         if (open) notifyAssignmentChanged(assignment, "Bài tập đã được mở lại");
+        changed(assignment, null, open ? "REOPENED" : "CLOSED");
         return assignment;
     }
 
@@ -289,6 +302,7 @@ public class AssignmentService {
 
         notifications.notifyUser(assignment.getTeacherId(), "ASSIGNMENT", "Có bài nộp mới",
                 student.getFullName() + " đã nộp: " + assignment.getTitle(), "SUBMISSION", saved.getId());
+        changed(assignment, saved, "SUBMITTED");
         return saved;
     }
 
@@ -313,6 +327,7 @@ public class AssignmentService {
         snapshotAttempt(submission);
         notifications.notifyUser(submission.getStudentId(), "ASSIGNMENT", "Bài tập đã được chấm",
                 assignment.getTitle() + " — Điểm: " + request.score(), "SUBMISSION", submission.getId());
+        changed(assignment, submission, "GRADED");
         return submission;
     }
 
@@ -331,6 +346,7 @@ public class AssignmentService {
         notifications.notifyUser(submission.getStudentId(), "ASSIGNMENT", "IMPORTANT", "Giáo viên cho phép nộp lại",
                 assignment.getTitle() + " · Lần nộp tiếp theo: " + (Math.max(1, submission.getAttemptNumber()) + 1),
                 "SUBMISSION", submission.getId());
+        changed(assignment, submission, "RESUBMISSION_ALLOWED");
         return submission;
     }
 
@@ -392,6 +408,11 @@ public class AssignmentService {
         boolean assigned = teachingAssignments.assignmentsOfTeacher(actorId).stream().anyMatch(item ->
                 classId.equals(item.getClassId()) && subjectId.equals(item.getSubjectId()));
         if (!assigned) throw ApiException.forbidden("Giáo viên không được phân công môn/lớp này");
+    }
+
+    private void changed(Assignment assignment, AssignmentSubmission submission, String action) {
+        events.publishEvent(new AssignmentChangedEvent(
+                assignment.getId(), submission == null ? null : submission.getId(), action));
     }
 
     private void notifyAssignmentChanged(Assignment assignment, String title) {

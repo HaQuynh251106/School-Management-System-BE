@@ -26,4 +26,6 @@ public class AttendanceRecord {
     private String note;
     private String subjectName;
     private Integer periodNo;
+    @Version @Builder.Default
+    private Long version = 0L;
 }

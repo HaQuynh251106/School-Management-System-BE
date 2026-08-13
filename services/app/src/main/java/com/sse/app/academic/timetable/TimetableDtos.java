@@ -5,6 +5,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import java.util.List;
 import java.time.Instant;
 
@@ -27,7 +28,10 @@ public final class TimetableDtos {
     public record AutoTimetableRequest(
             @NotBlank String semesterId,
             @NotNull Boolean apply,
-            Boolean allowPartial
+            Boolean allowPartial,
+            @Pattern(regexp = "K(?:10|11|12)", message = "Phạm vi khối phải là K10, K11 hoặc K12")
+            String scopeGradeLevel,
+            @Size(max = 255) String draftName
     ) {}
 
     public record AutoTimetableItem(
@@ -38,9 +42,10 @@ public final class TimetableDtos {
     ) {}
 
     public record AutoTimetablePlan(
-            String semesterId, int existingSlots, int proposedSlots,
+            String semesterId, String scopeGradeLevel, int existingSlots, int proposedSlots,
             int unscheduledSlots, boolean applied,
-            List<AutoTimetableItem> items, List<String> warnings
+            List<AutoTimetableItem> items, List<String> warnings,
+            TimetableVersion draftVersion
     ) {}
 
     public record CreateVersionRequest(

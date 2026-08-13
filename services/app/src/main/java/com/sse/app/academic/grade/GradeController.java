@@ -19,10 +19,12 @@ import java.util.stream.Collectors;
 public class GradeController {
 
     private final GradeService grades;
+    private final GradeCalculationService calculations;
     private final UserService users;
 
-    public GradeController(GradeService grades, UserService users) {
+    public GradeController(GradeService grades, GradeCalculationService calculations, UserService users) {
         this.grades = grades;
+        this.calculations = calculations;
         this.users = users;
     }
 
@@ -50,6 +52,26 @@ public class GradeController {
                     .map(UserDto::id).collect(Collectors.toSet());
         }
         return grades.list(studentId, subjectId, semesterId, category, studentIds);
+    }
+
+    @GetMapping("/grades/summary")
+    public List<GradeSubjectSummary> summary(@RequestParam(required = false) String studentId,
+                                             @RequestParam(required = false) String semesterId) {
+        CurrentUser me = CurrentUserHolder.require();
+        if (me.isStudent()) {
+            studentId = me.id();
+        } else if (me.isParent()) {
+            if (studentId == null || studentId.isBlank()) {
+                throw ApiException.badRequest("Thiếu studentId (chọn con)");
+            }
+            users.assertParentOf(me.id(), studentId);
+        } else {
+            CurrentUserHolder.requireRole("ADMIN");
+            if (studentId == null || studentId.isBlank()) {
+                throw ApiException.badRequest("Thiếu studentId");
+            }
+        }
+        return calculations.subjectSummaries(studentId, semesterId);
     }
 
     @PostMapping("/grades/bulk")

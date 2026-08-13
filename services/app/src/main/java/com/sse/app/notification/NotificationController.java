@@ -168,6 +168,14 @@ public class NotificationController {
         return notifications.createTemplate(r);
     }
 
+    @PutMapping("/notification-templates/{id}")
+    public NotificationTemplate updateTemplate(@PathVariable String id,
+                                               @Valid @RequestBody CreateTemplateRequest r) {
+        CurrentUserHolder.requireRole("ADMIN");
+        return notifications.createTemplate(new CreateTemplateRequest(
+                id, r.code(), r.name(), r.channel(), r.titleTemplate(), r.bodyTemplate(), r.active()));
+    }
+
     private void assertAdminAnnouncement(CreateAnnouncementRequest request) {
         String category = request.category() == null ? "GENERAL" : request.category().toUpperCase();
         if (!Set.of("GENERAL", "HOLIDAY", "EVENT", "PARENT_MEETING").contains(category)) {

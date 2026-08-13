@@ -284,7 +284,7 @@ class SecurityIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"slotId":"tt-1","date":"2026-08-24","marks":[
-                                  {"studentId":"u-student-1","status":"LATE","note":"Muộn 5 phút"}]}
+                                  {"studentId":"u-student-1","status":"LATE","note":"Muộn 5 phút","expectedVersion":0}]}
                                 """))
                 .andExpect(status().isOk());
         int unreadAfterUnchangedSave = body(mvc.perform(get("/notifications/unread-count")
@@ -297,7 +297,7 @@ class SecurityIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"slotId":"tt-1","date":"2026-08-24","marks":[
-                                  {"studentId":"u-student-1","status":"PRESENT"}]}
+                                  {"studentId":"u-student-1","status":"PRESENT","expectedVersion":0}]}
                                 """))
                 .andExpect(status().isOk());
         mvc.perform(get("/notifications")
@@ -313,7 +313,7 @@ class SecurityIntegrationTest {
                         .content("""
                                 {"slotId":"tt-1","date":"2026-08-24","marks":[
                                   {"studentId":"u-student-1","status":"PRESENT"},
-                                  {"studentId":"u-student-1","status":"PRESENT"}]}
+                                  {"studentId":"u-student-1","status":"PRESENT","expectedVersion":0}]}
                                 """))
                 .andExpect(status().isBadRequest());
 
@@ -521,6 +521,17 @@ class SecurityIntegrationTest {
                                 {"username":"weak.user","password":"123","fullName":"Weak User","role":"OWNER"}
                                 """))
                 .andExpect(status().isBadRequest());
+
+        mvc.perform(post("/users")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"username":"missing.contact","password":"Valid@12345",
+                                 "fullName":"Missing Contact","role":"TEACHER"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors.email").exists())
+                .andExpect(jsonPath("$.fieldErrors.phone").exists());
     }
 
     @Test
@@ -554,7 +565,8 @@ class SecurityIntegrationTest {
                                 }
                                 """))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.studentCode").value("HS2025099"))
+                .andExpect(jsonPath("$.userCode").value(org.hamcrest.Matchers.matchesPattern("HS\\d{6}")))
+                .andExpect(jsonPath("$.studentCode").value(org.hamcrest.Matchers.matchesPattern("HS\\d{6}")))
                 .andExpect(jsonPath("$.dateOfBirth").value("2010-11-20"))
                 .andExpect(jsonPath("$.address").value("20 Nguyễn Trãi, Hà Nội"))
                 .andExpect(jsonPath("$.guardianName").value("Nguyễn Văn Minh"));
@@ -650,6 +662,18 @@ class SecurityIntegrationTest {
         String gradeId = created.path("id").asText();
         long version = created.path("version").asLong();
 
+        JsonNode studentGradesAfterCreate = body(mvc.perform(get("/grades")
+                        .header("Authorization", "Bearer " + student))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+        assertEquals(7.5, findById(studentGradesAfterCreate, gradeId).path("score").asDouble());
+        JsonNode parentGradesAfterCreate = body(mvc.perform(get("/grades")
+                        .queryParam("studentId", "u-student-2")
+                        .header("Authorization", "Bearer " + parent))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+        assertEquals(7.5, findById(parentGradesAfterCreate, gradeId).path("score").asDouble());
+
         mvc.perform(get("/notifications")
                         .header("Authorization", "Bearer " + student))
                 .andExpect(status().isOk())
@@ -678,7 +702,19 @@ class SecurityIntegrationTest {
                         .content(json.writeValueAsString(new GradeUpdate(8.0, "Sau phúc khảo", "Phúc khảo", version))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.score").value(8.0))
-                .andExpect(jsonPath("$.updatedBy").value("u-teacher-1"));
+                .andExpect(jsonPath("$.updatedBy").value("u-teacher-1"))
+                .andExpect(jsonPath("$.version").value(version + 1));
+
+        mvc.perform(get("/grades")
+                        .header("Authorization", "Bearer " + student))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.id == '%s')].score".formatted(gradeId)).value(hasItem(8.0)))
+                .andExpect(jsonPath("$[?(@.id == '%s')].version".formatted(gradeId)).value(hasItem((int) version + 1)));
+        mvc.perform(get("/grades")
+                        .queryParam("studentId", "u-student-2")
+                        .header("Authorization", "Bearer " + parent))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.id == '%s')].score".formatted(gradeId)).value(hasItem(8.0)));
 
         mvc.perform(get("/notifications")
                         .header("Authorization", "Bearer " + student))
@@ -691,6 +727,14 @@ class SecurityIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json.writeValueAsString(new GradeUpdate(8.5, null, "Bản sửa cũ", version))))
                 .andExpect(status().isConflict());
+
+        mvc.perform(put("/grades/{id}", gradeId)
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"score":8.5,"reason":"Thiếu version"}
+                                """))
+                .andExpect(status().isBadRequest());
 
         mvc.perform(get("/grades/{id}/change-logs", gradeId)
                         .header("Authorization", "Bearer " + teacher))
@@ -921,7 +965,7 @@ class SecurityIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"slotId":"tt-1","date":"2026-08-17","marks":[
-                                  {"studentId":"u-student-1","status":"PRESENT"}]}
+                                  {"studentId":"u-student-1","status":"PRESENT","expectedVersion":1}]}
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].status").value("PRESENT"));
@@ -931,7 +975,7 @@ class SecurityIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"slotId":"tt-1","date":"2026-08-17","marks":[
-                                  {"studentId":"u-student-1","status":"ABSENT_UNEXCUSED"}]}
+                                  {"studentId":"u-student-1","status":"ABSENT_UNEXCUSED","expectedVersion":2}]}
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].status").value("ABSENT_EXCUSED"))
@@ -1223,7 +1267,8 @@ class SecurityIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"username":"forced.change","password":"Temporary@123",
-                                 "fullName":"Tài khoản đổi mật khẩu","role":"PARENT"}
+                                 "fullName":"Tài khoản đổi mật khẩu","role":"PARENT",
+                                 "email":"forced.change@example.test","phone":"0901234501"}
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.passwordChangeRequired").value(true));
@@ -1286,6 +1331,104 @@ class SecurityIntegrationTest {
     }
 
     @Test
+    void bulkGradeUpdatesRequireReasonAndExpectedVersion() throws Exception {
+        String admin = login("admin", "admin@123");
+        String teacher = login("gv.hoa", "teacher@123");
+        String student = login("hs.an", "student@123");
+        String parent = login("ph.pham", "parent@123");
+
+        mvc.perform(put("/exam-categories/ec-15m")
+                        .header("Authorization", "Bearer " + admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"code":"15M","name":"15 phút","weight":1,"requiredCount":2}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.requiredCount").value(2));
+
+        JsonNode created = body(mvc.perform(post("/grades/bulk")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"classId":"c-10a1","subjectId":"sj-math","semesterId":"sm-2026-1",
+                                 "category":"15M","assessmentIndex":2,
+                                 "entries":[{"studentId":"u-student-1","score":6.5}]}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].assessmentIndex").value(2))
+                .andReturn().getResponse().getContentAsString()).get(0);
+        String gradeId = created.path("id").asText();
+        long version = created.path("version").asLong();
+
+        mvc.perform(post("/grades/bulk")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"classId":"c-10a1","subjectId":"sj-math","semesterId":"sm-2026-1",
+                                 "category":"15M","assessmentIndex":2,"reason":"Sửa sau đối chiếu",
+                                 "entries":[{"studentId":"u-student-1","score":7.0}]}
+                                """))
+                .andExpect(status().isBadRequest());
+
+        mvc.perform(post("/grades/bulk")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"classId":"c-10a1","subjectId":"sj-math","semesterId":"sm-2026-1",
+                                 "category":"15M","assessmentIndex":2,
+                                 "entries":[{"studentId":"u-student-1","score":7.0,"expectedVersion":%d}]}
+                                """.formatted(version)))
+                .andExpect(status().isBadRequest());
+
+        mvc.perform(post("/grades/bulk")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"classId":"c-10a1","subjectId":"sj-math","semesterId":"sm-2026-1",
+                                 "category":"15M","assessmentIndex":2,"reason":"Sửa sau đối chiếu",
+                                 "entries":[{"studentId":"u-student-1","score":7.0,"expectedVersion":%d}]}
+                                """.formatted(version)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(gradeId))
+                .andExpect(jsonPath("$[0].score").value(7.0))
+                .andExpect(jsonPath("$[0].version").value(version + 1));
+
+        JsonNode studentGradesAfterBulk = body(mvc.perform(get("/grades")
+                        .header("Authorization", "Bearer " + student))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+        assertEquals(7.0, findById(studentGradesAfterBulk, gradeId).path("score").asDouble());
+        JsonNode parentGradesAfterBulk = body(mvc.perform(get("/grades")
+                        .queryParam("studentId", "u-student-1")
+                        .header("Authorization", "Bearer " + parent))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+        assertEquals(2, findById(parentGradesAfterBulk, gradeId).path("assessmentIndex").asInt());
+
+        mvc.perform(get("/grades/summary")
+                .queryParam("semesterId", "sm-2026-1")
+                        .header("Authorization", "Bearer " + student))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.subjectId == 'sj-math')].complete").value(hasItem(true)))
+                .andExpect(jsonPath("$[?(@.subjectId == 'sj-math')].average").value(hasItem(7.9)));
+        mvc.perform(get("/grades/summary")
+                        .queryParam("studentId", "u-student-1")
+                        .queryParam("semesterId", "sm-2026-1")
+                        .header("Authorization", "Bearer " + parent))
+                .andExpect(status().isOk());
+
+        mvc.perform(post("/grades/bulk")
+                        .header("Authorization", "Bearer " + teacher)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"classId":"c-10a1","subjectId":"sj-math","semesterId":"sm-2026-1",
+                                 "category":"15M","assessmentIndex":2,"reason":"Bản ghi cũ",
+                                 "entries":[{"studentId":"u-student-1","score":7.5,"expectedVersion":%d}]}
+                                """.formatted(version)))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
     void adminCanAssignAnActiveTeacherAsHomeroomTeacher() throws Exception {
         String admin = login("admin", "admin@123");
 
@@ -1337,7 +1480,9 @@ class SecurityIntegrationTest {
                         .header("Authorization", "Bearer " + admin)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"username":"ph.flowchart","password":"Parent@123","fullName":"Phụ huynh Flowchart","role":"PARENT"}
+                                {"username":"ph.flowchart","password":"Parent@123",
+                                 "fullName":"Phụ huynh Flowchart","role":"PARENT",
+                                 "email":"ph.flowchart@example.test","phone":"0901234502"}
                                 """))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
@@ -1365,7 +1510,8 @@ class SecurityIntegrationTest {
         try (XSSFWorkbook excel = new XSSFWorkbook(); ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
             var sheet = excel.createSheet("Nguoi dung");
             var headerRow = sheet.createRow(0);
-            String[] headers = {"Tên đăng nhập", "Họ tên", "Vai trò", "Mật khẩu", "Mã lớp", "Ngày sinh"};
+            String[] headers = {"Tên đăng nhập", "Họ tên", "Vai trò", "Mật khẩu", "Mã lớp", "Ngày sinh",
+                    "Email", "Số điện thoại"};
             for (int i = 0; i < headers.length; i++) headerRow.createCell(i).setCellValue(headers[i]);
             var data = sheet.createRow(1);
             data.createCell(0).setCellValue("hs.flowchart");
@@ -1374,6 +1520,8 @@ class SecurityIntegrationTest {
             data.createCell(3).setCellValue("Student@123");
             data.createCell(4).setCellValue("10A1");
             data.createCell(5).setCellValue("10/10/2010");
+            data.createCell(6).setCellValue("hs.flowchart@example.test");
+            data.createCell(7).setCellValue("0901234503");
             excel.write(bytes);
             workbook = bytes.toByteArray();
         }
@@ -1866,6 +2014,13 @@ class SecurityIntegrationTest {
         throw new AssertionError("Không tìm thấy hội thoại với " + userId);
     }
 
+    private JsonNode findById(JsonNode items, String id) {
+        for (JsonNode item : items) {
+            if (id.equals(item.path("id").asText())) return item;
+        }
+        throw new AssertionError("Không tìm thấy bản ghi " + id);
+    }
+
     @Test
     void teachingAssignmentControlsTimetableCapacityAndTeacherConflicts() throws Exception {
         String admin = login("admin", "admin@123");
@@ -2289,6 +2444,8 @@ class SecurityIntegrationTest {
             header.createCell(2).setCellValue("Vai trò");
             header.createCell(3).setCellValue("Mật khẩu");
             header.createCell(4).setCellValue("Mã lớp");
+            header.createCell(5).setCellValue("Email");
+            header.createCell(6).setCellValue("Số điện thoại");
 
             var valid = sheet.createRow(1);
             valid.createCell(0).setCellValue("safe.import.student");
@@ -2296,12 +2453,16 @@ class SecurityIntegrationTest {
             valid.createCell(2).setCellValue("Học sinh");
             valid.createCell(3).setCellValue("Safe@123456");
             valid.createCell(4).setCellValue("10A1");
+            valid.createCell(5).setCellValue("safe.import.student@example.test");
+            valid.createCell(6).setCellValue("0901234504");
 
             var invalid = sheet.createRow(2);
             invalid.createCell(0).setCellValue("admin");
             invalid.createCell(1).setCellValue("Tài khoản trùng");
             invalid.createCell(2).setCellValue("Quản trị viên");
             invalid.createCell(3).setCellValue("Safe@123456");
+            invalid.createCell(5).setCellValue("duplicate.admin@example.test");
+            invalid.createCell(6).setCellValue("0901234505");
 
             workbook.write(output);
             return output.toByteArray();

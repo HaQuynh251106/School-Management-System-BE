@@ -37,6 +37,11 @@ public class ExamController {
     @PostMapping("/exam-periods/{id}/unlock-scores") public ExamPeriod unlock(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF"); return exams.setScoreLock(id, false, CurrentUserHolder.require().id()); }
     @PostMapping("/exam-periods/{id}/confirm") public ExamPeriod confirm(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF"); return exams.confirm(id, CurrentUserHolder.require().id()); }
     @PostMapping("/exam-periods/{id}/publish-schedule") public ExamPeriod publishSchedule(@PathVariable String id) { CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF"); return exams.publishSchedule(id, CurrentUserHolder.require().id()); }
+    @PostMapping("/exam-periods/{id}/auto-plan")
+    public AutoPlanResult autoPlan(@PathVariable String id, @Valid @RequestBody AutoPlanRequest request) {
+        CurrentUserHolder.requireRole("ADMIN", "ACADEMIC_STAFF");
+        return exams.autoPlan(id, request, CurrentUserHolder.require().id());
+    }
 
     @GetMapping("/me/exam-agenda") public List<ExamAgendaItem> agenda(@RequestParam(required = false) String childId) {
         CurrentUserHolder.requireRole("TEACHER", "STUDENT", "PARENT");
@@ -50,6 +55,13 @@ public class ExamController {
     @GetMapping("/me/exam-results") public List<StudentExamResultView> myExamResults() {
         CurrentUserHolder.requireRole("STUDENT");
         return exams.studentResults(CurrentUserHolder.require().id());
+    }
+    @GetMapping("/children/{studentId}/exam-results") public List<StudentExamResultView> childExamResults(
+            @PathVariable String studentId) {
+        CurrentUser parent = CurrentUserHolder.require();
+        CurrentUserHolder.requireRole("PARENT");
+        users.assertParentOf(parent.id(), studentId);
+        return exams.studentResults(studentId);
     }
     @GetMapping("/me/exam-reviews") public List<ExamReviewRequest> myExamReviews(@RequestParam(required = false) String status) {
         CurrentUserHolder.requireRole("TEACHER");

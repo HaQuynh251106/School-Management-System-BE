@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -36,6 +37,7 @@ public class FinanceService {
     private final UserService users;
     private final NotificationService notifications;
     private final VietQrGateway vietQrGateway;
+    private final ApplicationEventPublisher events;
     private final String paymentMode;
 
     public FinanceService(FeePeriodRepository periods, FeePeriodItemRepository periodItems,
@@ -43,6 +45,7 @@ public class FinanceService {
                           PaymentRepository payments, PaymentGatewayTransactionRepository gatewayTransactions,
                           StructureService structure,
                           UserService users, NotificationService notifications, VietQrGateway vietQrGateway,
+                          ApplicationEventPublisher events,
                           @Value("${sse.payments.mode:disabled}") String paymentMode) {
         this.periods = periods;
         this.periodItems = periodItems;
@@ -54,6 +57,7 @@ public class FinanceService {
         this.users = users;
         this.notifications = notifications;
         this.vietQrGateway = vietQrGateway;
+        this.events = events;
         this.paymentMode = paymentMode;
     }
 
@@ -396,6 +400,7 @@ public class FinanceService {
                             invoice.getCode(), amount, invoice.getTotalAmount() - invoice.getPaidAmount()),
                     "PAYMENT", payment.getId());
         }
+        events.publishEvent(new PaymentChangedEvent(invoice.getId(), payment.getId(), "CASH_RECORDED"));
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("payment", payment);
         result.put("invoice", invoice);
@@ -640,6 +645,7 @@ public class FinanceService {
         transaction.setStatus("AWAITING_CONFIRMATION");
         transaction.setUpdatedAt(Instant.now());
         gatewayTransactions.save(transaction);
+        events.publishEvent(new PaymentChangedEvent(payment.getInvoiceId(), payment.getId(), "SUBMITTED"));
         return callbackResult(getInvoice(payment.getInvoiceId()), payment, transaction);
     }
 
@@ -689,6 +695,7 @@ public class FinanceService {
                             invoice.getCode(), invoice.getStudentName(), payment.getAmount(), payment.getTxnRef()),
                     "PAYMENT", payment.getId());
         }
+        events.publishEvent(new PaymentChangedEvent(invoice.getId(), payment.getId(), "CONFIRMED"));
         return callbackResult(invoice, payment, transaction);
     }
 
@@ -705,6 +712,7 @@ public class FinanceService {
         transaction.setUpdatedAt(Instant.now());
         payments.save(payment);
         gatewayTransactions.save(transaction);
+        events.publishEvent(new PaymentChangedEvent(payment.getInvoiceId(), payment.getId(), "REJECTED"));
         return callbackResult(getInvoice(payment.getInvoiceId()), payment, transaction);
     }
 
@@ -718,6 +726,8 @@ public class FinanceService {
                 if ("PENDING".equals(payment.getStatus())) {
                     payment.setStatus("FAILED");
                     payments.save(payment);
+                    events.publishEvent(new PaymentChangedEvent(
+                            payment.getInvoiceId(), payment.getId(), "EXPIRED"));
                 }
             });
             transaction.setStatus("EXPIRED");

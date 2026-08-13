@@ -12,7 +12,11 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.hamcrest.Matchers.greaterThan;
+import static org.hamcrest.Matchers.everyItem;
+import static org.hamcrest.Matchers.is;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -29,29 +33,32 @@ class TimetableVersionWorkflowIntegrationTest {
     @Autowired ObjectMapper json;
 
     @Test
-    @DisplayName("Giáo vụ tạo, phát hành và khôi phục phiên bản TKB mà vẫn giữ lịch sử")
+    @DisplayName("Quản trị tạo, phát hành và khôi phục phiên bản TKB mà vẫn giữ lịch sử")
     void publishAndRestoreKeepsExactlyOneCurrentVersion() throws Exception {
-        String academicStaff = login("giaovu", "Giaovu123@@");
+        String admin = login("admin", "Admin123@@");
 
-        String firstPayload = mvc.perform(post("/timetable-versions")
-                        .header("Authorization", bearer(academicStaff))
+        String firstPayload = mvc.perform(post("/timetableSlots/auto-plan")
+                        .header("Authorization", bearer(admin))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"semesterId":"sm-2026-1","name":"Bản phát hành đầu tiên"}
+                                {"semesterId":"sm-2026-1","apply":true,"allowPartial":false,
+                                 "scopeGradeLevel":"K10","draftName":"Bản phát hành đầu tiên"}
                                 """))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("VALIDATED"))
-                .andExpect(jsonPath("$.totalPeriods", greaterThan(0)))
+                .andExpect(jsonPath("$.applied").value(true))
+                .andExpect(jsonPath("$.scopeGradeLevel").value("K10"))
+                .andExpect(jsonPath("$.draftVersion.status").value("VALIDATED"))
+                .andExpect(jsonPath("$.draftVersion.totalPeriods", greaterThan(0)))
                 .andReturn().getResponse().getContentAsString();
-        String firstId = json.readTree(firstPayload).path("id").asText();
+        String firstId = json.readTree(firstPayload).path("draftVersion").path("id").asText();
 
         mvc.perform(post("/timetable-versions/{id}/publish", firstId)
-                        .header("Authorization", bearer(academicStaff)))
+                        .header("Authorization", bearer(admin)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PUBLISHED"));
 
         String restoredPayload = mvc.perform(post("/timetable-versions/{id}/restore", firstId)
-                        .header("Authorization", bearer(academicStaff))
+                        .header("Authorization", bearer(admin))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"name":"Bản khôi phục đã kiểm tra"}
@@ -63,15 +70,64 @@ class TimetableVersionWorkflowIntegrationTest {
         String restoredId = json.readTree(restoredPayload).path("id").asText();
 
         mvc.perform(post("/timetable-versions/{id}/publish", restoredId)
-                        .header("Authorization", bearer(academicStaff)))
+                        .header("Authorization", bearer(admin)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PUBLISHED"));
 
         mvc.perform(get("/timetable-versions").param("semesterId", "sm-2026-1")
-                        .header("Authorization", bearer(academicStaff)))
+                        .header("Authorization", bearer(admin)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].status").value("PUBLISHED"))
                 .andExpect(jsonPath("$[1].status").value("SUPERSEDED"));
+
+        String teacher = login("gv.nguyenminh", "nguyenminh123@");
+        mvc.perform(get("/me/timetable").header("Authorization", bearer(teacher)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()", greaterThan(0)))
+                .andExpect(jsonPath("$[*].teacherId", everyItem(is("u-teacher-1"))))
+                .andExpect(jsonPath("$[*].publishedPlanId", everyItem(is(restoredId))));
+
+        String timetableStudent = login("hs.nguyenminhan", "nguyenminhanh123@@");
+        mvc.perform(get("/me/timetable").header("Authorization", bearer(timetableStudent)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()", greaterThan(0)))
+                .andExpect(jsonPath("$[*].classId", everyItem(is("c-10a1"))))
+                .andExpect(jsonPath("$[*].publishedPlanId", everyItem(is(restoredId))));
+
+        mvc.perform(get("/timetableSlots").param("classId", "c-10a1")
+                        .header("Authorization", bearer(timetableStudent)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[*].publishedPlanId", everyItem(is(restoredId))));
+
+        String parent = login("ph.nguyenvanhung", "nguyenvanhung123@");
+        mvc.perform(get("/children/{studentId}/timetable", "u-student-1")
+                        .header("Authorization", bearer(parent)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()", greaterThan(0)))
+                .andExpect(jsonPath("$[*].classId", everyItem(is("c-10a1"))))
+                .andExpect(jsonPath("$[*].publishedPlanId", everyItem(is(restoredId))));
+        mvc.perform(get("/children/{studentId}/timetable", "u-admin-1")
+                        .header("Authorization", bearer(parent)))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/children/{studentId}/timetable", "u-student-1")
+                        .header("Authorization", bearer(timetableStudent)))
+                .andExpect(status().isForbidden());
+
+        String publishedSlotId = json.readTree(mvc.perform(get("/me/timetable")
+                        .header("Authorization", bearer(timetableStudent)))
+                .andReturn().getResponse().getContentAsString()).get(0).path("id").asText();
+        mvc.perform(delete("/timetableSlots/{id}", publishedSlotId)
+                        .header("Authorization", bearer(admin)))
+                .andExpect(status().isConflict());
+        mvc.perform(put("/timetableSlots/{id}", publishedSlotId)
+                        .header("Authorization", bearer(admin))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"classId":"c-10a1","subjectId":"sj-math","teacherId":"u-teacher-1",
+                                 "roomCode":"P201","dayOfWeek":"FRI","periodNo":1,
+                                 "startTime":"07:00","endTime":"07:45","semesterId":"sm-2026-1"}
+                                """))
+                .andExpect(status().isConflict());
 
         String student = login("hs.binh", "student@123");
         mvc.perform(get("/timetable-versions").param("semesterId", "sm-2026-1")

@@ -17,6 +17,7 @@ interface NotificationRepository extends JpaRepository<Notification, String>, Jp
 }
 
 interface NotificationTemplateRepository extends JpaRepository<NotificationTemplate, String> {
+    Optional<NotificationTemplate> findByCodeIgnoreCase(String code);
 }
 
 interface AnnouncementRepository extends JpaRepository<Announcement, String> {

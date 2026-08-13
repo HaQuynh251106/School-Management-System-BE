@@ -37,7 +37,7 @@ public final class GradeDtos {
             @NotNull Double score,
             String note,
             @NotBlank String reason,
-            @Min(0) Long expectedVersion
+            @NotNull @Min(0) Long expectedVersion
     ) {}
 
     public record GradebookSubject(
@@ -55,6 +55,16 @@ public final class GradeDtos {
             boolean homeroomTeacher,
             boolean canEdit,
             List<GradebookSubject> subjects
+    ) {}
+
+    public record GradeSubjectSummary(
+            String studentId,
+            String subjectId,
+            String subjectName,
+            String semesterId,
+            Double average,
+            boolean complete,
+            List<String> missingAssessmentKeys
     ) {}
 
     public record CreateExamCategoryRequest(

@@ -10,6 +10,7 @@ import com.sse.app.identity.User;
 import com.sse.app.identity.UserService;
 import com.sse.app.notification.NotificationService;
 import com.sse.app.security.CurrentUser;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,6 +20,7 @@ import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 
@@ -33,11 +35,13 @@ public class GradeService {
     private final TeachingAssignmentService teachingAssignments;
     private final UserService users;
     private final NotificationService notifications;
+    private final ApplicationEventPublisher events;
 
     public GradeService(GradeRepository grades, GradeChangeLogRepository logs,
                         ExamCategoryRepository categories, StructureService structure,
                         TeachingAssignmentService teachingAssignments,
-                        UserService users, NotificationService notifications) {
+                        UserService users, NotificationService notifications,
+                        ApplicationEventPublisher events) {
         this.grades = grades;
         this.logs = logs;
         this.categories = categories;
@@ -45,6 +49,7 @@ public class GradeService {
         this.teachingAssignments = teachingAssignments;
         this.users = users;
         this.notifications = notifications;
+        this.events = events;
     }
 
     public Grade get(String id) {
@@ -126,6 +131,7 @@ public class GradeService {
                 .build());
         audit(grade, "CREATE", null, req.score(), null, grade.getNote(), actorId, "Thêm điểm");
         notifyGrade(grade, category, false);
+        events.publishEvent(new GradeChangedEvent(grade.getId(), "CREATED"));
         return grade;
     }
 
@@ -148,6 +154,7 @@ public class GradeService {
         grade.setUpdatedBy(actorId);
         Grade saved = grades.saveAndFlush(grade);
         notifyGrade(saved, requireCategory(saved.getCategory(), saved.getAssessmentIndex()), true);
+        events.publishEvent(new GradeChangedEvent(saved.getId(), "UPDATED"));
         return saved;
     }
 
@@ -201,7 +208,9 @@ public class GradeService {
                 audit(g, "CREATE", null, e.score(), null, g.getNote(), changedBy, reason(req.reason(), "Lưu điểm hàng loạt"));
                 result.add(g);
                 notifyGrade(g, examCategory, false);
+                events.publishEvent(new GradeChangedEvent(g.getId(), "CREATED"));
             } else {
+                requireExistingUpdateContract(e.expectedVersion(), req.reason());
                 assertVersion(existing, e.expectedVersion());
                 String note = clean(e.note());
                 if (!equalsScore(existing.getScore(), e.score()) || !Objects.equals(existing.getNote(), note)) {
@@ -214,6 +223,7 @@ public class GradeService {
                     existing.setUpdatedBy(changedBy);
                     grades.save(existing);
                     notifyGrade(existing, examCategory, true);
+                    events.publishEvent(new GradeChangedEvent(existing.getId(), "UPDATED"));
                 }
                 result.add(existing);
             }
@@ -226,7 +236,8 @@ public class GradeService {
         String title = changed ? "Điểm được cập nhật" : "Có điểm mới";
         String label = category.getRequiredCount() > 1
                 ? category.getName() + " " + grade.getAssessmentIndex() : category.getName();
-        String scoreDetail = String.format("Môn %s — %s: %.1f", grade.getSubjectName(), label, grade.getScore());
+        String scoreDetail = String.format(Locale.ROOT, "Môn %s — %s: %.1f",
+                grade.getSubjectName(), label, grade.getScore());
         notifications.notifyUser(grade.getStudentId(), "GRADE", "IMPORTANT", title,
                 scoreDetail, "GRADE", grade.getId());
         notifications.notifyParentsOfStudent(grade.getStudentId(), "GRADE", "IMPORTANT",
@@ -371,8 +382,20 @@ public class GradeService {
     }
 
     private void assertVersion(Grade grade, Long expectedVersion) {
-        if (expectedVersion != null && !Objects.equals(expectedVersion, grade.getVersion())) {
+        if (expectedVersion == null) {
+            throw ApiException.badRequest("Thiếu expectedVersion khi sửa điểm đã tồn tại");
+        }
+        if (!Objects.equals(expectedVersion, grade.getVersion())) {
             throw ApiException.conflict("Điểm đã được người khác cập nhật; hãy tải lại dữ liệu trước khi lưu");
+        }
+    }
+
+    private void requireExistingUpdateContract(Long expectedVersion, String reason) {
+        if (expectedVersion == null) {
+            throw ApiException.badRequest("Thiếu expectedVersion khi sửa điểm đã tồn tại");
+        }
+        if (clean(reason) == null) {
+            throw ApiException.badRequest("Bắt buộc nhập lý do khi sửa điểm đã tồn tại");
         }
     }
 

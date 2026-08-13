@@ -55,6 +55,13 @@ public class DataSeeder {
 
             seedUsers(users, relations, enc);
             seedStructure(structure);
+            users.findByRole("TEACHER").forEach(teacher -> structure.listSubjects().stream()
+                    .filter(subject -> subject.getName().equalsIgnoreCase(teacher.getMainSubject()))
+                    .findFirst()
+                    .ifPresent(subject -> {
+                        teacher.setMainSubjectId(subject.getId());
+                        users.save(teacher);
+                    }));
             users.findByRole("STUDENT").forEach(student -> {
                 if (student.getClassId() != null) {
                     student.setCohortId(structure.cohortIdForClass(student.getClassId()));
@@ -78,19 +85,14 @@ public class DataSeeder {
     // ---------- Identity ----------
     private void seedUsers(UserRepository users, ParentStudentRepository relations, PasswordEncoder enc) {
         users.save(base("u-admin-1", "admin", enc.encode("Admin123@@"), "Nguyễn Văn Quản",
-                "admin@sse.edu.vn", "0900000001", "ADMIN"));
-        users.save(base("u-academic-staff-1", "giaovu", enc.encode("Giaovu123@@"), "Nguyễn Thu Hà",
-                "giaovu@sse.edu.vn", "0900000004", "ACADEMIC_STAFF"));
-        users.save(base("u-accountant-1", "ketoan", enc.encode("Ketoan123@@"), "Trần Minh Anh",
-                "ketoan@sse.edu.vn", "0900000005", "ACCOUNTANT"));
-
+                "admin@sse.edu.vn", "0900000001", "ADMIN", "AD000001"));
         users.save(teacher("u-teacher-1", "gv.nguyenminh", enc.encode("nguyenminh123@"), "Nguyễn Đức Minh",
-                "hoa.tran@sse.edu.vn", "0900000002", "GV001", "Toán"));
+                "hoa.tran@sse.edu.vn", "0900000002", "GV000001", "Toán"));
         users.save(teacher("u-teacher-2", "gv.minh", enc.encode("teacher@123"), "Lê Văn Minh",
-                "minh.le@sse.edu.vn", "0900000003", "GV002", "Vật lý"));
+                "minh.le@sse.edu.vn", "0900000003", "GV000002", "Vật lý"));
 
         User an = student("u-student-1", "hs.nguyenminhan", enc.encode("nguyenminhanh123@@"), "Nguyễn Minh An",
-                "an.pham@sse.edu.vn", "0900000010", "HS2025001", "c-10a1", "10A1");
+                "an.pham@sse.edu.vn", "0900000010", "HS000001", "c-10a1", "10A1");
         an.setDateOfBirth(LocalDate.parse("2010-03-18"));
         an.setGender("FEMALE");
         an.setPlaceOfBirth("Hà Nội");
@@ -103,7 +105,7 @@ public class DataSeeder {
         users.save(an);
 
         User binh = student("u-student-2", "hs.binh", enc.encode("student@123"), "Phạm Hoài Bình",
-                "binh.pham@sse.edu.vn", "0900000011", "HS2025002", "c-8a1", "8A1");
+                "binh.pham@sse.edu.vn", "0900000011", "HS000002", "c-8a1", "8A1");
         binh.setDateOfBirth(LocalDate.parse("2012-08-09"));
         binh.setGender("MALE");
         binh.setPlaceOfBirth("Hà Nội");
@@ -116,7 +118,7 @@ public class DataSeeder {
         users.save(binh);
 
         users.save(base("u-parent-1", "ph.nguyenvanhung", enc.encode("nguyenvanhung123@"), "Nguyễn Văn Hùng",
-                "quan.pham@gmail.com", "0900000020", "PARENT"));
+                "quan.pham@gmail.com", "0900000020", "PARENT", "PH000001"));
 
         relations.save(rel("ps-1", "u-parent-1", "u-student-1", true));
         relations.save(rel("ps-2", "u-parent-1", "u-student-2", false));
@@ -259,14 +261,15 @@ public class DataSeeder {
     }
 
     // ---------- Builders ----------
-    private static User base(String id, String u, String h, String name, String email, String phone, String role) {
-        return User.builder().id(id).username(u).passwordHash(h).fullName(name)
+    private static User base(String id, String u, String h, String name, String email, String phone,
+                             String role, String userCode) {
+        return User.builder().id(id).username(u).userCode(userCode).passwordHash(h).fullName(name)
                 .email(email).phone(phone).role(role).status("ACTIVE").createdAt(Instant.now()).build();
     }
 
     private static User teacher(String id, String u, String h, String name, String email,
                                 String phone, String code, String subject) {
-        User x = base(id, u, h, name, email, phone, "TEACHER");
+        User x = base(id, u, h, name, email, phone, "TEACHER", code);
         x.setTeacherCode(code);
         x.setMainSubject(subject);
         return x;
@@ -274,7 +277,7 @@ public class DataSeeder {
 
     private static User student(String id, String u, String h, String name, String email,
                                 String phone, String code, String classId, String className) {
-        User x = base(id, u, h, name, email, phone, "STUDENT");
+        User x = base(id, u, h, name, email, phone, "STUDENT", code);
         x.setStudentCode(code);
         x.setClassId(classId);
         x.setClassName(className);
@@ -307,7 +310,8 @@ public class DataSeeder {
                                       int period, String start, String end) {
         return TimetableSlot.builder().id(id).classId(classId).subjectId(subjectId).subjectName(subjectName)
                 .teacherId(teacherId).teacherName(teacherName).roomCode(room).dayOfWeek(day)
-                .periodNo(period).startTime(start).endTime(end).semesterId("sm-2026-1").build();
+                .periodNo(period).startTime(start).endTime(end).semesterId("sm-2026-1")
+                .publishedPlanId("seed-published-2026-hk1").build();
     }
 
     private static ExamCategory cat(String id, String code, String name, double weight, int requiredCount) {

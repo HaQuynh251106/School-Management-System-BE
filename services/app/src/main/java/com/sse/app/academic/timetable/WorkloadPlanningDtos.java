@@ -7,6 +7,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 
 public final class WorkloadPlanningDtos {
@@ -16,7 +17,13 @@ public final class WorkloadPlanningDtos {
             @NotBlank String semesterId,
             @NotBlank String gradeLevel,
             @NotBlank String subjectId,
-            @Min(1) @Max(20) int weeklyPeriods) {}
+            @Min(1) @Max(20) int weeklyPeriods,
+            @Min(1) @Max(500) Integer totalPeriods,
+            LocalDate startDate,
+            LocalDate endDate,
+            LocalDate examWindowStart,
+            LocalDate examWindowEnd,
+            @Size(max = 1000) String milestone) {}
 
     public record SaveTeacherLoadRequest(
             @NotBlank String semesterId,

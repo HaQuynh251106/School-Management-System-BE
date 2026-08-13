@@ -484,7 +484,8 @@ public class StructureService {
         Subject subject = subjects.findById(id).orElseThrow(() -> ApiException.notFound("Môn học"));
         if (hasReference(id, "grades", "subject_id") || hasReference(id, "timetable_slots", "subject_id")
                 || hasReference(id, "assignments", "subject_id")
-                || hasReference(id, "teaching_assignments", "subject_id")) {
+                || hasReference(id, "teaching_assignments", "subject_id")
+                || hasReference(id, "users", "main_subject_id")) {
             throw ApiException.badRequest("Không thể xóa môn học đang có điểm, bài tập, thời khóa biểu hoặc phân công");
         }
         subjects.delete(subject);
@@ -498,6 +499,29 @@ public class StructureService {
     public String requireSubjectName(String subjectId) {
         return subjects.findById(subjectId).map(Subject::getName)
                 .orElseThrow(() -> ApiException.notFound("Môn học"));
+    }
+
+    /** Resolve only a subject currently managed in the school's subject catalog. */
+    public Subject requireSubject(String subjectId) {
+        if (subjectId == null || subjectId.isBlank()) {
+            throw ApiException.badRequest("Vui lòng chọn môn chuyên ngành");
+        }
+        return subjects.findById(subjectId.trim())
+                .orElseThrow(() -> ApiException.notFound("Môn học"));
+    }
+
+    /** Excel accepts the subject code (preferred) or exact name, never arbitrary free text. */
+    public Subject requireSubjectByCodeOrName(String value) {
+        if (value == null || value.isBlank()) {
+            throw ApiException.badRequest("Môn chuyên ngành không được để trống");
+        }
+        String needle = value.trim();
+        return subjects.findByCode(needle.toUpperCase(Locale.ROOT))
+                .or(() -> subjects.findAll().stream()
+                        .filter(subject -> subject.getName().equalsIgnoreCase(needle))
+                        .findFirst())
+                .orElseThrow(() -> ApiException.badRequest(
+                        "Môn chuyên ngành không có trong danh mục của trường: " + needle));
     }
 
     public double subjectCoefficient(String subjectId) {
