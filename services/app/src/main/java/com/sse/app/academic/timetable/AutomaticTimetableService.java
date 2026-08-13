@@ -45,6 +45,7 @@ public class AutomaticTimetableService {
     @Transactional
     public AutoTimetablePlan plan(AutoTimetableRequest request) {
         structure.assertSemesterWritable(request.semesterId());
+        List<String> allowedDays = normalizeAllowedDays(request.allowedDays());
         List<TimetableSlot> occupied = new ArrayList<>(slots.findBySemesterId(request.semesterId()));
         int existingCount = occupied.size();
         Map<String, TeacherLoadRegistration> loads = new HashMap<>();
@@ -55,7 +56,7 @@ public class AutomaticTimetableService {
         List<TeachingAssignment> work = assignments.findAll().stream()
                 .filter(item -> request.semesterId().equals(item.getSemesterId()))
                 .sorted(Comparator.comparingInt((TeachingAssignment item) ->
-                                availableCandidateCount(item, loads.get(item.getTeacherId()), occupied))
+                                availableCandidateCount(item, loads.get(item.getTeacherId()), occupied, allowedDays))
                         .thenComparing(TeachingAssignment::getClassCode)
                         .thenComparing(TeachingAssignment::getSubjectName)).toList();
         if (work.isEmpty()) throw ApiException.badRequest("Chưa có phân công bộ môn trong học kỳ đã chọn");
@@ -82,11 +83,11 @@ public class AutomaticTimetableService {
         int baseOccupiedSize = occupied.size();
         SearchState search = new SearchState(MAX_SEARCH_NODES,
                 System.nanoTime() + MAX_SEARCH_MILLIS * 1_000_000L);
-        boolean solved = scheduleAll(needs, occupied, request.semesterId(), search);
+        boolean solved = scheduleAll(needs, occupied, request.semesterId(), search, allowedDays);
         if (!solved) {
             while (occupied.size() > baseOccupiedSize) occupied.remove(occupied.size() - 1);
             needs.forEach(ScheduleNeed::reset);
-            fillBestEffort(needs, occupied, request.semesterId());
+            fillBestEffort(needs, occupied, request.semesterId(), allowedDays);
         }
 
         for (ScheduleNeed need : needs) {
@@ -94,7 +95,7 @@ public class AutomaticTimetableService {
                 result.add(item(need.assignment, need.schoolClass, candidate, "PROPOSED",
                         solved ? "Đã tối ưu và kiểm tra xung đột toàn cục" : "Khung giờ khả dụng tốt nhất"));
             for (int index = 0; index < need.remaining; index++) {
-                String message = explainNoCandidate(need, occupied);
+                String message = explainNoCandidate(need, occupied, allowedDays);
                 result.add(item(need.assignment, need.schoolClass, null, "UNSCHEDULED", message));
                 warnings.add(need.assignment.getClassCode() + " · "
                         + need.assignment.getSubjectName() + ": " + message);
@@ -121,7 +122,7 @@ public class AutomaticTimetableService {
      * môn-lớp khác hết chỗ, thuật toán rút lựa chọn đó và thử khung giờ kế tiếp.
      */
     private boolean scheduleAll(List<ScheduleNeed> needs, List<TimetableSlot> occupied,
-                                String semesterId, SearchState search) {
+                                String semesterId, SearchState search, List<String> allowedDays) {
         if (needs.stream().allMatch(need -> need.remaining == 0)) return true;
         if (search.exhausted()) return false;
 
@@ -130,7 +131,7 @@ public class AutomaticTimetableService {
         int selectedSlack = Integer.MAX_VALUE;
         for (ScheduleNeed need : needs) {
             if (need.remaining == 0) continue;
-            List<Candidate> options = candidateOptions(need, occupied);
+            List<Candidate> options = candidateOptions(need, occupied, allowedDays);
             if (options.size() < need.remaining) return false;
             int slack = options.size() - need.remaining;
             if (selected == null || slack < selectedSlack
@@ -150,7 +151,7 @@ public class AutomaticTimetableService {
             occupied.add(simulated);
             selected.scheduled.add(candidate);
             selected.remaining--;
-            if (scheduleAll(needs, occupied, semesterId, search)) return true;
+            if (scheduleAll(needs, occupied, semesterId, search, allowedDays)) return true;
             selected.remaining++;
             selected.scheduled.remove(selected.scheduled.size() - 1);
             occupied.remove(occupied.size() - 1);
@@ -160,12 +161,12 @@ public class AutomaticTimetableService {
     }
 
     private void fillBestEffort(List<ScheduleNeed> needs, List<TimetableSlot> occupied,
-                                String semesterId) {
-        needs.sort(Comparator.comparingInt((ScheduleNeed need) -> candidateOptions(need, occupied).size())
+                                String semesterId, List<String> allowedDays) {
+        needs.sort(Comparator.comparingInt((ScheduleNeed need) -> candidateOptions(need, occupied, allowedDays).size())
                 .thenComparing(need -> need.assignment.getClassCode())
                 .thenComparing(need -> need.assignment.getSubjectName()));
         for (ScheduleNeed need : needs) while (need.remaining > 0) {
-            List<Candidate> options = candidateOptions(need, occupied);
+            List<Candidate> options = candidateOptions(need, occupied, allowedDays);
             if (options.isEmpty()) break;
             Candidate candidate = options.get(0);
             occupied.add(simulated(need.assignment, need.schoolClass, candidate,
@@ -175,13 +176,14 @@ public class AutomaticTimetableService {
         }
     }
 
-    private List<Candidate> candidateOptions(ScheduleNeed need, List<TimetableSlot> occupied) {
+    private List<Candidate> candidateOptions(ScheduleNeed need, List<TimetableSlot> occupied,
+                                             List<String> allowedDays) {
         Set<String> unavailable = new HashSet<>(csv(need.load.getUnavailableSlots()));
         Map<Integer, String[]> times = "AFTERNOON".equalsIgnoreCase(need.schoolClass.getStudyShift())
                 ? AFTERNOON : MORNING;
         int lastIndex = need.scheduled.isEmpty() ? -1
                 : need.scheduled.stream().mapToInt(this::slotIndex).max().orElse(-1);
-        return DAYS.stream().flatMap(day -> times.entrySet().stream()
+        return allowedDays.stream().flatMap(day -> times.entrySet().stream()
                         .map(entry -> new Candidate(day, entry.getKey(), entry.getValue()[0], entry.getValue()[1])))
                 .filter(candidate -> slotIndex(candidate) > lastIndex)
                 .filter(candidate -> !unavailable.contains(candidate.day() + ":" + candidate.period()))
@@ -207,12 +209,13 @@ public class AutomaticTimetableService {
                 .startTime(candidate.start()).endTime(candidate.end()).semesterId(semesterId).build();
     }
 
-    private String explainNoCandidate(ScheduleNeed need, List<TimetableSlot> occupied) {
+    private String explainNoCandidate(ScheduleNeed need, List<TimetableSlot> occupied,
+                                      List<String> allowedDays) {
         int classBusy = 0, teacherBusy = 0, unavailable = 0;
         Set<String> blocked = new HashSet<>(csv(need.load.getUnavailableSlots()));
         Map<Integer, String[]> times = "AFTERNOON".equalsIgnoreCase(need.schoolClass.getStudyShift())
                 ? AFTERNOON : MORNING;
-        for (String day : DAYS) for (var entry : times.entrySet()) {
+        for (String day : allowedDays) for (var entry : times.entrySet()) {
             Candidate candidate = new Candidate(day, entry.getKey(), entry.getValue()[0], entry.getValue()[1]);
             if (blocked.contains(day + ":" + entry.getKey())) unavailable++;
             for (TimetableSlot slot : occupied) {
@@ -228,12 +231,13 @@ public class AutomaticTimetableService {
     }
 
     private Candidate chooseCandidate(TeachingAssignment assignment, SchoolClass schoolClass,
-                                      TeacherLoadRegistration load, List<TimetableSlot> occupied) {
+                                      TeacherLoadRegistration load, List<TimetableSlot> occupied,
+                                      List<String> allowedDays) {
         if (schoolClass.getRoomCode() == null || schoolClass.getRoomCode().isBlank()) return null;
         Set<String> unavailable = new HashSet<>(csv(load.getUnavailableSlots()));
         Map<Integer, String[]> times = "AFTERNOON".equalsIgnoreCase(schoolClass.getStudyShift())
                 ? AFTERNOON : MORNING;
-        return DAYS.stream().flatMap(day -> times.entrySet().stream()
+        return allowedDays.stream().flatMap(day -> times.entrySet().stream()
                         .map(entry -> new Candidate(day, entry.getKey(), entry.getValue()[0], entry.getValue()[1])))
                 .filter(candidate -> !unavailable.contains(candidate.day() + ":" + candidate.period()))
                 .filter(candidate -> noConflict(assignment, schoolClass, candidate, occupied))
@@ -260,13 +264,13 @@ public class AutomaticTimetableService {
     }
 
     private int availableCandidateCount(TeachingAssignment item, TeacherLoadRegistration load,
-                                        List<TimetableSlot> occupied) {
+                                        List<TimetableSlot> occupied, List<String> allowedDays) {
         if (load == null) return 0;
         SchoolClass schoolClass = structure.getClass(item.getClassId());
         int count = 0;
         Map<Integer, String[]> times = "AFTERNOON".equalsIgnoreCase(schoolClass.getStudyShift()) ? AFTERNOON : MORNING;
         Set<String> unavailable = new HashSet<>(csv(load.getUnavailableSlots()));
-        for (String day : DAYS) for (var entry : times.entrySet()) {
+        for (String day : allowedDays) for (var entry : times.entrySet()) {
             Candidate candidate = new Candidate(day, entry.getKey(), entry.getValue()[0], entry.getValue()[1]);
             if (!unavailable.contains(day + ":" + entry.getKey()) && noConflict(item, schoolClass, candidate, occupied)) count++;
         }
@@ -302,6 +306,22 @@ public class AutomaticTimetableService {
 
     private static List<String> csv(String value) {
         return value == null || value.isBlank() ? List.of() : Arrays.stream(value.split(",")).map(String::trim).toList();
+    }
+
+    static List<String> normalizeAllowedDays(List<String> requested) {
+        if (requested == null) return DAYS;
+        LinkedHashSet<String> normalized = new LinkedHashSet<>();
+        for (String value : requested) {
+            String day = value == null ? "" : value.trim().toUpperCase(Locale.ROOT);
+            if (!DAYS.contains(day)) {
+                throw ApiException.badRequest("Ngày học không hợp lệ: " + value);
+            }
+            normalized.add(day);
+        }
+        if (normalized.isEmpty()) {
+            throw ApiException.badRequest("Phải chọn ít nhất một ngày học trong tuần");
+        }
+        return DAYS.stream().filter(normalized::contains).toList();
     }
 
     private static AutoTimetableItem item(TeachingAssignment assignment, SchoolClass schoolClass,

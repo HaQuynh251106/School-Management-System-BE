@@ -19,7 +19,7 @@ paths:
       x-roles: [ADMIN, ACADEMIC_STAFF, ACCOUNTANT, TEACHER, STUDENT, PARENT]
       x-object-permission: Nguoi dung da dang nhap doc hoc ky.
       x-idempotency: Read-only.
-      x-owners: *owners
+      x-owners: { backend: Academic, client: Mobile }
       parameters: [{ name: academicYearId, in: query, schema: { type: string } }]
       responses: { '200': { description: Danh sach hoc ky, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Semester' } } } } } }
   /classes:
@@ -29,7 +29,7 @@ paths:
       x-roles: [ADMIN, ACADEMIC_STAFF, ACCOUNTANT, TEACHER, STUDENT, PARENT]
       x-object-permission: Doc danh sach lop; du lieu hoc sinh chi qua endpoint co pham vi rieng.
       x-idempotency: Read-only.
-      x-owners: *owners
+      x-owners: { backend: Academic, client: Mobile }
       parameters:
         - { name: academicYearId, in: query, schema: { type: string } }
         - { name: gradeLevel, in: query, schema: { type: string } }
@@ -40,10 +40,34 @@ paths:
       x-roles: [ADMIN, ACADEMIC_STAFF]
       x-object-permission: Chi Admin va Giao vu tao lop.
       x-idempotency: Ma lop la duy nhat trong pham vi nghiep vu.
-      x-owners: *owners
+      x-owners: { backend: Academic, client: Mobile }
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateClassRequest' } } } }
       responses:
         '200': { description: Lop vua tao, content: { application/json: { schema: { $ref: '#/components/schemas/SchoolClass' } } } }
+        '400': { $ref: '#/components/responses/ApiErrorResponse' }
+  /classes/{id}:
+    put:
+      tags: [Academic]
+      operationId: updateClass
+      x-roles: [ADMIN, ACADEMIC_STAFF]
+      x-object-permission: Chi Admin va Giao vu sua lop; nam hoc da dong bi khoa.
+      x-idempotency: Cap nhat cung mot noi dung cho cung lop cho ket qua nhu nhau.
+      x-owners: *owners
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateClassRequest' } } } }
+      responses:
+        '200': { description: Lop sau khi sua, content: { application/json: { schema: { $ref: '#/components/schemas/SchoolClass' } } } }
+        '400': { $ref: '#/components/responses/ApiErrorResponse' }
+    delete:
+      tags: [Academic]
+      operationId: deleteClass
+      x-roles: [ADMIN, ACADEMIC_STAFF]
+      x-object-permission: Chi xoa lop chua co hoc sinh hoac du lieu giang day.
+      x-idempotency: Xoa lop mot lan; goi lai tra 404.
+      x-owners: *owners
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Da xoa lop }
         '400': { $ref: '#/components/responses/ApiErrorResponse' }
   /subjects:
     get:
@@ -111,6 +135,19 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SaveTimetableSlotRequest' } } } }
       responses:
         '200': { description: Tiet hoc vua xep, content: { application/json: { schema: { $ref: '#/components/schemas/TimetableSlot' } } } }
+        '400': { $ref: '#/components/responses/ApiErrorResponse' }
+        '409': { $ref: '#/components/responses/ApiErrorResponse' }
+  /timetableSlots/auto-plan:
+    post:
+      tags: [Academic]
+      operationId: autoPlanTimetable
+      x-roles: [ADMIN, ACADEMIC_STAFF]
+      x-object-permission: Chi Admin va Giao vu xem truoc hoac ap dung phuong an.
+      x-idempotency: apply=false chi xem truoc; apply=true them cac tiet con thieu mot lan.
+      x-owners: *owners
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AutoTimetableRequest' } } } }
+      responses:
+        '200': { description: Phuong an xep lich, content: { application/json: { schema: { $ref: '#/components/schemas/AutoTimetablePlan' } } } }
         '400': { $ref: '#/components/responses/ApiErrorResponse' }
         '409': { $ref: '#/components/responses/ApiErrorResponse' }
   /teaching-assignments:
@@ -907,6 +944,17 @@ components:
         studyShift: { type: [string, 'null'], enum: [MORNING, AFTERNOON, null] }
         capacity: { type: [integer, 'null'], minimum: 1, maximum: 100 }
         roomId: { type: [string, 'null'] }
+    UpdateClassRequest:
+      type: object
+      required: [code, gradeLevel, academicYearId]
+      properties:
+        code: { type: string, minLength: 1 }
+        name: { type: [string, 'null'] }
+        gradeLevel: { type: string, minLength: 1 }
+        academicYearId: { type: string, minLength: 1 }
+        studyShift: { type: [string, 'null'], enum: [MORNING, AFTERNOON, null] }
+        capacity: { type: [integer, 'null'], minimum: 1, maximum: 100 }
+        roomId: { type: [string, 'null'] }
     CreateSubjectRequest:
       type: object
       required: [code, name]
@@ -958,6 +1006,46 @@ components:
         startTime: { type: string, pattern: '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$' }
         endTime: { type: string, pattern: '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$' }
         semesterId: { type: string }
+    AutoTimetableRequest:
+      type: object
+      required: [semesterId, apply]
+      properties:
+        semesterId: { type: string, minLength: 1 }
+        apply: { type: boolean }
+        allowPartial: { type: [boolean, 'null'], default: false }
+        allowedDays:
+          type: [array, 'null']
+          minItems: 1
+          uniqueItems: true
+          items: { type: string, enum: [MON, TUE, WED, THU, FRI, SAT] }
+    AutoTimetableItem:
+      type: object
+      properties:
+        classId: { type: string }
+        classCode: { type: string }
+        studyShift: { type: string }
+        subjectId: { type: string }
+        subjectName: { type: string }
+        teacherId: { type: string }
+        teacherName: { type: string }
+        roomCode: { type: [string, 'null'] }
+        dayOfWeek: { type: [string, 'null'] }
+        periodNo: { type: integer }
+        startTime: { type: [string, 'null'] }
+        endTime: { type: [string, 'null'] }
+        status: { type: string, enum: [PROPOSED, UNSCHEDULED] }
+        message: { type: [string, 'null'] }
+    AutoTimetablePlan:
+      type: object
+      required: [semesterId, existingSlots, proposedSlots, unscheduledSlots, applied, items, warnings]
+      properties:
+        semesterId: { type: string }
+        existingSlots: { type: integer }
+        proposedSlots: { type: integer }
+        unscheduledSlots: { type: integer }
+        applied: { type: boolean }
+        items: { type: array, items: { $ref: '#/components/schemas/AutoTimetableItem' } }
+        warnings: { type: array, items: { type: string } }
     AttendanceStatus:
       type: string
       enum: [PRESENT, LATE, ABSENT_UNEXCUSED, ABSENT_EXCUSED]

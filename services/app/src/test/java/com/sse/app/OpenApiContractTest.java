@@ -179,11 +179,14 @@ class OpenApiContractTest {
         assertOperation(paths, "/timetableSlots", "get", "listTimetableSlots");
         assertOperation(paths, "/me/timetable", "get", "getMyTimetable");
         assertOperation(paths, "/classes", "post", "createClass");
+        assertOperation(paths, "/classes/{id}", "put", "updateClass");
+        assertOperation(paths, "/classes/{id}", "delete", "deleteClass");
         assertOperation(paths, "/subjects", "post", "createSubject");
         assertOperation(paths, "/rooms", "post", "createRoom");
         assertOperation(paths, "/teaching-assignments", "get", "listTeachingAssignments");
         assertOperation(paths, "/teaching-assignments", "post", "createTeachingAssignment");
         assertOperation(paths, "/timetableSlots", "post", "createTimetableSlot");
+        assertOperation(paths, "/timetableSlots/auto-plan", "post", "autoPlanTimetable");
         assertOperation(paths, "/attendance", "get", "listAttendance");
         assertOperation(paths, "/attendance/bulk", "post", "bulkMarkAttendance");
         assertOperation(paths, "/attendance/day-status", "get", "getAttendanceDayStatus");

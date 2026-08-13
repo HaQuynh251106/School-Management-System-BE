@@ -366,7 +366,7 @@ class SecurityIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"slotId":"tt-1","date":"2026-08-24","marks":[
-                                  {"studentId":"u-student-1","status":"ABSENT_EXCUSED"}]}
+                                  {"studentId":"u-student-1","status":"LATE"}]}
                                 """))
                 .andExpect(status().isBadRequest());
 

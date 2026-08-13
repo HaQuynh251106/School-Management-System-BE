@@ -27,7 +27,8 @@ public final class TimetableDtos {
     public record AutoTimetableRequest(
             @NotBlank String semesterId,
             @NotNull Boolean apply,
-            Boolean allowPartial
+            Boolean allowPartial,
+            List<String> allowedDays
     ) {}
 
     public record AutoTimetableItem(
