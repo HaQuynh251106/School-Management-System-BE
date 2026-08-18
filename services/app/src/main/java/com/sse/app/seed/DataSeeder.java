@@ -192,13 +192,16 @@ public class DataSeeder {
                 classes.add(SchoolClass.builder().id("c-" + code.toLowerCase()).code(code).name("Lop " + code)
                         .gradeLevel("K" + grade).academicYearId(YEAR_ID)
                         .homeroomTeacherId(TEACHERS.get(classIndex % TEACHERS.size()).id())
-                        .studentCount(studentCount(code)).build());
+                        .studentCount(studentCount(code))
+                        .maxStudents(45).expectedStudentCount(30).status("ACTIVE").build());
                 classIndex++;
             }
         }
         List<Subject> subjects = TEACHERS.stream().map(t -> Subject.builder().id("sj-" + t.subjectCode().toLowerCase())
                 .code(t.subjectCode()).name(t.subjectName())
-                .coefficient(1).active(true).build()).toList();
+                .coefficient(1).requiredRoomType(requiredRoomType(t.subjectCode()))
+                .subjectType("MANDATORY").assessmentMethod("SCORE")
+                .active(true).build()).toList();
         List<Room> rooms = List.of(
                 room("rm-101", "P101", "Phong hoc 101", 45), room("rm-102", "P102", "Phong hoc 102", 45),
                 room("rm-201", "P201", "Phong hoc 201", 45), room("rm-202", "P202", "Phong hoc 202", 45),
@@ -217,10 +220,18 @@ public class DataSeeder {
                 String classCode = grade + "A" + number;
                 String classId = "c-" + classCode.toLowerCase();
                 for (TeacherSeed teacher : TEACHERS) {
+                    int weeklyPeriods = 2;
+                    int specializedRoomPeriods = switch (requiredRoomType(teacher.subjectCode())) {
+                        case "LAB" -> 1;
+                        case "COMPUTER", "GYM", "MUSIC", "ART" -> weeklyPeriods;
+                        default -> 0;
+                    };
                     rows.add(TeacherClassSubject.builder().id("tcs-" + classCode.toLowerCase() + "-" + teacher.subjectCode().toLowerCase())
                             .teacherId(teacher.id()).teacherName(teacher.name()).classId(classId).classCode(classCode)
                             .subjectId("sj-" + teacher.subjectCode().toLowerCase()).subjectName(teacher.subjectName())
-                            .semesterId(SEMESTER_1).status("ACTIVE").createdAt(Instant.now()).updatedAt(Instant.now()).build());
+                            .semesterId(SEMESTER_1).weeklyPeriods(weeklyPeriods)
+                            .specializedRoomPeriods(specializedRoomPeriods).status("ACTIVE")
+                            .createdAt(Instant.now()).updatedAt(Instant.now()).build());
                 }
             }
         }
@@ -334,7 +345,18 @@ public class DataSeeder {
 
     private static Room room(String id, String code, String name, int capacity) {
         return Room.builder().id(id).code(code).name(name)
-                .capacity(capacity).active(true).build();
+                .capacity(capacity).roomType(code.startsWith("LAB") ? "LAB"
+                        : code.startsWith("IT") ? "COMPUTER" : "GENERAL")
+                .active(true).build();
+    }
+
+    private static String requiredRoomType(String subjectCode) {
+        return switch (subjectCode) {
+            case "IT" -> "COMPUTER";
+            case "PHYS", "CHEM", "BIO" -> "LAB";
+            case "PE" -> "GYM";
+            default -> "GENERAL";
+        };
     }
 
     private static ExamCategory category(String id, String code, String name, double weight) {

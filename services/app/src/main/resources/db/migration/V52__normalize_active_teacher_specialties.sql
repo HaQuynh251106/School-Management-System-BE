@@ -67,6 +67,7 @@ DO $$
 DECLARE
     invalid_assignment_count integer;
     active_teacher_count integer;
+    is_full_school_dataset boolean;
 BEGIN
     SELECT count(*) INTO invalid_assignment_count
     FROM public.teacher_class_subjects assignment
@@ -82,11 +83,16 @@ BEGIN
     FROM public.users
     WHERE role = 'TEACHER' AND status = 'ACTIVE';
 
+    SELECT count(*) >= 30 INTO is_full_school_dataset
+    FROM public.classes class
+    JOIN public.academic_years year ON year.id = class.academic_year_id
+    WHERE class.status = 'ACTIVE' AND year.status = 'ACTIVE';
+
     IF invalid_assignment_count <> 0 THEN
         RAISE EXCEPTION 'Found % active assignments with an invalid teacher specialty',
             invalid_assignment_count;
     END IF;
-    IF active_teacher_count <> 68 THEN
+    IF is_full_school_dataset AND active_teacher_count <> 68 THEN
         RAISE EXCEPTION 'Expected exactly 68 active teachers, found %', active_teacher_count;
     END IF;
 END $$;

@@ -151,6 +151,7 @@ DECLARE
     active_teacher_count integer;
     active_primary_count integer;
     active_homeroom_count integer;
+    is_full_school_dataset boolean;
 BEGIN
     SELECT count(*) INTO active_teacher_count
     FROM public.users
@@ -168,13 +169,18 @@ BEGIN
       AND year.status = 'ACTIVE'
       AND teacher.status = 'ACTIVE';
 
-    IF active_teacher_count <> 68 THEN
+    SELECT count(*) >= 30 INTO is_full_school_dataset
+    FROM public.classes class
+    JOIN public.academic_years year ON year.id = class.academic_year_id
+    WHERE class.status = 'ACTIVE' AND year.status = 'ACTIVE';
+
+    IF is_full_school_dataset AND active_teacher_count <> 68 THEN
         RAISE EXCEPTION 'Expected exactly 68 active teachers, found %', active_teacher_count;
     END IF;
-    IF active_primary_count <> 12 THEN
+    IF is_full_school_dataset AND active_primary_count <> 12 THEN
         RAISE EXCEPTION 'Expected all 12 primary teacher accounts active, found %', active_primary_count;
     END IF;
-    IF active_homeroom_count < 30 THEN
+    IF is_full_school_dataset AND active_homeroom_count < 30 THEN
         RAISE EXCEPTION 'Expected 30 active homeroom teachers, found %', active_homeroom_count;
     END IF;
 END $$;

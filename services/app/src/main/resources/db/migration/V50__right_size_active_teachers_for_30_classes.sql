@@ -113,6 +113,7 @@ DO $$
 DECLARE
     active_teacher_count integer;
     active_homeroom_count integer;
+    is_full_school_dataset boolean;
 BEGIN
     SELECT count(*) INTO active_teacher_count
     FROM public.users
@@ -126,10 +127,17 @@ BEGIN
       AND year.status = 'ACTIVE'
       AND teacher.status = 'ACTIVE';
 
-    IF active_teacher_count <> 68 THEN
+    SELECT count(*) >= 30 INTO is_full_school_dataset
+    FROM public.classes c
+    JOIN public.academic_years year ON year.id = c.academic_year_id
+    WHERE c.status = 'ACTIVE' AND year.status = 'ACTIVE';
+
+    -- Fresh installations are migrated before demo data is seeded. Only enforce
+    -- the 30-class workforce invariant when that complete dataset already exists.
+    IF is_full_school_dataset AND active_teacher_count <> 68 THEN
         RAISE EXCEPTION 'Expected exactly 68 active teachers, found %', active_teacher_count;
     END IF;
-    IF active_homeroom_count < 30 THEN
+    IF is_full_school_dataset AND active_homeroom_count < 30 THEN
         RAISE EXCEPTION 'Expected 30 active homeroom teachers, found %', active_homeroom_count;
     END IF;
 END $$;

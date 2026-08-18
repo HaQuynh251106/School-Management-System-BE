@@ -330,6 +330,14 @@ ON CONFLICT (code) DO UPDATE
 SET name = excluded.name,
     capacity = excluded.capacity;
 
+-- DataSeeder creates a small legacy timetable (ids prefixed with `tt-`) so the
+-- application can run without the canonical dataset. When the canonical demo
+-- dataset is requested, remove only those legacy rows before installing the
+-- complete school-wide timetable; otherwise their teacher/period slots can
+-- collide with the deterministic `g0-slot-` rows below.
+DELETE FROM timetable_slots
+WHERE id LIKE 'tt-%';
+
 -- Minimal conflict-free timetable for Student/Parent screens before auto-scheduling.
 WITH active_year AS (
     SELECT id, code
