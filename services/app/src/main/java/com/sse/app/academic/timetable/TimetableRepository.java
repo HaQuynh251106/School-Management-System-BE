@@ -13,6 +13,7 @@ import java.util.Optional;
 
 interface TimetableRepository extends JpaRepository<TimetableSlot, String> {
     List<TimetableSlot> findByClassId(String classId);
+    boolean existsByClassId(String classId);
     List<TimetableSlot> findByTeacherId(String teacherId);
     List<TimetableSlot> findBySemesterId(String semesterId);
     List<TimetableSlot> findBySemesterIdAndClassIdIn(String semesterId, List<String> classIds);
@@ -41,6 +42,7 @@ interface TimetableDraftSlotRepository extends JpaRepository<TimetableDraftSlot,
     List<TimetableDraftSlot> findByScheduleIdOrderByClassIdAscDayOfWeekAscPeriodNoAsc(String scheduleId);
     List<TimetableDraftSlot> findByScheduleIdAndClassIdOrderByDayOfWeekAscPeriodNoAsc(
             String scheduleId, String classId);
+    boolean existsByClassId(String classId);
     void deleteByScheduleId(String scheduleId);
 }
 

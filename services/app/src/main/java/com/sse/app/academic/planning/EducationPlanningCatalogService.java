@@ -282,6 +282,10 @@ public class EducationPlanningCatalogService {
                 .orElse(false);
     }
 
+    public boolean hasClassCombination(String classId) {
+        return classCombinations.existsById(classId);
+    }
+
     public boolean subjectAppliesToClass(
             String programId, String gradeLevel, String classId, String subjectId) {
         if (programId == null || programId.isBlank()) {

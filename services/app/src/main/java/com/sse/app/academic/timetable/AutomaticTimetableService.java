@@ -41,6 +41,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -120,6 +121,10 @@ public class AutomaticTimetableService {
                         scheduleId, classId);
     }
 
+    public boolean hasDraftSlotsForClass(String classId) {
+        return draftSlots.existsByClassId(classId);
+    }
+
     @Transactional
     public void deleteDraft(String scheduleId) {
         TimetableSchedule schedule = requireDraft(scheduleId);
@@ -145,10 +150,13 @@ public class AutomaticTimetableService {
             throw ApiException.badRequest("Học kỳ không thuộc năm học đã chọn");
         }
         String grade = normalizeGrade(request.scopeGradeLevel());
-        List<String> days = List.of("MON", "TUE", "WED", "THU", "FRI", "SAT");
-        int firstPeriod = 1;
-        int lastPeriod = 10;
-        int maxDaily = 8;
+        List<String> days = normalizeDays(request.teachingDays());
+        int firstPeriod = between(request.firstPeriod(), 1, 10, 1,
+                "Tiết bắt đầu");
+        int lastPeriod = between(request.lastPeriod(), firstPeriod, 10, 10,
+                "Tiết kết thúc");
+        int maxDaily = between(request.maxPeriodsPerDay(), 1,
+                lastPeriod - firstPeriod + 1, 8, "Số tiết tối đa mỗi ngày");
         int solveSeconds = between(request.solveSeconds(), 1, 120, 30,
                 "Thời gian chạy bộ giải");
         int gapDays = between(request.maxProgressGapDays(), 0, 14, 2,
@@ -158,7 +166,8 @@ public class AutomaticTimetableService {
         int gapLessons = between(request.maxCurriculumGapLessons(), 0, 10, 1,
                 "Ngưỡng lệch bài học");
 
-        List<SchoolClass> targetClasses = structure.listClasses(year.getId(), grade);
+        List<SchoolClass> targetClasses = structure.listClasses(year.getId(), grade).stream()
+                .filter(this::isActiveClass).toList();
         if (targetClasses.isEmpty()) {
             throw ApiException.badRequest("Phạm vi đã chọn chưa có lớp học");
         }
@@ -209,7 +218,7 @@ public class AutomaticTimetableService {
         Map<String, SchoolClass> classById = targetClasses.stream()
                 .collect(Collectors.toMap(SchoolClass::getId, Function.identity()));
         Map<String, BlockPlacement> blockPlan = planBlockPlacements(
-                targetClasses, targetAssignments, availableRooms, sourceSnapshots);
+                targetClasses, targetAssignments, availableRooms, sourceSnapshots, days);
         Map<String, String> teacherRestDays = policyTeacherRestDays(
                 targetAssignments, targetClasses, blockPlan, days);
         for (TeacherClassSubject assignment : targetAssignments) {
@@ -258,7 +267,7 @@ public class AutomaticTimetableService {
                                     && timeslot.getPeriodNo() < shiftStart + 5)
                             .filter(timeslot -> !("MON".equals(timeslot.getDayOfWeek())
                                     && timeslot.getPeriodNo() == flagPeriod))
-                            .filter(timeslot -> !("SAT".equals(timeslot.getDayOfWeek())
+                            .filter(timeslot -> !(lastTeachingDay(days).equals(timeslot.getDayOfWeek())
                                     && timeslot.getPeriodNo() == homeroomPeriod))
                             .filter(timeslot -> !timeslot.getDayOfWeek().equals(
                                     teacherRestDays.get(assignment.getTeacherId())))
@@ -285,12 +294,14 @@ public class AutomaticTimetableService {
                     solverRoomById, "HOMEROOM", activityAssignmentId(
                             "HOMEROOM", schoolClass.getId(), semester.getId()),
                     "sj-homeroom", "Sinh hoạt lớp",
-                    "SAT", shiftStart + 4, homeroom.getId(), homeroom.getFullName(),
+                    lastTeachingDay(days), shiftStart + 4,
+                    homeroom.getId(), homeroom.getFullName(),
                     teacherRestDays.get(homeroom.getId()), maxDaily));
         }
 
         if (grade != null) {
             Set<String> outside = structure.listClasses(year.getId(), null).stream()
+                    .filter(this::isActiveClass)
                     .map(SchoolClass::getId)
                     .filter(id -> !targetClassIds.contains(id))
                     .collect(Collectors.toSet());
@@ -401,7 +412,8 @@ public class AutomaticTimetableService {
                     0, issues);
         }
 
-        List<SchoolClass> targetClasses = structure.listClasses(year.getId(), grade);
+        List<SchoolClass> targetClasses = structure.listClasses(year.getId(), grade).stream()
+                .filter(this::isActiveClass).toList();
         if (targetClasses.isEmpty()) {
             issues.add(readinessIssue("CLASS_MISSING",
                     grade == null ? "Năm học chưa có lớp để xếp lịch"
@@ -430,6 +442,9 @@ public class AutomaticTimetableService {
         List<TeacherClassSubject> targetAssignments = assignments
                 .findBySemesterIdAndStatus(semester.getId(), "ACTIVE").stream()
                 .filter(item -> classIds.contains(item.getClassId())).toList();
+        Set<String> assignedClassSubjects = targetAssignments.stream()
+                .map(item -> item.getClassId() + "|" + item.getSubjectId())
+                .collect(Collectors.toSet());
         Map<String, SchoolClass> classById = targetClasses.stream()
                 .collect(Collectors.toMap(SchoolClass::getId, Function.identity()));
         Set<String> sourceGrades = sourceSnapshots.stream()
@@ -490,10 +505,16 @@ public class AutomaticTimetableService {
                 .filter(Room::isActive).map(Room::getId).collect(Collectors.toSet());
         for (SchoolClass schoolClass : targetClasses) {
             boolean hasSource = sourceGrades.contains(schoolClass.getGradeLevel());
-            if (hasSource && classPeriods.getOrDefault(schoolClass.getId(), 0) == 0) {
-                issues.add(readinessIssue("ASSIGNMENT_MISSING",
-                        schoolClass.getCode() + " chưa có phân công giáo viên",
-                        schoolClass.getId(), null));
+            if (hasSource) {
+                planSources.applicableSubjects(sourceSnapshots, schoolClass).stream()
+                        .filter(subject -> !assignedClassSubjects.contains(
+                                schoolClass.getId() + "|" + subject.subjectId()))
+                        .forEach(subject -> issues.add(new ScheduleIssue(
+                                "ERROR", "CLASS_SUBJECT_ASSIGNMENT_MISSING",
+                                schoolClass.getCode() + " thiếu phân công môn "
+                                        + structure.subjectName(subject.subjectId()),
+                                schoolClass.getId(), null, subject.subjectId(),
+                                null, null)));
             }
             if (schoolClass.getHomeRoomId() == null
                     || !availableRoomIds.contains(schoolClass.getHomeRoomId())) {
@@ -657,7 +678,8 @@ public class AutomaticTimetableService {
                 draftSlots.findByScheduleIdOrderByClassIdAscDayOfWeekAscPeriodNoAsc(
                         scheduleId);
         List<SchoolClass> classes = structure.listClasses(
-                schedule.getAcademicYearId(), schedule.getScopeGradeLevel());
+                schedule.getAcademicYearId(), schedule.getScopeGradeLevel()).stream()
+                .filter(this::isActiveClass).toList();
         Set<String> classIds = classes.stream().map(SchoolClass::getId)
                 .collect(Collectors.toSet());
         List<TeacherClassSubject> required = assignments
@@ -683,14 +705,13 @@ public class AutomaticTimetableService {
         Map<String, List<Integer>> teacherPeriods = new HashMap<>();
         Set<String> targetTeacherIds = rows.stream().map(TimetableDraftSlot::getTeacherId)
                 .collect(Collectors.toSet());
+        List<String> teachingDays = normalizeStoredDays(schedule.getTeachingDays());
         Map<String, BlockPlacement> validationBlockPlan = planBlockPlacements(
                 classes, required, structure.listRooms().stream()
-                        .filter(Room::isActive).toList(), sourceSnapshots);
+                        .filter(Room::isActive).toList(), sourceSnapshots, teachingDays);
         Map<String, String> teacherRestDays = policyTeacherRestDays(
-                required, classes, validationBlockPlan,
-                List.of(schedule.getTeachingDays().split(",")));
-        int teachingDayCount = (int) List.of(schedule.getTeachingDays().split(","))
-                .stream().filter(day -> !day.isBlank()).distinct().count();
+                required, classes, validationBlockPlan, teachingDays);
+        int teachingDayCount = teachingDays.size();
 
         List<TimetableSlot> externalLive = liveSlots
                 .findBySemesterId(schedule.getSemesterId()).stream()
@@ -788,6 +809,7 @@ public class AutomaticTimetableService {
                         assignment.getSubjectId(), null, null));
             }
         }
+        String homeroomDay = lastTeachingDay(teachingDays);
         for (SchoolClass schoolClass : classes) {
             int shiftStart = mainShiftStart(schoolClass);
             int flagPeriod = shiftStart;
@@ -800,7 +822,7 @@ public class AutomaticTimetableService {
             boolean hasHomeroom = rows.stream().anyMatch(row ->
                     schoolClass.getId().equals(row.getClassId())
                             && "sj-homeroom".equals(row.getSubjectId())
-                            && "SAT".equals(row.getDayOfWeek())
+                            && homeroomDay.equals(row.getDayOfWeek())
                             && row.getPeriodNo() == homeroomPeriod);
             if (!hasFlag) {
                 issues.add(new ScheduleIssue("ERROR", "FLAG_CEREMONY_REQUIRED",
@@ -810,13 +832,15 @@ public class AutomaticTimetableService {
             }
             if (!hasHomeroom) {
                 issues.add(new ScheduleIssue("ERROR", "HOMEROOM_REQUIRED",
-                        schoolClass.getCode() + " thiếu Sinh hoạt lớp cuối ca thứ Bảy, tiết "
+                        schoolClass.getCode() + " thiếu Sinh hoạt lớp cuối ca ngày "
+                                + dayLabel(homeroomDay) + ", tiết "
                                 + homeroomPeriod,
                         schoolClass.getId(), schoolClass.getHomeroomTeacherId(),
-                        "sj-homeroom", "SAT", homeroomPeriod));
+                        "sj-homeroom", homeroomDay, homeroomPeriod));
             }
         }
-        validateSchoolShiftPolicy(classes, required, rows, issues, sourceSnapshots);
+        validateSchoolShiftPolicy(classes, required, rows, issues, sourceSnapshots,
+                teachingDays);
         dailyCounts.forEach((key, count) -> {
             if (count > schedule.getMaxPeriodsPerDay()) {
                 issues.add(new ScheduleIssue("ERROR", "DAILY_LIMIT",
@@ -887,8 +911,8 @@ public class AutomaticTimetableService {
             List<TeacherClassSubject> required,
             List<TimetableDraftSlot> rows,
             List<ScheduleIssue> issues,
-            List<TimetablePlanSourceService.PlanSnapshot> sourceSnapshots) {
-        List<String> teachingDays = List.of("MON", "TUE", "WED", "THU", "FRI", "SAT");
+            List<TimetablePlanSourceService.PlanSnapshot> sourceSnapshots,
+            List<String> teachingDays) {
         Map<String, TeacherClassSubject> byClassSubject = required.stream()
                 .collect(Collectors.toMap(item -> item.getClassId() + "|"
                                 + item.getSubjectId(), Function.identity(),
@@ -902,9 +926,8 @@ public class AutomaticTimetableService {
                     schoolClass, byClassSubject, required, sourceSnapshots);
             Set<String> blockAssignmentIds = blockAssignments.stream()
                     .map(TeacherClassSubject::getId).collect(Collectors.toSet());
-            List<String> allowedBlockDays = isAfternoonMain(schoolClass)
-                    ? List.of("TUE", "THU", "SAT")
-                    : List.of("MON", "WED", "FRI");
+            List<String> allowedBlockDays = blockTeachingDays(
+                    isAfternoonMain(schoolClass), teachingDays);
             int blockStart = isAfternoonMain(schoolClass) ? 1 : 6;
             Set<String> actualBlockDays = new HashSet<>();
 
@@ -1207,8 +1230,11 @@ public class AutomaticTimetableService {
     private void assertSpecialty(User teacher, Subject subject,
                                  SchoolClass schoolClass) {
         String specialty = normalizeText(teacher.getMainSubject());
-        Set<String> accepted = Set.of(normalizeText(subject.getId()),
-                normalizeText(subject.getCode()), normalizeText(subject.getName()));
+        Set<String> accepted = new LinkedHashSet<>();
+        accepted.add(normalizeText(subject.getId()));
+        accepted.add(normalizeText(subject.getCode()));
+        accepted.add(normalizeText(subject.getName()));
+        accepted.remove("");
         boolean matches = accepted.contains(specialty)
                 || accepted.stream().anyMatch(value -> value.length() >= 3
                     && specialty.length() >= 3
@@ -1233,15 +1259,57 @@ public class AutomaticTimetableService {
         return result;
     }
 
-    private List<String> normalizeDays(List<String> requested) {
+    static List<String> normalizeDays(List<String> requested) {
         List<String> days = requested == null || requested.isEmpty()
                 ? List.of("MON", "TUE", "WED", "THU", "FRI")
                 : requested.stream().map(value -> value.trim().toUpperCase(Locale.ROOT))
                     .distinct().sorted(Comparator.comparingInt(VALID_DAYS::indexOf)).toList();
-        if (days.isEmpty() || days.stream().anyMatch(day -> !VALID_DAYS.contains(day))) {
-            throw ApiException.badRequest("Ngày học không hợp lệ");
+        List<String> fiveDays = List.of("MON", "TUE", "WED", "THU", "FRI");
+        List<String> sixDays = List.of("MON", "TUE", "WED", "THU", "FRI", "SAT");
+        if (!days.equals(fiveDays) && !days.equals(sixDays)) {
+            throw ApiException.badRequest(
+                    "Chỉ hỗ trợ lịch học từ thứ Hai đến thứ Sáu hoặc từ thứ Hai đến thứ Bảy");
         }
         return days;
+    }
+
+    static List<String> normalizeStoredDays(String value) {
+        return normalizeDays(value == null || value.isBlank()
+                ? List.of()
+                : java.util.Arrays.asList(value.split(",")));
+    }
+
+    static String lastTeachingDay(List<String> teachingDays) {
+        return teachingDays.get(teachingDays.size() - 1);
+    }
+
+    static List<String> blockTeachingDays(
+            boolean afternoonMain, List<String> teachingDays) {
+        if (teachingDays.contains("SAT")) {
+            return afternoonMain
+                    ? List.of("TUE", "THU", "SAT")
+                    : List.of("MON", "WED", "FRI");
+        }
+        return afternoonMain
+                ? List.of("TUE", "THU", "FRI")
+                : List.of("MON", "WED", "FRI");
+    }
+
+    private boolean isActiveClass(SchoolClass schoolClass) {
+        return schoolClass.getStatus() == null || schoolClass.getStatus().isBlank()
+                || "ACTIVE".equalsIgnoreCase(schoolClass.getStatus());
+    }
+
+    private static String dayLabel(String day) {
+        return switch (day) {
+            case "MON" -> "thứ Hai";
+            case "TUE" -> "thứ Ba";
+            case "WED" -> "thứ Tư";
+            case "THU" -> "thứ Năm";
+            case "FRI" -> "thứ Sáu";
+            case "SAT" -> "thứ Bảy";
+            default -> day;
+        };
     }
 
     private String normalizeGrade(String value) {
@@ -1417,7 +1485,8 @@ public class AutomaticTimetableService {
             List<SchoolClass> classes,
             List<TeacherClassSubject> teachingAssignments,
             List<Room> rooms,
-            List<TimetablePlanSourceService.PlanSnapshot> sourceSnapshots) {
+            List<TimetablePlanSourceService.PlanSnapshot> sourceSnapshots,
+            List<String> teachingDays) {
         Map<String, TeacherClassSubject> byClassSubject = teachingAssignments.stream()
                 .collect(Collectors.toMap(item -> item.getClassId() + "|"
                                 + item.getSubjectId(), Function.identity(),
@@ -1430,9 +1499,7 @@ public class AutomaticTimetableService {
             if (selected.isEmpty()) continue;
             boolean afternoonMain = isAfternoonMain(schoolClass);
             requests.add(new BlockRequest(schoolClass, selected,
-                    afternoonMain
-                            ? List.of("TUE", "THU", "SAT")
-                            : List.of("MON", "WED", "FRI"),
+                    blockTeachingDays(afternoonMain, teachingDays),
                     afternoonMain ? 1 : 6));
         }
         Map<String, Integer> roomCapacity = rooms.stream()

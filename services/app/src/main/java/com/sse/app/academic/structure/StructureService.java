@@ -206,7 +206,21 @@ public class StructureService {
                 .homeRoomId(homeRoom.getId())
                 .studentCount(0)
                 .maxStudents(capacity)
+                .status("ACTIVE")
                 .build());
+    }
+
+    public SchoolClass findClass(String academicYearId, String code) {
+        return classes.findByAcademicYearIdAndCode(academicYearId, normalizeClassCode(code))
+                .orElse(null);
+    }
+
+    @Transactional
+    public SchoolClass setClassStatus(String classId, String status) {
+        SchoolClass schoolClass = getClass(classId);
+        schoolClass.setStatus(normalizeStatus(status, Set.of("ACTIVE", "INACTIVE"),
+                "Trạng thái lớp", schoolClass.getStatus()));
+        return classes.save(schoolClass);
     }
 
     @Transactional
@@ -264,7 +278,8 @@ public class StructureService {
     public SchoolClass ensureClassByCode(String code) {
         String normalized = normalizeClassCode(code);
         if (!isHighSchoolClassCode(normalized)) {
-            throw ApiException.badRequest("Class code must be from 10A1 to 12A10");
+            throw ApiException.badRequest(
+                    "Mã lớp phải thuộc khối 10-12 và có số thứ tự từ A1 đến A20");
         }
         AcademicYear year = activeOrCreateDefaultYear();
         ensureHighSchoolDefaults(year.getId());
@@ -512,7 +527,7 @@ public class StructureService {
         subjects.saveAll(sj); rooms.saveAll(rm); holidays.saveAll(h);
     }
 
-    /** Keeps 10A1..10A10, 11A1..11A10 and 12A1..12A10 stable after any class update. */
+    /** Keeps classes ordered by academic year, grade and numeric A-section. */
     private Comparator<SchoolClass> classDisplayOrder() {
         Map<String, LocalDate> yearStarts = years.findAll().stream()
                 .collect(Collectors.toMap(AcademicYear::getId, AcademicYear::getStartDate, (first, ignored) -> first));
@@ -653,7 +668,7 @@ public class StructureService {
             LocalDate hk2End) {}
 
     private boolean isHighSchoolClassCode(String code) {
-        return code != null && code.matches("(10|11|12)A([1-9]|10)");
+        return code != null && code.matches("(10|11|12)A([1-9]|1[0-9]|20)");
     }
 
     private String normalizeClassCode(String code) {
@@ -684,7 +699,8 @@ public class StructureService {
 
     private void validateHighSchoolClass(String code, String gradeLevel) {
         if (!isHighSchoolClassCode(code)) {
-            throw ApiException.badRequest("Mã lớp phải từ 10A1 đến 12A10");
+            throw ApiException.badRequest(
+                    "Mã lớp phải thuộc khối 10-12 và có số thứ tự từ A1 đến A20");
         }
         if (!("K" + code.substring(0, 2)).equals(gradeLevel)) {
             throw ApiException.badRequest("Mã lớp không khớp với khối đã chọn");

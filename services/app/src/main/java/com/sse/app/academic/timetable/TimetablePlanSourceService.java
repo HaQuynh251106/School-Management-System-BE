@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sse.app.academic.planning.AcademicPlanningService;
 import com.sse.app.academic.planning.AcademicTrainingPlan;
 import com.sse.app.academic.planning.AcademicTrainingPlanSubject;
+import com.sse.app.academic.planning.EducationPlanningCatalogService;
+import com.sse.app.academic.structure.SchoolClass;
 import com.sse.app.common.ApiException;
 import org.springframework.stereotype.Service;
 
@@ -18,11 +20,15 @@ import java.util.stream.Collectors;
 @Service
 public class TimetablePlanSourceService {
     private final AcademicPlanningService planning;
+    private final EducationPlanningCatalogService catalogs;
     private final ObjectMapper objectMapper;
 
     public TimetablePlanSourceService(
-            AcademicPlanningService planning, ObjectMapper objectMapper) {
+            AcademicPlanningService planning,
+            EducationPlanningCatalogService catalogs,
+            ObjectMapper objectMapper) {
         this.planning = planning;
+        this.catalogs = catalogs;
         this.objectMapper = objectMapper;
     }
 
@@ -37,7 +43,7 @@ public class TimetablePlanSourceService {
                 throw ApiException.conflict("Kế hoạch " + grade
                         + " chưa cấu hình môn học cho học kỳ đã chọn");
             }
-            return new PlanSnapshot(plan.getId(), plan.getVersionNumber(),
+            return new PlanSnapshot(plan.getId(), plan.getProgramId(), plan.getVersionNumber(),
                     plan.getGradeLevel(), plan.getStatus(), plan.getPublishedAt(),
                     semesterId, subjects);
         }).toList();
@@ -79,6 +85,18 @@ public class TimetablePlanSourceService {
                         + " không thuộc kế hoạch nguồn của " + gradeLevel));
     }
 
+    public List<SubjectSnapshot> applicableSubjects(
+            List<PlanSnapshot> sources, SchoolClass schoolClass) {
+        PlanSnapshot source = sourceForGrade(sources, schoolClass.getGradeLevel());
+        return source.subjects().stream()
+                .filter(item -> item.weeklyPeriods() > 0)
+                .filter(item -> !isFixedHomeroomActivity(item.subjectId()))
+                .filter(item -> catalogs.subjectAppliesToClass(
+                        source.programId(), schoolClass.getGradeLevel(),
+                        schoolClass.getId(), item.subjectId()))
+                .toList();
+    }
+
     public String summary(List<PlanSnapshot> sources) {
         return sources.stream().sorted(Comparator.comparing(PlanSnapshot::gradeLevel))
                 .map(item -> item.gradeLevel() + " v" + item.versionNumber())
@@ -91,11 +109,18 @@ public class TimetablePlanSourceService {
     }
 
     public record PlanSnapshot(
-            String planId, int versionNumber, String gradeLevel, String status,
+            String planId, String programId, int versionNumber,
+            String gradeLevel, String status,
             Instant publishedAt, String semesterId,
             List<SubjectSnapshot> subjects) {}
 
     public record SubjectSnapshot(
             String planSubjectId, String subjectId,
             int weeklyPeriods, int totalPeriods) {}
+
+    private boolean isFixedHomeroomActivity(String subjectId) {
+        if (subjectId == null) return false;
+        String normalized = subjectId.trim().toLowerCase();
+        return normalized.equals("sj-flag") || normalized.equals("sj-homeroom");
+    }
 }

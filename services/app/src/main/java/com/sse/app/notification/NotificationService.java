@@ -12,6 +12,7 @@ import com.sse.app.common.PageResponse;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.List;
 import java.util.Map;
@@ -52,6 +53,27 @@ public class NotificationService {
                                    String refType, String refId) {
         Notification notification = notifyInAppOnly(recipientId, type, title, body, refType, refId);
         dispatchExternalIfEnabled(recipientId, type, title, body, refType, refId);
+        return notification;
+    }
+
+    public Notification notifyUserWithRequiredEmail(
+            String recipientId, String type, String title, String body,
+            String refType, String refId) {
+        Notification notification = notifyInAppOnly(
+                recipientId, type, title, body, refType, refId);
+        channelDispatcher.dispatch(recipientId, normalize(type), "EMAIL",
+                title, body, refType, refId, deepLink(refType, refId), groupKey(type));
+        if (isEnabled(recipientId, type, "PUSH")) {
+            boolean pushEnabled = preferences.findByUserIdAndNotificationTypeAndChannel(
+                            recipientId, normalize(type), "PUSH")
+                    .or(() -> preferences.findByUserIdAndNotificationTypeAndChannel(
+                            recipientId, "ALL", "PUSH"))
+                    .map(UserNotificationPreference::isEnabled).orElse(false);
+            if (pushEnabled) {
+                channelDispatcher.dispatch(recipientId, normalize(type), "PUSH",
+                        title, body, refType, refId, deepLink(refType, refId), groupKey(type));
+            }
+        }
         return notification;
     }
 
@@ -144,16 +166,23 @@ public class NotificationService {
             }
             case "academic.exam_schedule.published" -> {
                 String periodName = asString(p.get("periodName"));
+                boolean updated = Boolean.TRUE.equals(p.get("updated"));
+                String studentTitle = updated ? "Lịch thi đã được cập nhật" : "Đã có lịch thi mới";
                 String body = "Lịch thi " + periodName
-                        + " đã được phát hành. Vui lòng mở mục Lịch thi để xem ngày, giờ và phòng thi.";
+                        + (updated ? " đã được cập nhật và phát hành lại." : " đã được phát hành.")
+                        + " Vui lòng mở mục Lịch thi để xem ngày, giờ và phòng thi.";
+                LinkedHashSet<String> parentIds = new LinkedHashSet<>();
                 asStringList(p.get("studentIds")).forEach(studentId -> {
-                    notifyUser(studentId, "EXAM", "Đã có lịch thi mới", body,
+                    notifyUserWithRequiredEmail(studentId, "EXAM", studentTitle, body,
                             "EXAM_PERIOD", event.entityId());
-                    notifyParentsOfStudent(studentId, "EXAM", "Đã có lịch thi mới", body,
-                            "EXAM_PERIOD", event.entityId());
+                    parentIds.addAll(users.parentIdsOf(studentId));
                 });
+                parentIds.forEach(parentId ->
+                        notifyUserWithRequiredEmail(parentId, "EXAM", studentTitle, body,
+                                "EXAM_PERIOD", event.entityId()));
                 asStringList(p.get("teacherIds")).forEach(teacherId ->
-                        notifyUser(teacherId, "EXAM", "Lịch coi thi đã được phân công", body,
+                        notifyUser(teacherId, "EXAM",
+                                updated ? "Lịch coi thi đã được cập nhật" : "Lịch coi thi đã được phân công", body,
                                 "EXAM_PERIOD", event.entityId()));
             }
             case "academic.education_plan.published" -> {
@@ -561,6 +590,7 @@ public class NotificationService {
             case "YEAR_RESULT" -> "/year-results?ref=" + id;
             case "HOMEROOM_REMARK" -> "/academic-monitoring?ref=" + id;
             case "TIMETABLE" -> "/timetable";
+            case "EXAM_PERIOD" -> "/exam-schedule?ref=" + id;
             default -> "/notifications?ref=" + id;
         };
     }

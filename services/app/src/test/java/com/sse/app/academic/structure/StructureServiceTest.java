@@ -1,6 +1,7 @@
 package com.sse.app.academic.structure;
 
 import com.sse.app.academic.structure.StructureDtos.CreateAcademicYearRequest;
+import com.sse.app.academic.structure.StructureDtos.CreateClassRequest;
 import com.sse.app.academic.structure.StructureDtos.CreateHolidayRequest;
 import com.sse.app.common.ApiException;
 import com.sse.app.identity.UserRepository;
@@ -84,6 +85,38 @@ class StructureServiceTest {
 
         assertEquals("CLOSED", previous.getStatus());
         assertEquals("ACTIVE", target.getStatus());
+    }
+
+    @Test
+    void creatingAdditionalClassAcceptsA11() {
+        AcademicYear year = AcademicYear.builder()
+                .id("ay-new").code("2028-2029").status("PLANNED").build();
+        when(years.findById("ay-new")).thenReturn(Optional.of(year));
+        when(classes.findByAcademicYearIdAndCode("ay-new", "10A11"))
+                .thenReturn(Optional.empty());
+        when(rooms.findByCodeIgnoreCase("G0-20282029-10A11"))
+                .thenReturn(Optional.empty());
+        when(rooms.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(classes.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        SchoolClass created = service.createClass(new CreateClassRequest(
+                null, "10a11", null, "K10", "ay-new",
+                null, null, 45));
+
+        assertEquals("10A11", created.getCode());
+        assertEquals("K10", created.getGradeLevel());
+        assertEquals("ACTIVE", created.getStatus());
+    }
+
+    @Test
+    void creatingClassRejectsSectionAboveA20() {
+        AcademicYear year = AcademicYear.builder()
+                .id("ay-new").code("2028-2029").status("PLANNED").build();
+        when(years.findById("ay-new")).thenReturn(Optional.of(year));
+
+        assertThrows(ApiException.class, () -> service.createClass(
+                new CreateClassRequest(null, "10A21", null, "K10",
+                        "ay-new", null, null, 45)));
     }
 
     @Test

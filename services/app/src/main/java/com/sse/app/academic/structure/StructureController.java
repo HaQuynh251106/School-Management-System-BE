@@ -22,15 +22,18 @@ public class StructureController {
     private final UserService users;
     private final AuditService audit;
     private final TeachingAssignmentService teachingAssignments;
+    private final ClassCountManagementService classCountManagement;
 
     public StructureController(
             StructureService structure, UserService users,
             AuditService audit,
-            TeachingAssignmentService teachingAssignments) {
+            TeachingAssignmentService teachingAssignments,
+            ClassCountManagementService classCountManagement) {
         this.structure = structure;
         this.users = users;
         this.audit = audit;
         this.teachingAssignments = teachingAssignments;
+        this.classCountManagement = classCountManagement;
     }
 
     // ----- Năm học -----
@@ -172,6 +175,24 @@ public class StructureController {
                 academicYearId, "Khởi tạo " + created + " lớp còn thiếu");
         return Map.of("ok", true, "createdClasses", created,
                 "academicYearId", academicYearId == null ? "ACTIVE" : academicYearId);
+    }
+
+    @PostMapping("/academic/classes/count-plan/preview")
+    public ClassCountPlanResponse previewClassCountPlan(
+            @Valid @RequestBody ClassCountPlanRequest request) {
+        requireManage();
+        return classCountManagement.preview(request);
+    }
+
+    @PostMapping("/academic/classes/count-plan/apply")
+    public ClassCountPlanResponse applyClassCountPlan(
+            @Valid @RequestBody ClassCountPlanRequest request) {
+        CurrentUser actor = requireManage();
+        ClassCountPlanResponse result = classCountManagement.apply(request);
+        record(actor, "CHANGE_CLASS_COUNT", "academic_year", request.academicYearId(),
+                "K10=" + request.grade10Count() + ", K11=" + request.grade11Count()
+                        + ", K12=" + request.grade12Count());
+        return result;
     }
 
     // ----- Môn -----
