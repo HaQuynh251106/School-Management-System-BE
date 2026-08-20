@@ -16,6 +16,7 @@ import com.sse.app.common.Ids;
 import com.sse.app.event.DomainEventPublisher;
 import com.sse.app.identity.User;
 import com.sse.app.identity.UserRepository;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -53,7 +54,7 @@ public class EducationPlanningCatalogService {
             StructureService structure,
             UserRepository users,
             DomainEventPublisher events,
-            TeachingAssignmentService teachingAssignments) {
+            @Lazy TeachingAssignmentService teachingAssignments) {
         this.programs = programs;
         this.programSubjects = programSubjects;
         this.combinations = combinations;
