@@ -3,6 +3,7 @@ package com.sse.app.academic.structure;
 import jakarta.validation.constraints.NotBlank;
 
 import java.time.LocalDate;
+import java.util.List;
 
 /** Request DTO cho phân hệ cơ cấu đào tạo (A2). */
 public final class StructureDtos {
@@ -49,4 +50,17 @@ public final class StructureDtos {
     public record UpdateClassRequest(
             @NotBlank String code, String name, @NotBlank String gradeLevel,
             String homeroomTeacherId, String homeRoomId, Integer maxStudents) {}
+
+    public record ClassCountPlanRequest(
+            @NotBlank String academicYearId,
+            Integer grade10Count, Integer grade11Count, Integer grade12Count) {}
+
+    public record ClassCountPlanRow(
+            String gradeLevel, int currentCount, int targetCount,
+            List<String> classesToCreate, List<String> classesToReactivate,
+            List<String> classesToDeactivate, List<String> blockingReasons) {}
+
+    public record ClassCountPlanResponse(
+            String academicYearId, boolean applicable,
+            List<ClassCountPlanRow> grades) {}
 }

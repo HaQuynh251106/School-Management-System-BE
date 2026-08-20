@@ -75,6 +75,10 @@ public class TeachingAssignmentService {
                 .toList();
     }
 
+    public boolean hasActiveAssignmentsForClass(String classId) {
+        return !assignments.findByClassIdAndStatus(classId, "ACTIVE").isEmpty();
+    }
+
     @Transactional
     public TeachingAssignmentDto create(CreateTeachingAssignmentRequest request) {
         String status = normalizeStatus(request.status());

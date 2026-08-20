@@ -1159,6 +1159,8 @@ public class ExamScheduleService {
                 .filter(java.util.Objects::nonNull).distinct().toList();
         events.publish("academic.exam_schedule.published", actorId, "exam_period", period.getId(),
                 Map.of("periodId", period.getId(), "periodName", period.getName(),
+                        "versionNo", version.getVersionNo(),
+                        "updated", version.getBasedOnVersionId() != null,
                         "studentIds", studentIds, "teacherIds", teacherIds));
     }
 

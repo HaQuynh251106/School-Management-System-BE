@@ -198,6 +198,43 @@ class NotificationServiceTest {
     }
 
     @Test
+    void updatedExamScheduleEmailsStudentsAndParentsOnceAndNotifiesTeacherInApp() {
+        stubDeliverySaves();
+        when(users.parentIdsOf("student-1")).thenReturn(List.of("parent-1"));
+        when(users.parentIdsOf("student-2")).thenReturn(List.of("parent-1"));
+
+        service.handleDomainEvent(DomainEvent.of(
+                "academic.exam_schedule.published", "admin-1",
+                "exam_period", "exam-period-1",
+                Map.of("periodName", "Cuối học kỳ 1",
+                        "updated", true,
+                        "studentIds", List.of("student-1", "student-2"),
+                        "teacherIds", List.of("teacher-1"))));
+
+        ArgumentCaptor<Notification> notificationCaptor =
+                ArgumentCaptor.forClass(Notification.class);
+        verify(notifications, org.mockito.Mockito.times(4))
+                .save(notificationCaptor.capture());
+        assertEquals(List.of("student-1", "student-2", "parent-1", "teacher-1"),
+                notificationCaptor.getAllValues().stream()
+                        .map(Notification::getRecipientId).toList());
+        assertTrue(notificationCaptor.getAllValues().stream()
+                .allMatch(item -> item.getTitle().contains("cập nhật")));
+
+        ArgumentCaptor<String> emailRecipient = ArgumentCaptor.forClass(String.class);
+        verify(channelDispatcher, org.mockito.Mockito.times(3)).dispatch(
+                emailRecipient.capture(),
+                org.mockito.ArgumentMatchers.eq("EXAM"),
+                org.mockito.ArgumentMatchers.eq("EMAIL"),
+                anyString(), anyString(),
+                org.mockito.ArgumentMatchers.eq("EXAM_PERIOD"),
+                org.mockito.ArgumentMatchers.eq("exam-period-1"),
+                anyString(), anyString());
+        assertEquals(List.of("student-1", "student-2", "parent-1"),
+                emailRecipient.getAllValues());
+    }
+
+    @Test
     void approvedMakeupNotifiesTeacherStudentAndParent() {
         stubDeliverySaves();
         UserDto student = new UserDto(

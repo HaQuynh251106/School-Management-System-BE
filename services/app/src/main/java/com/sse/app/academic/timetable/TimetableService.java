@@ -162,6 +162,10 @@ public class TimetableService {
         return slots.findAll();
     }
 
+    public boolean hasPublishedSlotsForClass(String classId) {
+        return slots.existsByClassId(classId);
+    }
+
     public void seedSlots(List<TimetableSlot> list) {
         slots.saveAll(list);
     }
