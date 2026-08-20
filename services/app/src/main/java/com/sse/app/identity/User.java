@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import lombok.*;
 
 import java.time.Instant;
+import java.time.LocalDate;
 
 /** Tài khoản người dùng cho cả 4 vai trò (ADMIN/TEACHER/STUDENT/PARENT). */
 @Entity
@@ -62,6 +63,18 @@ public class User {
     private String studentCode;
     private String classId;
     private String className;
+
+    // Student profile. Optional values are rendered as "Chưa cập nhật" by clients.
+    private LocalDate dateOfBirth;
+    private String gender;
+    private String placeOfBirth;
+    private String ethnicity;
+    private String nationality;
+    @Column(length = 1000)
+    private String address;
+    private LocalDate enrollmentDate;
+    private String guardianName;
+    private String guardianPhone;
 
     private Instant createdAt;
     private Instant updatedAt;

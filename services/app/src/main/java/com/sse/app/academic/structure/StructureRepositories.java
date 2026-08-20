@@ -25,7 +25,7 @@ interface SchoolClassRepository extends JpaRepository<SchoolClass, String> {
     List<SchoolClass> findByGradeLevel(String gradeLevel);
     List<SchoolClass> findByHomeroomTeacherId(String homeroomTeacherId);
     Optional<SchoolClass> findByAcademicYearIdAndCode(String academicYearId, String code);
-    Optional<SchoolClass> findByAcademicYearIdAndHomeroomTeacherId(
+    List<SchoolClass> findByAcademicYearIdAndHomeroomTeacherId(
             String academicYearId, String homeroomTeacherId);
     Optional<SchoolClass> findByHomeRoomId(String homeRoomId);
     long countByAcademicYearIdAndGradeLevel(String academicYearId, String gradeLevel);

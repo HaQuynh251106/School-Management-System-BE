@@ -6,7 +6,10 @@ import com.sse.app.academic.planning.EducationPlanningCatalogDtos.CombinationReq
 import com.sse.app.academic.planning.EducationPlanningCatalogDtos.ProgramRequest;
 import com.sse.app.academic.planning.EducationPlanningCatalogDtos.ProgramSubjectRequest;
 import com.sse.app.academic.planning.EducationPlanningCatalogDtos.TeacherCapabilityRequest;
+import com.sse.app.academic.planning.EducationPlanningCatalogDtos.AutoConfigureProgramResult;
 import com.sse.app.academic.structure.SchoolClass;
+import com.sse.app.academic.structure.Subject;
+import com.sse.app.academic.teaching.TeachingAssignmentService;
 import com.sse.app.academic.structure.StructureService;
 import com.sse.app.common.ApiException;
 import com.sse.app.common.Ids;
@@ -38,6 +41,7 @@ public class EducationPlanningCatalogService {
     private final StructureService structure;
     private final UserRepository users;
     private final DomainEventPublisher events;
+    private final TeachingAssignmentService teachingAssignments;
 
     public EducationPlanningCatalogService(
             EducationProgramRepository programs,
@@ -48,7 +52,8 @@ public class EducationPlanningCatalogService {
             TeacherSubjectCapabilityRepository capabilities,
             StructureService structure,
             UserRepository users,
-            DomainEventPublisher events) {
+            DomainEventPublisher events,
+            TeachingAssignmentService teachingAssignments) {
         this.programs = programs;
         this.programSubjects = programSubjects;
         this.combinations = combinations;
@@ -58,6 +63,7 @@ public class EducationPlanningCatalogService {
         this.structure = structure;
         this.users = users;
         this.events = events;
+        this.teachingAssignments = teachingAssignments;
     }
 
     public List<EducationProgram> listPrograms() {
@@ -89,6 +95,16 @@ public class EducationPlanningCatalogService {
         row.setDescription(blankToNull(request.description()));
         row.setUpdatedAt(now);
         if ("ACTIVE".equals(status)) {
+            List<String> missingGrades = List.of("K10", "K11", "K12").stream()
+                    .filter(grade -> programSubjects
+                            .findByProgramIdAndGradeLevelOrderBySubjectIdAsc(row.getId(), grade)
+                            .isEmpty())
+                    .toList();
+            if (!missingGrades.isEmpty()) {
+                throw ApiException.conflict("Chương trình chưa cấu hình môn và số tiết cho "
+                        + String.join(", ", missingGrades)
+                        + ". Hãy dùng Tự động cấu hình trước khi áp dụng.");
+            }
             if (!previousActive.isEmpty()) {
                 previousActive.forEach(active -> {
                     active.setStatus("ARCHIVED");
@@ -142,6 +158,108 @@ public class EducationPlanningCatalogService {
         row.setRequired(request.required());
         row.setNotes(blankToNull(request.notes()));
         return programSubjects.save(row);
+    }
+
+    @Transactional
+    public void deleteProgramSubject(String programId, String id) {
+        EducationProgram program = getProgram(programId);
+        if (!"DRAFT".equals(program.getStatus())) {
+            throw ApiException.conflict("Chỉ chương trình bản nháp mới được xóa môn");
+        }
+        EducationProgramSubject row = programSubjects.findById(id)
+                .filter(item -> programId.equals(item.getProgramId()))
+                .orElseThrow(() -> ApiException.notFound("Môn trong chương trình"));
+        programSubjects.delete(row);
+    }
+
+    @Transactional
+    public AutoConfigureProgramResult autoConfigureProgram(String programId, String requestedGrade) {
+        EducationProgram program = getProgram(programId);
+        if (!Set.of("DRAFT", "ACTIVE").contains(program.getStatus())) {
+            throw ApiException.conflict("Chương trình đã lưu trữ không thể tự động cấu hình");
+        }
+        List<String> grades = requestedGrade == null || requestedGrade.isBlank()
+                ? List.of("K10", "K11", "K12")
+                : List.of(normalizeGrade(requestedGrade));
+        int created = 0;
+        for (String grade : grades) {
+            for (Subject subject : structure.listSubjects()) {
+                if (!subject.isActive() || "OPTIONAL".equals(subject.getSubjectType())
+                        || "SPECIALIZED".equals(subject.getSubjectType())) continue;
+                if (programSubjects.findByProgramIdAndGradeLevelAndSubjectId(
+                        programId, grade, subject.getId()).isPresent()) continue;
+                boolean activity = "EDUCATIONAL_ACTIVITY".equals(subject.getSubjectType());
+                int semester1 = activity ? 18 : 35;
+                int semester2 = activity ? 17 : 35;
+                programSubjects.save(EducationProgramSubject.builder()
+                        .id(Ids.gen("program-subject"))
+                        .programId(programId)
+                        .gradeLevel(grade)
+                        .subjectId(subject.getId())
+                        .subjectType(activity ? "EDUCATIONAL_ACTIVITY" : "MANDATORY")
+                        .semester1Periods(semester1)
+                        .semester2Periods(semester2)
+                        .annualPeriods(semester1 + semester2)
+                        .weeklyPeriods(activity ? 1 : 2)
+                        .required(true)
+                        .notes("Hệ thống đề xuất; nhà trường có thể điều chỉnh trước khi áp dụng")
+                        .build());
+                created++;
+            }
+        }
+        return new AutoConfigureProgramResult(created, grades);
+    }
+
+    @Transactional
+    public EducationPlanningCatalogDtos.AutoConfigureTeachersResult autoConfigureTeachers() {
+        int configured = 0;
+        List<Subject> schoolSubjects = structure.listSubjects();
+        for (User teacher : users.findByRoleAndStatusNot("TEACHER", "DELETED").stream()
+                .filter(item -> "ACTIVE".equals(item.getStatus())).toList()) {
+            Subject match = schoolSubjects.stream()
+                    .filter(subject -> specialtyMatches(teacher.getMainSubject(), subject))
+                    .findFirst().orElse(null);
+            if (match == null) continue;
+            capabilities.findByTeacherIdAndActiveTrueOrderBySubjectIdAsc(teacher.getId())
+                    .forEach(row -> {
+                        if (!row.getSubjectId().equals(match.getId())) {
+                            row.setActive(false);
+                            capabilities.save(row);
+                        }
+                    });
+            TeacherSubjectCapability capability = capabilities
+                    .findByTeacherIdAndSubjectId(teacher.getId(), match.getId())
+                    .orElseGet(() -> TeacherSubjectCapability.builder()
+                            .id(Ids.gen("teacher-subject"))
+                            .teacherId(teacher.getId()).subjectId(match.getId())
+                            .createdAt(Instant.now()).build());
+            capability.setActive(true);
+            capability.setPrimarySubject(true);
+            capabilities.save(capability);
+            configured++;
+        }
+        int homeroomAdjusted = structure.autoAssignHomeroomTeachers()
+                + teachingAssignments.rebalanceHomeroomTeachersForFixedPeriods();
+        int rebalanced = teachingAssignments.rebalanceActiveAssignmentsBySpecialty();
+        return new EducationPlanningCatalogDtos.AutoConfigureTeachersResult(
+                configured, homeroomAdjusted, rebalanced);
+    }
+
+    private boolean specialtyMatches(String specialtyValue, Subject subject) {
+        String specialty = normalizeForMatch(specialtyValue);
+        String id = normalizeForMatch(subject.getId());
+        String code = normalizeForMatch(subject.getCode());
+        String name = normalizeForMatch(subject.getName());
+        return !specialty.isBlank() && (specialty.equals(id) || specialty.equals(code)
+                || specialty.equals(name) || (specialty.length() >= 3 && name.contains(specialty))
+                || (name.length() >= 3 && specialty.contains(name)));
+    }
+
+    private String normalizeForMatch(String value) {
+        if (value == null) return "";
+        return java.text.Normalizer.normalize(value, java.text.Normalizer.Form.NFD)
+                .replaceAll("\\p{M}+", "").replace('đ', 'd').replace('Đ', 'D')
+                .toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "").trim();
     }
 
     public List<CombinationDetail> listCombinations(String academicYearId, String gradeLevel) {

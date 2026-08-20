@@ -191,7 +191,11 @@ public class DataSeeder {
                 String code = grade + "A" + number;
                 classes.add(SchoolClass.builder().id("c-" + code.toLowerCase()).code(code).name("Lop " + code)
                         .gradeLevel("K" + grade).academicYearId(YEAR_ID)
-                        .homeroomTeacherId(TEACHERS.get(classIndex % TEACHERS.size()).id())
+                        // Keep the one-class-per-homeroom-teacher invariant. The
+                        // remaining classes are assigned from the full teacher
+                        // roster by the academic setup workflow.
+                        .homeroomTeacherId(classIndex < TEACHERS.size()
+                                ? TEACHERS.get(classIndex).id() : null)
                         .studentCount(studentCount(code))
                         .maxStudents(45).expectedStudentCount(30).status("ACTIVE").build());
                 classIndex++;

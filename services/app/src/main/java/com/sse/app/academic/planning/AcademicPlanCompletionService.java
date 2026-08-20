@@ -754,6 +754,33 @@ public class AcademicPlanCompletionService {
     }
 
     @Transactional
+    public AcademicTrainingPlan approveDirectlyByAdmin(String planId, String actorId) {
+        AcademicTrainingPlan plan = requireStatus(planId,
+                Set.of("DRAFT", "REVISION_REQUIRED", "SUBMITTED"),
+                "Kế hoạch không ở trạng thái có thể công bố");
+        PlanValidationReport report = validate(planId);
+        if (!report.valid()) {
+            throw ApiException.conflict("Kế hoạch còn " + report.errorCount()
+                    + " lỗi bắt buộc; hãy mở phần kiểm tra để xử lý");
+        }
+        String from = plan.getStatus();
+        Instant now = Instant.now();
+        plan.setStatus("APPROVED");
+        plan.setSubmittedAt(plan.getSubmittedAt() == null ? now : plan.getSubmittedAt());
+        plan.setSubmittedBy(plan.getSubmittedBy() == null ? actorId : plan.getSubmittedBy());
+        plan.setReviewedAt(now);
+        plan.setReviewedBy(actorId);
+        plan.setApprovedAt(now);
+        plan.setApprovedBy(actorId);
+        plan.setWorkflowComment("Admin kiểm tra và công bố trực tiếp");
+        plan.setUpdatedAt(now);
+        AcademicTrainingPlan saved = plans.save(plan);
+        record(saved, "ADMIN_APPROVE", from, "APPROVED", actorId,
+                "Admin kiểm tra và công bố trực tiếp");
+        return saved;
+    }
+
+    @Transactional
     public AcademicTrainingPlan archive(String planId, String actorId, String comment) {
         AcademicTrainingPlan plan = requireStatus(planId, Set.of("PUBLISHED", "LOCKED"),
                 "Chỉ kế hoạch đã công bố mới được lưu trữ");
@@ -850,9 +877,12 @@ public class AcademicPlanCompletionService {
         List<SchoolClass> classes = structure.listClasses(plan.getAcademicYearId(), plan.getGradeLevel());
         Map<String, EducationProgramSubject> configBySubject = configured.stream()
                 .collect(Collectors.toMap(EducationProgramSubject::getSubjectId, item -> item));
+        boolean requiresCombination = configured.stream().anyMatch(config ->
+                !config.isRequired() && Set.of("OPTIONAL", "SPECIALIZED")
+                        .contains(config.getSubjectType()));
         for (SchoolClass schoolClass : classes) {
             ClassSubjectCombination combination = classCombinations.findById(schoolClass.getId()).orElse(null);
-            if (combination == null) {
+            if (requiresCombination && combination == null) {
                 error(issues, "CLASS_COMBINATION", "Lớp " + schoolClass.getCode()
                         + " chưa được gán tổ hợp môn", schoolClass.getId());
             }

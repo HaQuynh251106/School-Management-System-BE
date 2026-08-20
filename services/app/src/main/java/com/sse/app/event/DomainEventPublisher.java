@@ -30,8 +30,11 @@ public class DomainEventPublisher {
     public void publish(String name, String actorUserId, String entityType,
                         String entityId, Map<String, Object> payload) {
         DomainEvent event = DomainEvent.of(name, actorUserId, entityType, entityId, payload);
+        // Always notify in-process consumers (notably realtime invalidation).
+        // NotificationEventListener remains explicitly disabled when RabbitMQ is
+        // enabled, so external notification delivery is not duplicated.
+        localPublisher.publishEvent(event);
         if (!rabbitEnabled) {
-            localPublisher.publishEvent(event);
             return;
         }
 

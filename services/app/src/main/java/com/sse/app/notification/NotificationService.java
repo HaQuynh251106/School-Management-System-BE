@@ -6,6 +6,8 @@ import com.sse.app.event.DomainEvent;
 import com.sse.app.identity.UserDto;
 import com.sse.app.identity.UserService;
 import com.sse.app.notification.NotificationDtos.*;
+import com.sse.app.realtime.RealtimeEventHub;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.data.domain.PageRequest;
 import com.sse.app.common.PageResponse;
@@ -29,6 +31,7 @@ public class NotificationService {
     private final UserNotificationPreferenceRepository preferences;
     private final UserService users;
     private final NotificationChannelDispatcher channelDispatcher;
+    private RealtimeEventHub realtime;
 
     public NotificationService(NotificationRepository notifications,
                                NotificationTemplateRepository templates,
@@ -44,6 +47,11 @@ public class NotificationService {
         this.preferences = preferences;
         this.users = users;
         this.channelDispatcher = channelDispatcher;
+    }
+
+    @Autowired
+    void setRealtime(RealtimeEventHub realtime) {
+        this.realtime = realtime;
     }
 
     // ---------- Phát thông báo in-app ----------
@@ -78,6 +86,13 @@ public class NotificationService {
                 .providerResponse("IN_APP persisted")
                 .attemptedAt(Instant.now())
                 .build());
+        if (realtime != null) {
+            realtime.publish(recipientId, "NOTIFICATION", Map.of(
+                    "id", n.getId(),
+                    "type", n.getType(),
+                    "refType", n.getRefType() == null ? "" : n.getRefType(),
+                    "read", false));
+        }
         return n;
     }
 

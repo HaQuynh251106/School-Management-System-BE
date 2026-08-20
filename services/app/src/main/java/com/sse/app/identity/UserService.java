@@ -4,6 +4,7 @@ import com.sse.app.common.ApiException;
 import com.sse.app.common.Ids;
 import com.sse.app.event.DomainEventPublisher;
 import com.sse.app.identity.IdentityDtos.*;
+import com.sse.app.report.AcademicEnrollmentService;
 import org.springframework.http.HttpStatus;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -31,11 +32,13 @@ public class UserService {
     private final RbacService rbac;
     private final PasswordEncoder encoder;
     private final DomainEventPublisher events;
+    private final AcademicEnrollmentService academicEnrollment;
 
     public UserService(UserRepository users, ParentStudentRepository relations,
                        PasswordResetTokenRepository resetTokens, RefreshTokenRepository refreshTokens,
                        LoginHistoryRepository loginHistory, UserDeviceRepository devices,
-                       RbacService rbac, PasswordEncoder encoder, DomainEventPublisher events) {
+                       RbacService rbac, PasswordEncoder encoder, DomainEventPublisher events,
+                       AcademicEnrollmentService academicEnrollment) {
         this.users = users;
         this.relations = relations;
         this.resetTokens = resetTokens;
@@ -45,6 +48,7 @@ public class UserService {
         this.rbac = rbac;
         this.encoder = encoder;
         this.events = events;
+        this.academicEnrollment = academicEnrollment;
     }
 
     // ---------- Tra cứu ----------
@@ -70,7 +74,10 @@ public class UserService {
                 u.getTeacherCode(), u.getMainSubject(), childrenIds,
                 u.isPasswordChangeRequired(), u.getPasswordChangedAt(),
                 u.getDeletedAt(), u.getDeleteReason(), u.getRestoredAt(),
-                new ArrayList<>(rbac.permissionsFor(u.getId())));
+                new ArrayList<>(rbac.permissionsFor(u.getId())),
+                u.getDateOfBirth(), u.getGender(), u.getPlaceOfBirth(),
+                u.getEthnicity(), u.getNationality(), u.getAddress(),
+                u.getEnrollmentDate(), u.getGuardianName(), u.getGuardianPhone());
     }
 
     public UserDto dtoById(String id) {
@@ -319,11 +326,23 @@ public class UserService {
                 .studentCode(studentCode)
                 .classId(r.classId())
                 .className(r.className())
+                .dateOfBirth(r.dateOfBirth())
+                .gender(normalizeGender(r.gender()))
+                .placeOfBirth(blankToNull(r.placeOfBirth()))
+                .ethnicity(blankToNull(r.ethnicity()))
+                .nationality(blankToNull(r.nationality()))
+                .address(blankToNull(r.address()))
+                .enrollmentDate(r.enrollmentDate())
+                .guardianName(blankToNull(r.guardianName()))
+                .guardianPhone(blankToNull(r.guardianPhone()))
                 .createdAt(now)
                 .updatedAt(now)
                 .build();
         User saved = users.save(u);
         rbac.assignPrimaryRole(saved.getId(), saved.getRole(), actorId);
+        if ("STUDENT".equals(saved.getRole())) {
+            academicEnrollment.assignStudentCurrentClass(saved.getId(), saved.getClassId(), actorId);
+        }
         return toDto(saved);
     }
 
@@ -339,8 +358,34 @@ public class UserService {
         if (r.studentCode() != null)u.setStudentCode(r.studentCode());
         if (r.classId() != null)    u.setClassId(r.classId());
         if (r.className() != null)  u.setClassName(r.className());
+        if (r.dateOfBirth() != null) u.setDateOfBirth(r.dateOfBirth());
+        if (r.gender() != null) u.setGender(normalizeGender(r.gender()));
+        if (r.placeOfBirth() != null) u.setPlaceOfBirth(blankToNull(r.placeOfBirth()));
+        if (r.ethnicity() != null) u.setEthnicity(blankToNull(r.ethnicity()));
+        if (r.nationality() != null) u.setNationality(blankToNull(r.nationality()));
+        if (r.address() != null) u.setAddress(blankToNull(r.address()));
+        if (r.enrollmentDate() != null) u.setEnrollmentDate(r.enrollmentDate());
+        if (r.guardianName() != null) u.setGuardianName(blankToNull(r.guardianName()));
+        if (r.guardianPhone() != null) u.setGuardianPhone(blankToNull(r.guardianPhone()));
         u.setUpdatedAt(Instant.now());
-        return toDto(users.save(u));
+        User saved = users.save(u);
+        if ("STUDENT".equals(saved.getRole()) && r.classId() != null) {
+            academicEnrollment.assignStudentCurrentClass(saved.getId(), saved.getClassId(), null);
+        }
+        return toDto(saved);
+    }
+
+    private String normalizeGender(String value) {
+        if (value == null || value.isBlank()) return null;
+        String normalized = value.trim().toUpperCase(Locale.ROOT);
+        if (!Set.of("MALE", "FEMALE", "OTHER").contains(normalized)) {
+            throw ApiException.badRequest("Giới tính chỉ nhận Nam, Nữ hoặc Khác");
+        }
+        return normalized;
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     @Transactional

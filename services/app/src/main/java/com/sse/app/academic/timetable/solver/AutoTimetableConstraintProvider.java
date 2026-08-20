@@ -175,11 +175,17 @@ public class AutoTimetableConstraintProvider implements ConstraintProvider {
         return factory.forEach(AutoLesson.class)
                 .groupBy(AutoLesson::getTeacherId,
                         lesson -> lesson.getTimeslot().getDayOfWeek(),
-                        ConstraintCollectors.count(),
-                        ConstraintCollectors.sum(lesson -> lesson.isPinned() ? 0 : 1))
-                .filter((teacherId, day, count, targetCount) -> targetCount > 0 && count > 5)
+                        ConstraintCollectors.toList())
+                .filter((teacherId, day, lessons) -> lessons.stream()
+                        .anyMatch(lesson -> !lesson.isPinned())
+                        && lessons.size() + lessons.stream()
+                        .mapToInt(AutoLesson::getExistingTeacherLoadOnAssignedDay)
+                        .max().orElse(0) > 5)
                 .penalize(HardSoftScore.ONE_HARD,
-                        (teacherId, day, count, targetCount) -> count - 5)
+                        (teacherId, day, lessons) -> lessons.size()
+                                + lessons.stream()
+                                .mapToInt(AutoLesson::getExistingTeacherLoadOnAssignedDay)
+                                .max().orElse(0) - 5)
                 .asConstraint("Giáo viên không dạy quá 5 tiết mỗi ngày");
     }
 

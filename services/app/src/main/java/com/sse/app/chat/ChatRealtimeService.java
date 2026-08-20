@@ -1,5 +1,7 @@
 package com.sse.app.chat;
 
+import com.sse.app.realtime.RealtimeEventHub;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -22,6 +24,12 @@ public class ChatRealtimeService {
 
     private final Map<String, Map<String, Connection>> connections =
             new ConcurrentHashMap<>();
+    private RealtimeEventHub sharedRealtime;
+
+    @Autowired
+    void setSharedRealtime(RealtimeEventHub sharedRealtime) {
+        this.sharedRealtime = sharedRealtime;
+    }
 
     public SseEmitter connect(String userId, Collection<String> contactIds) {
         String connectionId = UUID.randomUUID().toString();
@@ -53,6 +61,14 @@ public class ChatRealtimeService {
         event.put("recipientId", message.getRecipientId());
         event.put("createdAt", message.getCreatedAt());
         publishTo(Set.of(message.getSenderId(), message.getRecipientId()), event);
+        if (sharedRealtime != null) {
+            Map<String, Object> mobileEvent = Map.of(
+                    "fromUserId", message.getSenderId(),
+                    "toUserId", message.getRecipientId(),
+                    "messageId", message.getId());
+            sharedRealtime.publish(message.getSenderId(), "CHAT", mobileEvent);
+            sharedRealtime.publish(message.getRecipientId(), "CHAT", mobileEvent);
+        }
     }
 
     public void publishRead(String readerId, String otherId, Collection<String> messageIds) {
@@ -64,6 +80,14 @@ public class ChatRealtimeService {
                 "otherId", otherId,
                 "messageIds", List.copyOf(messageIds),
                 "readAt", Instant.now().toString()));
+        if (sharedRealtime != null) {
+            Map<String, Object> mobileEvent = Map.of(
+                    "readByUserId", readerId,
+                    "withUserId", otherId,
+                    "messageIds", List.copyOf(messageIds));
+            sharedRealtime.publish(readerId, "CHAT_READ", mobileEvent);
+            sharedRealtime.publish(otherId, "CHAT_READ", mobileEvent);
+        }
     }
 
     public Set<String> onlineAmong(Collection<String> userIds) {

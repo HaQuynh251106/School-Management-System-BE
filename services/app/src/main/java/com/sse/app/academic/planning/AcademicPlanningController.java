@@ -30,6 +30,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
@@ -86,6 +87,7 @@ public class AcademicPlanningController {
     }
 
     @PostMapping("/{id}/publish")
+    @Transactional
     public AcademicTrainingPlan publish(@PathVariable String id) {
         CurrentUser actor = requirePlanManager();
         AcademicPlanningDtos.PlanValidationReport validation = completion.validate(id);
@@ -93,6 +95,12 @@ public class AcademicPlanningController {
             throw com.sse.app.common.ApiException.conflict(
                     "Kế hoạch còn " + validation.errorCount()
                             + " lỗi bắt buộc và chưa thể công bố");
+        }
+        AcademicTrainingPlan plan = planning.getPlan(id);
+        if ("ADMIN".equals(actor.role())
+                && java.util.Set.of("DRAFT", "REVISION_REQUIRED", "SUBMITTED")
+                .contains(plan.getStatus())) {
+            completion.approveDirectlyByAdmin(id, actor.id());
         }
         AcademicTrainingPlan result = planning.publishPlan(id, actor.id());
         completion.recordPublished(id, actor.id());

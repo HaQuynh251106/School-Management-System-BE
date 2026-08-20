@@ -2,6 +2,7 @@ package com.sse.app.identity;
 
 import com.sse.app.common.ApiException;
 import com.sse.app.event.DomainEventPublisher;
+import com.sse.app.report.AcademicEnrollmentService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -33,13 +34,14 @@ class UserServiceSecurityTest {
     @Mock private RbacService rbac;
     @Mock private PasswordEncoder encoder;
     @Mock private DomainEventPublisher events;
+    @Mock private AcademicEnrollmentService academicEnrollment;
 
     private UserService service;
 
     @BeforeEach
     void setUp() {
         service = new UserService(users, relations, resetTokens, refreshTokens,
-                loginHistory, devices, rbac, encoder, events);
+                loginHistory, devices, rbac, encoder, events, academicEnrollment);
     }
 
     @Test

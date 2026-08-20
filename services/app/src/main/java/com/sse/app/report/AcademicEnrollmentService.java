@@ -196,6 +196,15 @@ public class AcademicEnrollmentService {
     }
 
     @Transactional
+    public void assignStudentCurrentClass(String studentId, String classId, String actorId) {
+        if (classId == null || classId.isBlank()) return;
+        SchoolClass target = structure.getClass(classId);
+        assign(new BulkEnrollmentRequest(target.getAcademicYearId(), target.getId(),
+                List.of(studentId), "Phân lớp cùng hồ sơ học sinh"),
+                actorId == null ? "SYSTEM" : actorId);
+    }
+
+    @Transactional
     public void remove(String id, String reason, String actorId) {
         if (reason == null || reason.trim().length() < 5) {
             throw ApiException.badRequest("Lý do bỏ phân lớp phải có ít nhất 5 ký tự");

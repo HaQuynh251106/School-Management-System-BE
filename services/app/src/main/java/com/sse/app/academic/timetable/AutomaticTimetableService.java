@@ -172,6 +172,10 @@ public class AutomaticTimetableService {
         List<TeacherClassSubject> targetAssignments = assignments
                 .findBySemesterIdAndStatus(semester.getId(), "ACTIVE").stream()
                 .filter(item -> targetClassIds.contains(item.getClassId()))
+                // These school-wide fixed activities are materialized below;
+                // they are intentionally not curriculum-plan subjects.
+                .filter(item -> !Set.of("sj-flag", "sj-homeroom")
+                        .contains(item.getSubjectId()))
                 .toList();
         validateAssignments(targetClasses, targetAssignments, sourceSnapshots,
                 days.size() * maxDaily, semester.getId());
@@ -294,12 +298,51 @@ public class AutomaticTimetableService {
                     .map(SchoolClass::getId)
                     .filter(id -> !targetClassIds.contains(id))
                     .collect(Collectors.toSet());
-            for (TimetableSlot slot : liveSlots.findBySemesterId(semester.getId())) {
-                if (!outside.contains(slot.getClassId())) continue;
+            List<TimetableSlot> outsideSlots = liveSlots.findBySemesterId(semester.getId())
+                    .stream().filter(slot -> outside.contains(slot.getClassId())).toList();
+            Map<String, Set<String>> occupiedByTeacher = new HashMap<>();
+            outsideSlots.forEach(slot -> occupiedByTeacher
+                    .computeIfAbsent(slot.getTeacherId(), ignored -> new HashSet<>())
+                    .add(slot.getDayOfWeek() + "-" + slot.getPeriodNo()));
+            Map<String, Map<String, Integer>> existingDailyLoad = new HashMap<>();
+            outsideSlots.forEach(slot -> {
+                AutoRoom occupiedRoom = roomByCode.get(slot.getRoomCode());
+                // Specialized-room rows are represented as pinned lessons below
+                // and are therefore already counted by the solver.
+                if (occupiedRoom != null && !"GENERAL".equals(occupiedRoom.getRoomType())) return;
+                existingDailyLoad.computeIfAbsent(slot.getTeacherId(), ignored -> new HashMap<>())
+                        .merge(slot.getDayOfWeek(), 1, Integer::sum);
+            });
+            for (AutoLesson lesson : lessons) {
+                lesson.setExistingTeacherDailyLoad(existingDailyLoad.get(lesson.getTeacherId()));
+                Set<String> occupied = occupiedByTeacher.getOrDefault(
+                        lesson.getTeacherId(), Set.of());
+                if (lesson.isPinned()) {
+                    if (occupied.contains(lesson.getTimeslot().getId())) {
+                        throw ApiException.conflict("Giáo viên " + lesson.getTeacherName()
+                                + " đã có lịch ngoài phạm vi tại "
+                                + lesson.getTimeslot().getDayOfWeek() + " tiết "
+                                + lesson.getTimeslot().getPeriodNo()
+                                + "; hãy chạy cân bằng phân công giáo viên trước");
+                    }
+                    continue;
+                }
+                lesson.setTimeslotRange(lesson.getTimeslotRange().stream()
+                        .filter(timeslot -> !occupied.contains(timeslot.getId()))
+                        .toList());
+                if (lesson.getTimeslotRange().isEmpty()) {
+                    throw ApiException.conflict("Giáo viên " + lesson.getTeacherName()
+                            + " không còn khung giờ trống cho " + lesson.getSubjectName());
+                }
+            }
+            for (TimetableSlot slot : outsideSlots) {
                 AutoTimeslot timeslot = timeslotByKey.get(
                         slot.getDayOfWeek() + "-" + slot.getPeriodNo());
                 AutoRoom room = roomByCode.get(slot.getRoomCode());
-                if (timeslot == null || room == null) continue;
+                // General rooms are class-owned, so only shared specialized
+                // rooms need a pinned entity in the scoped solver.
+                if (timeslot == null || room == null
+                        || "GENERAL".equals(room.getRoomType())) continue;
                 AutoLesson pinned = new AutoLesson(
                         "pinned-" + slot.getId(), "pinned-" + slot.getId(),
                         slot.getClassId(), slot.getSubjectId(), slot.getSubjectName(),
@@ -429,7 +472,9 @@ public class AutomaticTimetableService {
                 .collect(Collectors.toSet());
         List<TeacherClassSubject> targetAssignments = assignments
                 .findBySemesterIdAndStatus(semester.getId(), "ACTIVE").stream()
-                .filter(item -> classIds.contains(item.getClassId())).toList();
+                .filter(item -> classIds.contains(item.getClassId()))
+                .filter(item -> !Set.of("sj-flag", "sj-homeroom").contains(item.getSubjectId()))
+                .toList();
         Map<String, SchoolClass> classById = targetClasses.stream()
                 .collect(Collectors.toMap(SchoolClass::getId, Function.identity()));
         Set<String> sourceGrades = sourceSnapshots.stream()
@@ -441,7 +486,8 @@ public class AutomaticTimetableService {
             staffingAnalysis.subjects().stream()
                     .filter(item -> item.shortage() > 0)
                     .forEach(item -> issues.add(new ScheduleIssue(
-                            "ERROR", "TEACHER_STAFFING_SHORTAGE",
+                            item.qualifiedTeacherCount() >= (item.selectedWeeklyPeriods() + 24) / 25
+                                    ? "WARNING" : "ERROR", "TEACHER_STAFFING_SHORTAGE",
                             item.subjectName() + " thiếu " + item.shortage()
                                     + " giáo viên đúng chuyên môn để xếp đủ lịch (cần "
                                     + item.minimumTeachersForYear() + ", hiện có "
@@ -662,7 +708,10 @@ public class AutomaticTimetableService {
                 .collect(Collectors.toSet());
         List<TeacherClassSubject> required = assignments
                 .findBySemesterIdAndStatus(schedule.getSemesterId(), "ACTIVE").stream()
-                .filter(item -> classIds.contains(item.getClassId())).toList();
+                .filter(item -> classIds.contains(item.getClassId()))
+                .filter(item -> !Set.of("sj-flag", "sj-homeroom")
+                        .contains(item.getSubjectId()))
+                .toList();
         Map<String, TeacherClassSubject> assignmentById = required.stream()
                 .collect(Collectors.toMap(TeacherClassSubject::getId,
                         Function.identity()));

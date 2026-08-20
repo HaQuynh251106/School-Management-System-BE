@@ -94,18 +94,12 @@ public class DashboardService {
         } else if (me.isTeacher()) {
             List<TimetableSlot> todaySlots = timetable.list(null, me.id(), null, null).stream().filter(slot -> dayCode(LocalDate.now().getDayOfWeek()).equals(slot.getDayOfWeek())).toList();
             long markedSlots = attendance.allRecords().stream().filter(row -> LocalDate.now().equals(row.getDate())).map(AttendanceRecord::getSlotId).distinct().filter(id -> todaySlots.stream().anyMatch(slot -> slot.getId().equals(id))).count();
-            long incompleteGradeBooks = teachingAssignments.findByTeacherIdAndStatus(me.id(), "ACTIVE").stream()
-                    .collect(Collectors.toMap(
-                            scope -> scope.getClassId() + "|" + scope.getSubjectId() + "|" + scope.getSemesterId(),
-                            Function.identity(), (left, right) -> left))
-                    .values().stream()
-                    .mapToLong(scope -> grades.completeness(
-                            scope.getClassId(), scope.getSubjectId(), scope.getSemesterId(),
-                            me.id(), false).incompleteStudents())
-                    .sum();
+            long activeGradeBooks = teachingAssignments.findByTeacherIdAndStatus(me.id(), "ACTIVE").stream()
+                    .map(scope -> scope.getClassId() + "|" + scope.getSubjectId() + "|" + scope.getSemesterId())
+                    .distinct().count();
             rows.add(shortcut("attendance", "Tiết hôm nay chưa điểm danh", Math.max(0, todaySlots.size() - markedSlots), "B3", "date=today", "orange"));
             rows.add(shortcut("assignments", "Bài tập chưa chấm", ungradedSubmissions(me.id()), "B5", "status=SUBMITTED", "orange"));
-            rows.add(shortcut("grades", "Học sinh còn thiếu đầu điểm", incompleteGradeBooks, "B4", "completeness=incomplete", "blue"));
+            rows.add(shortcut("grades", "Sổ điểm đang phụ trách", activeGradeBooks, "B4", "scope=assigned", "blue"));
         } else if (me.isStudent()) {
             User student = users.findById(me.id()).orElseThrow();
             Map<String, AssignmentSubmission> submitted = assignments.submissionsByStudent(me.id()).stream().collect(Collectors.toMap(AssignmentSubmission::getAssignmentId, Function.identity(), (left, right) -> left));
@@ -199,6 +193,9 @@ public class DashboardService {
         Map<String, User> students = users.findAll().stream()
                 .filter(u -> "STUDENT".equals(u.getRole()) && classIds.contains(u.getClassId()))
                 .collect(Collectors.toMap(User::getId, Function.identity()));
+        List<Grade> scopedGrades = grades.allGrades().stream()
+                .filter(g -> students.containsKey(g.getStudentId()) && subjectIds.contains(g.getSubjectId()))
+                .toList();
         List<Assignment> ownAssignments = assignments.list(null, teacherId, null, false);
         long ungraded = ownAssignments.stream()
                 .flatMap(a -> assignments.submissionsOf(a.getId()).stream())
@@ -226,10 +223,8 @@ public class DashboardService {
         }).toList();
 
         List<DashboardDatum> classScores = classIds.stream().map(classId -> {
-            double avg = average(grades.allGrades().stream()
-                    .filter(g -> students.containsKey(g.getStudentId())
-                            && classId.equals(students.get(g.getStudentId()).getClassId())
-                            && subjectIds.contains(g.getSubjectId()))
+            double avg = average(scopedGrades.stream()
+                    .filter(g -> classId.equals(students.get(g.getStudentId()).getClassId()))
                     .map(Grade::getScore).toList());
             SchoolClass schoolClass = classes.get(classId);
             return datum(schoolClass == null ? classId : schoolClass.getCode(), avg);
@@ -237,8 +232,7 @@ public class DashboardService {
         List<DashboardDatum> work = List.of(
                 datum("Bài tập đã giao", ownAssignments.size()),
                 datum("Bài đã nộp", ownAssignments.stream().mapToLong(a -> assignments.submissionsOf(a.getId()).size()).sum()),
-                datum("Đầu điểm đã nhập", grades.allGrades().stream()
-                        .filter(g -> students.containsKey(g.getStudentId()) && subjectIds.contains(g.getSubjectId())).count()),
+                datum("Đầu điểm đã nhập", scopedGrades.size()),
                 datum("Tiết đã xếp", timetable.list(null, teacherId, null, null).size())
         );
 

@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -194,10 +195,13 @@ public class StructureService {
             throw ApiException.conflict("Mã lớp đã tồn tại trong năm học đã chọn");
         }
         ensureTeacherAvailableForHomeroom(year.getId(), null, homeroomTeacherId);
-        Integer capacity = normalizeClassCapacity(r.maxStudents());
-        Room homeRoom = r.homeRoomId() == null || r.homeRoomId().isBlank()
-                ? ensureHomeRoom(year, code, capacity)
-                : requireAvailableHomeRoom(r.homeRoomId(), null, 0);
+        Room selectedRoom = r.homeRoomId() == null || r.homeRoomId().isBlank()
+                ? null : requireAvailableHomeRoom(r.homeRoomId(), null, 0);
+        Integer capacity = normalizeClassCapacity(r.maxStudents() == null && selectedRoom != null
+                ? selectedRoom.getCapacity() : r.maxStudents());
+        Room homeRoom = selectedRoom == null
+                ? ensureHomeRoom(year, code, capacity) : selectedRoom;
+        validateClassFitsRoom(capacity, homeRoom);
         return classes.save(SchoolClass.builder()
                 .id(orGen(r.id(), "c")).code(code)
                 .name(blankToDefault(r.name(), "Lớp " + code))
@@ -223,14 +227,25 @@ public class StructureService {
         schoolClass.setCode(code);
         schoolClass.setName(blankToDefault(r.name(), "Lớp " + code));
         schoolClass.setGradeLevel(gradeLevel);
-        schoolClass.setMaxStudents(normalizeClassCapacity(r.maxStudents()));
-        if (r.homeRoomId() != null && !r.homeRoomId().isBlank()) {
-            schoolClass.setHomeRoomId(requireAvailableHomeRoom(
-                    r.homeRoomId(), schoolClass.getId(), schoolClass.getStudentCount()).getId());
+        int capacity = normalizeClassCapacity(r.maxStudents());
+        if (capacity < schoolClass.getStudentCount()) {
+            throw ApiException.conflict("Sĩ số tối đa không thể nhỏ hơn "
+                    + schoolClass.getStudentCount() + " học sinh đang có trong lớp");
         }
+        if (r.homeRoomId() != null && !r.homeRoomId().isBlank()) {
+            Room room = requireAvailableHomeRoom(
+                    r.homeRoomId(), schoolClass.getId(), schoolClass.getStudentCount());
+            validateClassFitsRoom(capacity, room);
+            schoolClass.setHomeRoomId(room.getId());
+        } else if (schoolClass.getHomeRoomId() != null) {
+            validateClassFitsRoom(capacity, getRoom(schoolClass.getHomeRoomId()));
+        }
+        schoolClass.setMaxStudents(capacity);
         String teacherId = validHomeroomTeacherId(r.homeroomTeacherId());
-        ensureTeacherAvailableForHomeroom(
-                schoolClass.getAcademicYearId(), schoolClass.getId(), teacherId);
+        if (!java.util.Objects.equals(teacherId, schoolClass.getHomeroomTeacherId())) {
+            ensureTeacherAvailableForHomeroom(
+                    schoolClass.getAcademicYearId(), schoolClass.getId(), teacherId);
+        }
         schoolClass.setHomeroomTeacherId(teacherId);
         return classes.save(schoolClass);
     }
@@ -240,6 +255,10 @@ public class StructureService {
         SchoolClass schoolClass = getClass(classId);
         Room room = requireAvailableHomeRoom(
                 roomId, schoolClass.getId(), schoolClass.getStudentCount());
+        int roomCapacity = room.getCapacity() == null ? 100 : room.getCapacity();
+        if (schoolClass.getMaxStudents() == null || schoolClass.getMaxStudents() > roomCapacity) {
+            schoolClass.setMaxStudents(roomCapacity);
+        }
         schoolClass.setHomeRoomId(room.getId());
         return classes.save(schoolClass);
     }
@@ -313,12 +332,58 @@ public class StructureService {
         return created;
     }
 
+    /**
+     * Repairs historical duplicate homeroom assignments and fills empty classes
+     * with active teachers. A teacher may lead at most one class in one year.
+     */
+    @Transactional
+    public int autoAssignHomeroomTeachers() {
+        List<User> activeTeachers = users.findByRoleAndStatusNot("TEACHER", "DELETED").stream()
+                .filter(item -> "ACTIVE".equals(item.getStatus()))
+                .sorted(Comparator.comparing(User::getId))
+                .toList();
+        int changed = 0;
+        for (AcademicYear year : years.findAll().stream()
+                .filter(item -> "ACTIVE".equals(item.getStatus()))
+                .toList()) {
+            List<SchoolClass> yearClasses = classes.findByAcademicYearId(year.getId()).stream()
+                    .filter(item -> item.getStatus() == null || "ACTIVE".equals(item.getStatus()))
+                    .sorted(Comparator.comparing(SchoolClass::getCode))
+                    .toList();
+            Set<String> activeTeacherIds = activeTeachers.stream()
+                    .map(User::getId).collect(Collectors.toSet());
+            Set<String> used = new HashSet<>();
+            List<SchoolClass> needsTeacher = new java.util.ArrayList<>();
+            for (SchoolClass schoolClass : yearClasses) {
+                String teacherId = schoolClass.getHomeroomTeacherId();
+                if (teacherId != null && activeTeacherIds.contains(teacherId) && used.add(teacherId)) {
+                    continue;
+                }
+                if (teacherId != null) {
+                    schoolClass.setHomeroomTeacherId(null);
+                    changed++;
+                }
+                needsTeacher.add(schoolClass);
+            }
+            List<User> available = activeTeachers.stream()
+                    .filter(item -> !used.contains(item.getId()))
+                    .toList();
+            for (int index = 0; index < needsTeacher.size() && index < available.size(); index++) {
+                needsTeacher.get(index).setHomeroomTeacherId(available.get(index).getId());
+                used.add(available.get(index).getId());
+                changed++;
+            }
+            classes.saveAll(yearClasses);
+        }
+        return changed;
+    }
+
     private Room ensureHomeRoom(AcademicYear year, String classCode, int capacity) {
         String roomCode = "G0-" + year.getCode().replace("-", "") + "-" + classCode;
         return rooms.findByCodeIgnoreCase(roomCode).orElseGet(() -> rooms.save(Room.builder()
                 .id(Ids.gen("room")).code(roomCode)
                 .name("Phòng lớp " + classCode)
-                .capacity(Math.max(40, capacity))
+                .capacity(capacity)
                 .roomType("GENERAL").active(true).build()));
     }
 
@@ -347,6 +412,14 @@ public class StructureService {
             throw ApiException.badRequest("Sức chứa lớp phải từ 1 đến 100 học sinh");
         }
         return value;
+    }
+
+    private void validateClassFitsRoom(int classCapacity, Room room) {
+        if (room.getCapacity() != null && classCapacity > room.getCapacity()) {
+            throw ApiException.badRequest("Sĩ số tối đa của lớp (" + classCapacity
+                    + ") không được vượt sức chứa phòng " + room.getCode()
+                    + " (" + room.getCapacity() + ")");
+        }
     }
 
     @Transactional
@@ -453,7 +526,19 @@ public class StructureService {
                 });
         room.setCode(code);
         room.setName(blankToDefault(r.name(), code));
-        room.setCapacity(normalizeRoomCapacity(r.capacity()));
+        int capacity = normalizeRoomCapacity(r.capacity());
+        classes.findByHomeRoomId(room.getId()).ifPresent(schoolClass -> {
+            if (capacity < schoolClass.getStudentCount()) {
+                throw ApiException.conflict("Phòng đang chứa lớp " + schoolClass.getCode()
+                        + " có " + schoolClass.getStudentCount() + " học sinh");
+            }
+            if (schoolClass.getMaxStudents() != null
+                    && capacity < schoolClass.getMaxStudents()) {
+                schoolClass.setMaxStudents(capacity);
+                classes.save(schoolClass);
+            }
+        });
+        room.setCapacity(capacity);
         room.setRoomType(normalizeRoomType(r.roomType()));
         room.setActive(r.active() == null || r.active());
         return rooms.save(room);
@@ -615,6 +700,9 @@ public class StructureService {
                     years.save(year);
                     syncSemesterStatuses(year);
                 });
+        // PostgreSQL checks the partial unique index immediately. Persist CLOSED
+        // years before writing the new ACTIVE year in the same transaction.
+        years.flush();
     }
 
     private void syncSemesterStatuses(AcademicYear year) {
@@ -802,7 +890,9 @@ public class StructureService {
             String academicYearId, String currentClassId, String teacherId) {
         if (teacherId == null) return;
         classes.findByAcademicYearIdAndHomeroomTeacherId(academicYearId, teacherId)
+                .stream()
                 .filter(other -> !other.getId().equals(currentClassId))
+                .findFirst()
                 .ifPresent(other -> {
                     throw ApiException.conflict(
                             "Giáo viên đã là GVCN lớp " + other.getCode()

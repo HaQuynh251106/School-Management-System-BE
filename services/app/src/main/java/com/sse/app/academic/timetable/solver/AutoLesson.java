@@ -7,6 +7,7 @@ import ai.timefold.solver.core.api.domain.valuerange.ValueRangeProvider;
 import ai.timefold.solver.core.api.domain.variable.PlanningVariable;
 
 import java.util.List;
+import java.util.Map;
 
 @PlanningEntity
 public class AutoLesson {
@@ -35,6 +36,7 @@ public class AutoLesson {
     private int mainShiftStartPeriod;
     private List<AutoRoom> roomRange;
     private List<AutoTimeslot> timeslotRange;
+    private Map<String, Integer> existingTeacherDailyLoad = Map.of();
 
     @PlanningVariable(valueRangeProviderRefs = "lessonTimeslotRange")
     private AutoTimeslot timeslot;
@@ -114,4 +116,11 @@ public class AutoLesson {
     @ValueRangeProvider(id = "lessonRoomRange")
     public List<AutoRoom> getRoomRange() { return roomRange; }
     public void setRoomRange(List<AutoRoom> roomRange) { this.roomRange = roomRange; }
+    public void setExistingTeacherDailyLoad(Map<String, Integer> values) {
+        this.existingTeacherDailyLoad = values == null ? Map.of() : Map.copyOf(values);
+    }
+    public int getExistingTeacherLoadOnAssignedDay() {
+        return timeslot == null ? 0
+                : existingTeacherDailyLoad.getOrDefault(timeslot.getDayOfWeek(), 0);
+    }
 }

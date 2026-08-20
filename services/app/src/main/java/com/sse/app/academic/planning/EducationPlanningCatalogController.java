@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -90,6 +91,25 @@ public class EducationPlanningCatalogController {
         return result;
     }
 
+    @DeleteMapping("/programs/{programId}/subjects/{id}")
+    public void deleteProgramSubject(@PathVariable String programId, @PathVariable String id) {
+        CurrentUser actor = manager();
+        catalog.deleteProgramSubject(programId, id);
+        record(actor, "DELETE", "education_program_subject", id, "Xóa môn khỏi chương trình nháp");
+    }
+
+    @PostMapping("/programs/{programId}/subjects/auto-configure")
+    public EducationPlanningCatalogDtos.AutoConfigureProgramResult autoConfigureProgram(
+            @PathVariable String programId,
+            @RequestBody(required = false) EducationPlanningCatalogDtos.AutoConfigureProgramRequest request) {
+        CurrentUser actor = manager();
+        var result = catalog.autoConfigureProgram(programId,
+                request == null ? null : request.gradeLevel());
+        record(actor, "AUTO_CONFIGURE", "education_program", programId,
+                "Tạo " + result.created() + " cấu hình môn");
+        return result;
+    }
+
     @GetMapping("/combinations")
     public List<CombinationDetail> combinations(
             @RequestParam String academicYearId, @RequestParam String gradeLevel) {
@@ -142,6 +162,17 @@ public class EducationPlanningCatalogController {
         List<TeacherSubjectCapability> result = catalog.saveTeacherCapabilities(request, actor.id());
         record(actor, "UPDATE", "teacher_subject_capability", teacherId,
                 "Cập nhật " + result.size() + " môn có thể giảng dạy");
+        return result;
+    }
+
+    @PostMapping("/teachers/auto-configure")
+    public EducationPlanningCatalogDtos.AutoConfigureTeachersResult autoConfigureTeachers() {
+        CurrentUser actor = manager();
+        var result = catalog.autoConfigureTeachers();
+        record(actor, "AUTO_CONFIGURE", "teacher_subject_capability", "ACTIVE_TEACHERS",
+                "Cấu hình " + result.capabilitiesConfigured() + " giáo viên; điều chỉnh "
+                        + result.homeroomAssignmentsAdjusted() + " GVCN; cân bằng "
+                        + result.assignmentsRebalanced() + " phân công");
         return result;
     }
 

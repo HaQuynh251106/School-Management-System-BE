@@ -36,7 +36,16 @@ public final class IdentityDtos {
             String studentCode,
             String classId,
             String className,
-            String status
+            String status,
+            java.time.LocalDate dateOfBirth,
+            String gender,
+            String placeOfBirth,
+            String ethnicity,
+            String nationality,
+            String address,
+            java.time.LocalDate enrollmentDate,
+            String guardianName,
+            String guardianPhone
     ) {}
 
     public record UpdateUserRequest(
@@ -48,7 +57,16 @@ public final class IdentityDtos {
             String mainSubject,
             String studentCode,
             String classId,
-            String className
+            String className,
+            java.time.LocalDate dateOfBirth,
+            String gender,
+            String placeOfBirth,
+            String ethnicity,
+            String nationality,
+            String address,
+            java.time.LocalDate enrollmentDate,
+            String guardianName,
+            String guardianPhone
     ) {}
 
     public record AdminResetPasswordRequest(

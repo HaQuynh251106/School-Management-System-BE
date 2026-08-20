@@ -105,6 +105,12 @@ public class AttendanceService {
                 alertRepeatedViolation(rec);
             }
         }
+        if (!saved.isEmpty()) {
+            events.publish("academic.attendance.updated",
+                    actorId == null || actorId.isBlank() ? "system" : actorId,
+                    "attendance_session", req.slotId(),
+                    Map.of("slotId", req.slotId(), "date", req.date().toString()));
+        }
         return saved;
     }
 

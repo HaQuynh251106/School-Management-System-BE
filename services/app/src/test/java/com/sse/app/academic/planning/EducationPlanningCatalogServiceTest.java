@@ -6,6 +6,7 @@ import com.sse.app.academic.structure.SchoolClass;
 import com.sse.app.academic.structure.StructureService;
 import com.sse.app.identity.UserRepository;
 import com.sse.app.event.DomainEventPublisher;
+import com.sse.app.academic.teaching.TeachingAssignmentService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -18,6 +19,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -32,6 +34,7 @@ class EducationPlanningCatalogServiceTest {
     @Mock StructureService structure;
     @Mock UserRepository users;
     @Mock DomainEventPublisher events;
+    @Mock TeachingAssignmentService teachingAssignments;
 
     private EducationPlanningCatalogService service;
 
@@ -39,7 +42,7 @@ class EducationPlanningCatalogServiceTest {
     void setUp() {
         service = new EducationPlanningCatalogService(
                 programs, programSubjects, combinations, combinationSubjects,
-                classCombinations, capabilities, structure, users, events);
+                classCombinations, capabilities, structure, users, events, teachingAssignments);
     }
 
     @Test
@@ -60,6 +63,9 @@ class EducationPlanningCatalogServiceTest {
                 .startYear(2018).status("ACTIVE").build();
         when(programs.findByCodeIgnoreCase("NEW2028")).thenReturn(Optional.empty());
         when(programs.findByStatus("ACTIVE")).thenReturn(List.of(current));
+        when(programSubjects.findByProgramIdAndGradeLevelOrderBySubjectIdAsc(
+                org.mockito.ArgumentMatchers.eq("program-new"), anyString()))
+                .thenReturn(List.of(EducationProgramSubject.builder().id("configured").build()));
         when(programs.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
         EducationProgram saved = service.saveProgram(null,

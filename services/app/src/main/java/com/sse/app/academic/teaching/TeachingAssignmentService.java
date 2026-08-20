@@ -22,6 +22,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.Map;
+import java.util.HashMap;
 
 @Service
 public class TeachingAssignmentService {
@@ -212,6 +214,110 @@ public class TeachingAssignmentService {
         return created;
     }
 
+    @Transactional
+    public int rebalanceActiveAssignmentsBySpecialty() {
+        List<User> activeTeachers = users.list("TEACHER", null, null).stream()
+                .filter(item -> "ACTIVE".equals(item.status()))
+                .map(item -> users.getById(item.id()))
+                .toList();
+        Map<String, List<User>> qualified = new HashMap<>();
+        for (Subject subject : structure.listSubjects()) {
+            qualified.put(subject.getId(), activeTeachers.stream()
+                    .filter(teacher -> specialtyMatches(teacher, subject))
+                    .sorted(Comparator.comparing(User::getId))
+                    .toList());
+        }
+        Map<String, Integer> cursor = new HashMap<>();
+        int updated = 0;
+        List<TimetableSlot> slots = timetable.allSlots();
+        for (TeacherClassSubject assignment : assignments.findAll().stream()
+                .filter(item -> "ACTIVE".equals(item.getStatus()))
+                .sorted(Comparator.comparing(TeacherClassSubject::getSemesterId, nullsLast())
+                        .thenComparing(TeacherClassSubject::getSubjectId, nullsLast())
+                        .thenComparing(TeacherClassSubject::getClassCode, nullsLast()))
+                .toList()) {
+            if (Set.of("sj-flag", "sj-homeroom").contains(assignment.getSubjectId())
+                    || scheduledPeriods(assignment, slots) > 0) continue;
+            List<User> candidates = qualified.getOrDefault(assignment.getSubjectId(), List.of());
+            if (candidates.isEmpty()) continue;
+            String key = assignment.getSemesterId() + "|" + assignment.getSubjectId();
+            int index = cursor.getOrDefault(key, 0);
+            User teacher = candidates.get(index % candidates.size());
+            cursor.put(key, index + 1);
+            if (!teacher.getId().equals(assignment.getTeacherId())) {
+                assignment.setTeacherId(teacher.getId());
+                assignment.setTeacherName(teacher.getFullName());
+                assignment.setUpdatedAt(Instant.now());
+                assignments.save(assignment);
+                updated++;
+            }
+        }
+        return updated;
+    }
+
+    /**
+     * A scoped timetable must coexist with already published classes. Move a
+     * homeroom assignment when that teacher already teaches at the school's
+     * fixed flag-ceremony or homeroom period for the target class.
+     */
+    @Transactional
+    public int rebalanceHomeroomTeachersForFixedPeriods() {
+        String activeYearId = structure.listYears().stream()
+                .filter(item -> "ACTIVE".equals(item.getStatus()))
+                .map(item -> item.getId()).findFirst().orElse(null);
+        if (activeYearId == null) return 0;
+        List<SchoolClass> schoolClasses = structure.listClasses(activeYearId, null).stream()
+                .filter(item -> item.getStatus() == null || "ACTIVE".equals(item.getStatus()))
+                .sorted(Comparator.comparing(SchoolClass::getCode))
+                .toList();
+        List<User> activeTeachers = users.list("TEACHER", null, null).stream()
+                .filter(item -> "ACTIVE".equals(item.status()))
+                .map(item -> users.getById(item.id()))
+                .sorted(Comparator.comparing(User::getId))
+                .toList();
+        Set<String> used = schoolClasses.stream()
+                .map(SchoolClass::getHomeroomTeacherId)
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.toSet());
+        List<TimetableSlot> slots = timetable.allSlots();
+        int updated = 0;
+        for (SchoolClass schoolClass : schoolClasses) {
+            String currentId = schoolClass.getHomeroomTeacherId();
+            if (currentId == null || !fixedPeriodConflict(currentId, schoolClass, slots)) continue;
+            User replacement = activeTeachers.stream()
+                    .filter(candidate -> !used.contains(candidate.getId()))
+                    .filter(candidate -> !fixedPeriodConflict(candidate.getId(), schoolClass, slots))
+                    .findFirst().orElse(null);
+            if (replacement == null) continue;
+            structure.assignHomeroomTeacher(schoolClass.getId(), null);
+            structure.assignHomeroomTeacher(schoolClass.getId(), replacement.getId());
+            used.remove(currentId);
+            used.add(replacement.getId());
+            schoolClass.setHomeroomTeacherId(replacement.getId());
+            updated++;
+        }
+        return updated;
+    }
+
+    private boolean fixedPeriodConflict(String teacherId, SchoolClass schoolClass,
+                                        List<TimetableSlot> slots) {
+        int shiftStart = "K10".equals(schoolClass.getGradeLevel())
+                || ("K11".equals(schoolClass.getGradeLevel())
+                && classNumber(schoolClass.getCode()) <= 5) ? 6 : 1;
+        return slots.stream().anyMatch(slot -> teacherId.equals(slot.getTeacherId())
+                && !schoolClass.getId().equals(slot.getClassId())
+                && (("MON".equals(slot.getDayOfWeek()) && slot.getPeriodNo() == shiftStart)
+                || ("SAT".equals(slot.getDayOfWeek()) && slot.getPeriodNo() == shiftStart + 4)));
+    }
+
+    private int classNumber(String classCode) {
+        if (classCode == null) return 99;
+        int marker = classCode.toUpperCase(Locale.ROOT).lastIndexOf('A');
+        if (marker < 0 || marker == classCode.length() - 1) return 99;
+        try { return Integer.parseInt(classCode.substring(marker + 1)); }
+        catch (NumberFormatException ignored) { return 99; }
+    }
+
     public List<TeacherWorkloadDto> workloads(String semesterId) {
         List<TeacherClassSubject> activeAssignments = assignments.findAll().stream()
                 .filter(a -> "ACTIVE".equals(a.getStatus()))
@@ -342,23 +448,24 @@ public class TeachingAssignmentService {
     }
 
     private void assertTeacherSpecialty(User teacher, Subject subject) {
+        if (specialtyMatches(teacher, subject)) return;
+        String teacherSubject = teacher.getMainSubject() == null || teacher.getMainSubject().isBlank()
+                ? "chưa cập nhật" : teacher.getMainSubject();
+        throw ApiException.badRequest("Giáo viên " + teacher.getFullName() + " có chuyên môn "
+                + teacherSubject + ", không thể phân công môn " + subject.getName());
+    }
+
+    private boolean specialtyMatches(User teacher, Subject subject) {
         String specialty = normalizeForMatch(teacher.getMainSubject());
         String subjectId = normalizeForMatch(subject.getId());
         String subjectCode = normalizeForMatch(subject.getCode());
         String subjectName = normalizeForMatch(subject.getName());
-        boolean matches = !specialty.isBlank()
+        return !specialty.isBlank()
                 && (specialty.equals(subjectId)
                 || specialty.equals(subjectCode)
                 || specialty.equals(subjectName)
                 || (specialty.length() >= 3 && subjectName.contains(specialty))
                 || (subjectName.length() >= 3 && specialty.contains(subjectName)));
-        if (!matches) {
-            String teacherSubject = teacher.getMainSubject() == null || teacher.getMainSubject().isBlank()
-                    ? "chưa cập nhật"
-                    : teacher.getMainSubject();
-            throw ApiException.badRequest("Giáo viên " + teacher.getFullName() + " có chuyên môn "
-                    + teacherSubject + ", không thể phân công môn " + subject.getName());
-        }
     }
 
     private boolean teacherMatchesSubject(String teacherId, String subjectId) {

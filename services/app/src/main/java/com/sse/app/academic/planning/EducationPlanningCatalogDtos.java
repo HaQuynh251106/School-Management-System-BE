@@ -31,6 +31,15 @@ public final class EducationPlanningCatalogDtos {
             boolean required,
             String notes) {}
 
+    public record AutoConfigureProgramRequest(String gradeLevel) {}
+
+    public record AutoConfigureProgramResult(int created, List<String> grades) {}
+
+    public record AutoConfigureTeachersResult(
+            int capabilitiesConfigured,
+            int homeroomAssignmentsAdjusted,
+            int assignmentsRebalanced) {}
+
     public record CombinationRequest(
             String id,
             @NotBlank String code,
