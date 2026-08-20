@@ -16,7 +16,7 @@ import java.util.Set;
 
 @Slf4j
 @Configuration
-@ConditionalOnProperty(name = "sse.seed.enabled", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(name = "sse.seed.enabled", havingValue = "true", matchIfMissing = false)
 public class CanonicalDatasetSeeder {
     private static final Set<String> ALLOWED_DATASETS = Set.of("baseline", "demo", "scenario");
 

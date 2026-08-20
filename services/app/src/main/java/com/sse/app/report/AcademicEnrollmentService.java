@@ -201,7 +201,7 @@ public class AcademicEnrollmentService {
         SchoolClass target = structure.getClass(classId);
         assign(new BulkEnrollmentRequest(target.getAcademicYearId(), target.getId(),
                 List.of(studentId), "Phân lớp cùng hồ sơ học sinh"),
-                actorId == null ? "SYSTEM" : actorId);
+                actorId);
     }
 
     @Transactional

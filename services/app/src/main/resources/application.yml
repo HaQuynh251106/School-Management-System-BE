@@ -90,7 +90,9 @@ sse:
     access-ttl-seconds: 900
     refresh-ttl-seconds: 604800
   seed:
-    enabled: true
+    # Business/demo records are never created implicitly. Enable only in an
+    # isolated demo environment together with SSE_SEED_DATASET=demo|scenario.
+    enabled: ${SSE_SEED_ENABLED:false}
     dataset: ${SSE_SEED_DATASET:baseline}
   events:
     rabbitmq:
