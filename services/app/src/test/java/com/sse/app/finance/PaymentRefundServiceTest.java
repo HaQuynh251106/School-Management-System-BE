@@ -58,7 +58,7 @@ class PaymentRefundServiceTest {
         PaymentRefund entity = refundEntity(requested, invoice);
         when(refunds.findByIdForUpdate(requested.id())).thenReturn(Optional.of(entity));
 
-        var completed = service.approve(requested.id(), "MB_BANK_TRANSFER", "MB-REF-001", "admin-2");
+        var completed = service.approve(requested.id(), "MB_BANK_TRANSFER", "MB-REF-001", "admin-1");
 
         assertEquals("COMPLETED", completed.status());
         assertEquals(600_000, invoice.getPaidAmount());
@@ -73,9 +73,9 @@ class PaymentRefundServiceTest {
         assertEquals("PAID", completed.invoiceStatusBefore());
         assertEquals("PARTIAL", completed.invoiceStatusAfter());
         assertEquals("admin-1", completed.requestedBy());
-        assertEquals("admin-2", completed.approvedBy());
+        assertEquals("admin-1", completed.approvedBy());
         verify(events).publish(org.mockito.ArgumentMatchers.eq("finance.payment.refunded"),
-                org.mockito.ArgumentMatchers.eq("admin-2"), org.mockito.ArgumentMatchers.eq("payment_refund"),
+                org.mockito.ArgumentMatchers.eq("admin-1"), org.mockito.ArgumentMatchers.eq("payment_refund"),
                 org.mockito.ArgumentMatchers.eq(requested.id()), anyMap());
     }
 
@@ -93,7 +93,7 @@ class PaymentRefundServiceTest {
         when(invoices.findByIdForUpdate(invoice.getId())).thenReturn(Optional.of(invoice));
         when(refunds.sumAmountByPaymentIdAndStatusIn(payment.getId(), List.of("COMPLETED"))).thenReturn(0L);
 
-        var completed = service.approve(refund.getId(), "CASH", null, "admin-2");
+        var completed = service.approve(refund.getId(), "CASH", null, "admin-1");
 
         assertEquals(0, invoice.getPaidAmount());
         assertEquals("PENDING", invoice.getStatus());
@@ -102,7 +102,7 @@ class PaymentRefundServiceTest {
         assertEquals(1_000_000, completed.refundedAmountAfter());
         assertEquals(0, completed.invoicePaidAmountAfter());
         verify(events).publish(org.mockito.ArgumentMatchers.eq("finance.payment.refunded"),
-                org.mockito.ArgumentMatchers.eq("admin-2"), org.mockito.ArgumentMatchers.eq("payment_refund"),
+                org.mockito.ArgumentMatchers.eq("admin-1"), org.mockito.ArgumentMatchers.eq("payment_refund"),
                 org.mockito.ArgumentMatchers.eq(refund.getId()),
                 argThat(payload -> payload.values().stream().noneMatch(java.util.Objects::isNull)
                         && !payload.containsKey("refundReference")));
@@ -167,26 +167,36 @@ class PaymentRefundServiceTest {
     }
 
     @Test
-    void requesterCannotApproveOwnRefund() {
+    void mainAdminCanApproveOwnRefundAfterFinancialVerification() {
         PaymentRefund requested = requestedRefund();
         when(refunds.findByIdForUpdate(requested.getId())).thenReturn(Optional.of(requested));
+        Payment payment = payment(1_000_000);
+        Invoice invoice = invoice(1_000_000, 1_000_000);
+        when(payments.findByIdForUpdate(payment.getId())).thenReturn(Optional.of(payment));
+        when(invoices.findByIdForUpdate(invoice.getId())).thenReturn(Optional.of(invoice));
+        when(refunds.sumAmountByPaymentIdAndStatusIn(payment.getId(), List.of("COMPLETED")))
+                .thenReturn(0L);
 
-        ApiException error = assertThrows(ApiException.class,
-                () -> service.approve(requested.getId(), "CASH", null, "admin-1"));
+        var completed = service.approve(
+                requested.getId(), "CASH", null, "admin-1");
 
-        assertEquals(HttpStatus.CONFLICT, error.getStatus());
-        verify(payments, never()).findByIdForUpdate(any());
+        assertEquals("COMPLETED", completed.status());
+        assertEquals("admin-1", completed.requestedBy());
+        assertEquals("admin-1", completed.approvedBy());
+        assertEquals(900_000, invoice.getPaidAmount());
     }
 
     @Test
-    void requesterCannotRejectOwnRefund() {
+    void mainAdminCanRejectOwnRefundWithReason() {
         PaymentRefund requested = requestedRefund();
         when(refunds.findByIdForUpdate(requested.getId())).thenReturn(Optional.of(requested));
 
-        ApiException error = assertThrows(ApiException.class,
-                () -> service.reject(requested.getId(), "Không duyệt", "admin-1"));
+        var rejected = service.reject(
+                requested.getId(), "Không duyệt", "admin-1");
 
-        assertEquals(HttpStatus.CONFLICT, error.getStatus());
+        assertEquals("REJECTED", rejected.status());
+        assertEquals("admin-1", rejected.requestedBy());
+        assertEquals("Không duyệt", rejected.rejectionReason());
     }
 
     private Payment payment(long amount) {

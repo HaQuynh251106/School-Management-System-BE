@@ -51,8 +51,7 @@ App lắng nghe tại `http://localhost:4000`. Kiểm tra: `curl localhost:4000/
 ## Tài khoản demo (seed sẵn)
 | Vai trò | username | password |
 |---|---|---|
-| Admin | `admin` | `admin@123` |
-| Admin duyệt tài chính | `admin.finance` | `admin2@123` |
+| Admin (gồm cơ cấu, tài chính và đối soát) | `admin` | `admin@123` |
 | Teacher | `gv.hoa`, `gv.minh` | `teacher@123` |
 | Student | `hs.an`, `hs.binh` | `student@123` |
 | Parent | `ph.pham` (cha của hs.an + hs.binh) | `parent@123` |

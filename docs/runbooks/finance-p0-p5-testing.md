@@ -10,7 +10,7 @@ Tài liệu này mô tả trạng thái thực tế của code tại ngày 22/07
 | P1 | Hoàn thành | Đợt thu theo khối/lớp/học sinh, khoản chung/riêng, xem trước, phát hành batch, thu hồi/đóng/hủy |
 | P2 | Hoàn thành | Payment Service, payment PENDING, gateway ledger, callback/IPN, chống callback trùng, Return URL chỉ đọc |
 | P3 | Một phần cần UAT ngoài | Adapter VNPAY/MoMo đã có và có unit test; chuyển khoản MB + VietQR dùng được; VNPAY/MoMo thật cần merchant sandbox |
-| P4 | Hoàn thành trên local | Lịch sử, ảnh biên lai, PDF biên nhận, đối soát, hoàn tiền, quy trình hai Admin, audit |
+| P4 | Hoàn thành trên local | Lịch sử, ảnh biên lai, PDF biên nhận, đối soát, hoàn tiền có xác nhận, mã tham chiếu và audit |
 | P5 | Hoàn thành | Doanh thu, công nợ, quá hạn, bộ lọc, Excel/PDF, audit khi xuất |
 
 ## 2. Chuẩn bị môi trường local
@@ -61,7 +61,6 @@ Tài khoản chính:
 | Vai trò | Tên đăng nhập | Mật khẩu |
 | --- | --- | --- |
 | Admin tạo yêu cầu | `admin` | `admin@123` |
-| Admin duyệt hoàn tiền | `admin.finance` | `admin2@123` |
 | Phụ huynh hai con | `ph.nguyen` | `parent@123` |
 
 ## 3. Bộ test tự động tổng quát
@@ -340,7 +339,7 @@ Test FE:
 5. `DISCREPANCY` hiển thị từng lỗi như sai paidAmount, sai status, thiếu receipt, thiếu IPN hợp lệ hoặc biên lai MB chưa duyệt.
 6. Chạy lại cùng bộ lọc cập nhật cùng snapshot và tăng `runCount`, không sinh bản ghi trùng.
 
-### 8.4. P4.4/P4.5 Hoàn tiền đủ và hai Admin
+### 8.4. P4.4/P4.5 Hoàn tiền đủ bằng Admin chính
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
@@ -352,20 +351,19 @@ Test FE:
 
 1. Đăng nhập `admin`, chọn payment SUCCESS và tạo yêu cầu hoàn một phần/toàn phần.
 2. Bắt buộc nhập lý do.
-3. Thử tự duyệt bằng chính `admin`; kỳ vọng bị chặn.
-4. Đăng xuất, đăng nhập `admin.finance`.
-5. Chọn phương thức hoàn, nhập mã tham chiếu nếu không phải CASH, tích xác nhận đã hoàn tiền thật.
-6. Duyệt yêu cầu.
-7. Kỳ vọng invoice giảm paidAmount; hoàn hết payment thì payment thành REVERSED.
-8. Thử hoàn vượt số tiền hoặc dùng lại mã tham chiếu; kỳ vọng bị chặn.
-9. Kiểm tra **Lịch sử hệ thống** có cả người yêu cầu và người phê duyệt.
+3. Mở yêu cầu vừa tạo, kiểm tra lại hóa đơn, giao dịch và chứng từ hoàn tiền.
+4. Chọn phương thức hoàn, nhập mã tham chiếu nếu không phải CASH và tích xác nhận đã hoàn tiền thật.
+5. Duyệt yêu cầu bằng chính Admin nhà trường.
+6. Kỳ vọng invoice giảm paidAmount; hoàn hết payment thì payment thành REVERSED.
+7. Thử hoàn vượt số tiền hoặc dùng lại mã tham chiếu; kỳ vọng bị chặn.
+8. Kiểm tra **Lịch sử hệ thống** có đủ thao tác tạo yêu cầu và duyệt/từ chối của Admin.
 
-Vì sao không thể hoàn âm hoặc tự duyệt:
+Vì sao không thể hoàn âm hoặc xử lý thiếu chứng từ:
 
 - Request giữ chỗ số tiền đang chờ cùng số đã hoàn.
 - Khi duyệt, payment và invoice được khóa; backend tính lại tổng completed trước khi trừ.
 - `invoice.paidAmount - refund.amount` chỉ chạy sau mọi kiểm tra số dư.
-- Người yêu cầu và người duyệt phải có user ID khác nhau.
+- Duyệt là một bước riêng, bắt buộc Admin xác nhận đã kiểm tra việc hoàn tiền thực tế.
 - Mã tham chiếu hoàn tiền có unique index không phân biệt hoa/thường.
 
 ## 9. P5 - Báo cáo và thống kê
@@ -470,7 +468,7 @@ File test được lưu tại `services/app/target/p5-smoke`.
 - [ ] Biên nhận PDF tải được từ MinIO.
 - [ ] Đối soát phát hiện được dữ liệu sai lệch.
 - [ ] Không hoàn vượt số tiền đã thu.
-- [ ] Admin tạo yêu cầu không tự duyệt được.
+- [ ] Admin chính tạo và duyệt/từ chối yêu cầu sau khi xác nhận chứng từ; audit ghi đủ hai thao tác.
 - [ ] Doanh thu ròng bằng thực thu trừ hoàn tiền.
 - [ ] Excel có đủ 7 sheet và PDF không tràn bảng.
 - [ ] Mỗi lần export có Audit Log.

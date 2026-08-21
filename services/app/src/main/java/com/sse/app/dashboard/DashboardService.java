@@ -129,13 +129,16 @@ public class DashboardService {
 
     private DashboardResponse admin() {
         List<User> allUsers = users.findAll();
+        List<User> activeUserRows = allUsers.stream()
+                .filter(user -> "ACTIVE".equals(user.getStatus()))
+                .toList();
         List<SchoolClass> allClasses = structure.listClasses(null, null);
         List<AttendanceRecord> records = attendance.list(null, null, null, null);
         List<Grade> allGrades = grades.allGrades();
         List<TimetableSlot> slots = timetable.allSlots();
         List<FinanceService.InvoiceSummary> invoices = finance.dashboardInvoices(null);
 
-        long activeUsers = allUsers.stream().filter(u -> "ACTIVE".equals(u.getStatus())).count();
+        long activeUsers = activeUserRows.size();
         List<AttendanceRecord> today = records.stream().filter(r -> LocalDate.now().equals(r.getDate())).toList();
         double todayRate = attendanceRate(today);
         long pendingInvoices = invoices.stream().filter(i -> !"PAID".equals(i.status())).count();
@@ -147,7 +150,7 @@ public class DashboardService {
                 metric("invoices", "Hóa đơn cần theo dõi", pendingInvoices, "NUMBER", "Chưa thanh toán đủ", "violet")
         );
 
-        Map<String, Long> roleCounts = allUsers.stream().collect(Collectors.groupingBy(User::getRole,
+        Map<String, Long> roleCounts = activeUserRows.stream().collect(Collectors.groupingBy(User::getRole,
                 LinkedHashMap::new, Collectors.counting()));
         List<DashboardDatum> roles = List.of("ADMIN", "TEACHER", "STUDENT", "PARENT").stream()
                 .map(role -> datum(roleLabel(role), roleCounts.getOrDefault(role, 0L))).toList();

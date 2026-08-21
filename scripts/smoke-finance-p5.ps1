@@ -2,8 +2,6 @@ param(
     [string]$BaseUrl = "http://127.0.0.1:4000",
     [string]$AdminUsername = "admin",
     [string]$AdminPassword = "admin@123",
-    [string]$ApproverUsername = "admin.finance",
-    [string]$ApproverPassword = "admin2@123",
     [string]$StudentId = "u-s-minh",
     [string]$OutputDir = ""
 )
@@ -83,12 +81,10 @@ function Assert-Equal {
 
 Write-Host "SSE Finance P5 smoke against $BaseUrl"
 $adminToken = Login $AdminUsername $AdminPassword
-$approverToken = Login $ApproverUsername $ApproverPassword
 $teacherToken = Login "gv.toan" "teacher@123"
 $admin = Invoke-Json GET "/me" $null $adminToken
-$approver = Invoke-Json GET "/me" $null $approverToken
-if ($admin.role -ne "ADMIN" -or $approver.role -ne "ADMIN" -or $admin.id -eq $approver.id) {
-    throw "P5 smoke requires two different active Admin accounts"
+if ($admin.role -ne "ADMIN") {
+    throw "P5 smoke requires the primary Admin account"
 }
 
 $suffix = Get-Date -Format "yyyyMMddHHmmssfff"
@@ -130,7 +126,7 @@ $refund = Invoke-Json POST "/payments/$($settled.payment.id)/refunds" @{
 $approved = Invoke-Json POST "/payment-refunds/$($refund.id)/approve" @{
     method = "CASH"
     reference = $null
-} $approverToken
+} $adminToken
 Assert-Equal $approved.status "COMPLETED" "Refund status"
 Assert-Equal $approved.invoicePaidAmountAfter $expectedPaid "Invoice amount after refund"
 Write-Host "[OK] isolated overdue invoice, payment and partial refund created"

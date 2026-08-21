@@ -17,7 +17,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 
 @Service
@@ -94,7 +93,6 @@ public class PaymentRefundService {
         PaymentRefund refund = refundForUpdate(refundId);
         if ("COMPLETED".equals(refund.getStatus())) return toResponse(refund);
         requireRequested(refund);
-        requireIndependentReviewer(refund, approvedBy);
 
         String normalizedMethod = normalizeMethod(method);
         String normalizedReference = normalizeReference(normalizedMethod, reference);
@@ -161,7 +159,6 @@ public class PaymentRefundService {
         PaymentRefund refund = refundForUpdate(refundId);
         if ("REJECTED".equals(refund.getStatus())) return toResponse(refund);
         requireRequested(refund);
-        requireIndependentReviewer(refund, rejectedBy);
         Instant now = Instant.now();
         refund.setStatus("REJECTED");
         refund.setRejectedBy(rejectedBy);
@@ -223,13 +220,6 @@ public class PaymentRefundService {
     private void requireRequested(PaymentRefund refund) {
         if (!"REQUESTED".equals(refund.getStatus())) {
             throw ApiException.conflict("Yêu cầu hoàn tiền đã được xử lý với trạng thái " + refund.getStatus());
-        }
-    }
-
-    private void requireIndependentReviewer(PaymentRefund refund, String reviewerId) {
-        if (Objects.equals(refund.getRequestedBy(), reviewerId)) {
-            throw ApiException.conflict(
-                    "Admin tạo yêu cầu không thể tự duyệt hoặc từ chối; hãy đăng nhập bằng Admin khác");
         }
     }
 

@@ -2,8 +2,6 @@ param(
     [string]$BaseUrl = "http://127.0.0.1:4000",
     [string]$AdminUsername = "admin",
     [string]$AdminPassword = "admin@123",
-    [string]$ApproverUsername = "admin.finance",
-    [string]$ApproverPassword = "admin2@123",
     [string]$ParentUsername = "ph.nguyen",
     [string]$ParentPassword = "parent@123",
     [string]$StudentId = "u-s-minh"
@@ -91,21 +89,14 @@ function New-PaidFixture {
 
 Write-Host "SSE Finance P4.4 smoke against $BaseUrl"
 $adminToken = Login $AdminUsername $AdminPassword
-$approverToken = Login $ApproverUsername $ApproverPassword
 $parentToken = Login $ParentUsername $ParentPassword
 $teacherToken = Login "gv.toan" "teacher@123"
 $makerAdmin = Invoke-Json GET "/me" $null $adminToken
-$approverAdmin = Invoke-Json GET "/me" $null $approverToken
-if ($makerAdmin.id -eq $approverAdmin.id -or $makerAdmin.role -ne "ADMIN" -or $approverAdmin.role -ne "ADMIN") {
-    throw "P4.5 requires two different active Admin accounts"
-}
-$adminUsers = @(As-Array (Invoke-Json GET "/users?role=ADMIN" $null $adminToken))
-if (-not ($adminUsers | Where-Object { $_.id -eq $makerAdmin.id }) -or
-        -not ($adminUsers | Where-Object { $_.id -eq $approverAdmin.id })) {
-    throw "The two maker-checker Admin accounts are not available"
+if ($makerAdmin.role -ne "ADMIN") {
+    throw "P4.5 requires the primary Admin account"
 }
 $suffix = Get-Date -Format "yyyyMMddHHmmssfff"
-Write-Host "[OK] maker-checker Admin accounts are different users"
+Write-Host "[OK] primary Admin account owns reconciliation and refund workflow"
 
 $fixture = New-PaidFixture "A-$suffix" 210003
 $invoice = $fixture.Invoice
@@ -123,25 +114,21 @@ if ($partial.status -ne "REQUESTED" -or $partial.refundType -ne "PARTIAL" -or
 $reference = "P44-REF-$suffix"
 Invoke-Json POST "/payment-refunds/$($partial.id)/approve" @{
     method = "MB_BANK_TRANSFER"
-    reference = $reference
-} $adminToken @(409) | Out-Null
-Invoke-Json POST "/payment-refunds/$($partial.id)/approve" @{
-    method = "MB_BANK_TRANSFER"
     reference = ""
-} $approverToken @(400) | Out-Null
+} $adminToken @(400) | Out-Null
 $approvedPartial = Invoke-Json POST "/payment-refunds/$($partial.id)/approve" @{
     method = "MB_BANK_TRANSFER"
     reference = $reference
-} $approverToken
+} $adminToken
 $replayedPartial = Invoke-Json POST "/payment-refunds/$($partial.id)/approve" @{
     method = "MB_BANK_TRANSFER"
     reference = $reference
-} $approverToken
+} $adminToken
 if ($approvedPartial.status -ne "COMPLETED" -or $approvedPartial.refundType -ne "PARTIAL" -or
         $approvedPartial.refundedAmountBefore -ne 0 -or $approvedPartial.refundedAmountAfter -ne 70001 -or
         $approvedPartial.invoicePaidAmountBefore -ne 210003 -or $approvedPartial.invoicePaidAmountAfter -ne 140002 -or
         $approvedPartial.invoiceStatusBefore -ne "PAID" -or $approvedPartial.invoiceStatusAfter -ne "PARTIAL" -or
-        $approvedPartial.requestedBy -ne $makerAdmin.id -or $approvedPartial.approvedBy -ne $approverAdmin.id -or
+        $approvedPartial.requestedBy -ne $makerAdmin.id -or $approvedPartial.approvedBy -ne $makerAdmin.id -or
         $replayedPartial.id -ne $approvedPartial.id) {
     throw "Partial refund snapshots or approval idempotency are incorrect"
 }
@@ -149,7 +136,7 @@ $afterPartial = (Invoke-Json GET "/invoices/$($invoice.id)" $null $adminToken).i
 if ($afterPartial.paidAmount -ne 140002 -or $afterPartial.status -ne "PARTIAL") {
     throw "Partial refund did not reduce the invoice exactly once"
 }
-Write-Host "[OK] self-approval blocked; independent Admin approved partial refund"
+Write-Host "[OK] primary Admin approved partial refund after explicit evidence validation"
 
 $full = Invoke-Json POST "/payments/$($payment.id)/refunds" @{
     amount = 140002
@@ -159,12 +146,12 @@ if ($full.refundType -ne "FULL") { throw "Remaining full refund was not classifi
 $approvedFull = Invoke-Json POST "/payment-refunds/$($full.id)/approve" @{
     method = "CASH"
     reference = $null
-} $approverToken
+} $adminToken
 if ($approvedFull.status -ne "COMPLETED" -or $approvedFull.refundType -ne "FULL" -or
         $approvedFull.refundedAmountBefore -ne 70001 -or $approvedFull.refundedAmountAfter -ne 210003 -or
         $approvedFull.invoicePaidAmountBefore -ne 140002 -or $approvedFull.invoicePaidAmountAfter -ne 0 -or
         $approvedFull.invoiceStatusAfter -ne "PENDING" -or
-        $approvedFull.requestedBy -ne $makerAdmin.id -or $approvedFull.approvedBy -ne $approverAdmin.id) {
+        $approvedFull.requestedBy -ne $makerAdmin.id -or $approvedFull.approvedBy -ne $makerAdmin.id) {
     throw "Full remaining refund snapshots are incorrect"
 }
 $afterFull = (Invoke-Json GET "/invoices/$($invoice.id)" $null $adminToken).invoice
@@ -185,13 +172,10 @@ $duplicateRequest = Invoke-Json POST "/payments/$($duplicateFixture.Payment.id)/
     amount = 10001
     reason = "Duplicate reference probe"
 } $adminToken
-Invoke-Json POST "/payment-refunds/$($duplicateRequest.id)/reject" @{
-    reason = "Self-rejection probe"
-} $adminToken @(409) | Out-Null
 Invoke-Json POST "/payment-refunds/$($duplicateRequest.id)/approve" @{
     method = "MB_BANK_TRANSFER"
     reference = $reference.ToLowerInvariant()
-} $approverToken @(409) | Out-Null
+} $adminToken @(409) | Out-Null
 $duplicateInvoice = (Invoke-Json GET "/invoices/$($duplicateFixture.Invoice.id)" $null $adminToken).invoice
 if ($duplicateInvoice.paidAmount -ne 50003 -or $duplicateInvoice.status -ne "PAID") {
     throw "Duplicate reference attempt changed the second invoice"
@@ -211,10 +195,10 @@ $auditLogs = As-Array (Invoke-Json GET "/audit-logs?action=APPROVE_REFUND" $null
 $partialAudit = $auditLogs | Where-Object { $_.entityId -eq $partial.id } | Select-Object -First 1
 $fullAudit = $auditLogs | Where-Object { $_.entityId -eq $full.id } | Select-Object -First 1
 if (-not $partialAudit -or -not $fullAudit -or
-        $partialAudit.actorId -ne $approverAdmin.id -or $fullAudit.actorId -ne $approverAdmin.id -or
+        $partialAudit.actorId -ne $makerAdmin.id -or $fullAudit.actorId -ne $makerAdmin.id -or
         $partialAudit.detail -notmatch "type=PARTIAL" -or $partialAudit.detail -notmatch "invoicePaid=210003->140002" -or
         $fullAudit.detail -notmatch "type=FULL" -or $fullAudit.detail -notmatch "invoicePaid=140002->0") {
     throw "P4.4 approval audit snapshots were not found"
 }
-Write-Host "[OK] parent access, role protection and two-Admin audit trail"
+Write-Host "[OK] parent access, role protection and primary Admin audit trail"
 Write-Host "SSE Finance P4.4 smoke completed successfully."

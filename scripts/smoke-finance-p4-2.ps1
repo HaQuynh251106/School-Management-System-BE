@@ -2,8 +2,6 @@ param(
     [string]$BaseUrl = "http://127.0.0.1:4000",
     [string]$AdminUsername = "admin",
     [string]$AdminPassword = "admin@123",
-    [string]$ApproverUsername = "admin.finance",
-    [string]$ApproverPassword = "admin2@123",
     [string]$ParentUsername = "ph.nguyen",
     [string]$ParentPassword = "parent@123",
     [string]$StudentId = "u-s-minh"
@@ -58,7 +56,6 @@ function Login {
 
 Write-Host "SSE Finance P4.2 smoke against $BaseUrl"
 $adminToken = Login $AdminUsername $AdminPassword
-$approverToken = Login $ApproverUsername $ApproverPassword
 $parentToken = Login $ParentUsername $ParentPassword
 $teacherToken = Login "gv.toan" "teacher@123"
 $suffix = Get-Date -Format "yyyyMMddHHmmssfff"
@@ -114,18 +111,14 @@ Invoke-Json POST "/payments/$($initiated.payment.id)/refunds" @{
 Invoke-Json GET "/payment-refunds" $null $teacherToken @(403) | Out-Null
 Write-Host "[OK] refund reservation, over-refund guard and role protection"
 
-Invoke-Json POST "/payment-refunds/$($refund.id)/approve" @{
-    method = "MB_BANK_TRANSFER"
-    reference = "P42-$suffix"
-} $adminToken @(409) | Out-Null
 $approved = Invoke-Json POST "/payment-refunds/$($refund.id)/approve" @{
     method = "MB_BANK_TRANSFER"
     reference = "P42-$suffix"
-} $approverToken
+} $adminToken
 $replayed = Invoke-Json POST "/payment-refunds/$($refund.id)/approve" @{
     method = "MB_BANK_TRANSFER"
     reference = "P42-$suffix"
-} $approverToken
+} $adminToken
 if ($approved.status -ne "COMPLETED" -or $replayed.id -ne $approved.id) {
     throw "Refund approval is not idempotent"
 }
@@ -139,7 +132,7 @@ $historyRow = $history | Where-Object { $_.paymentId -eq $initiated.payment.id }
 if (-not $historyRow -or $historyRow.refundedAmount -ne 40000 -or $historyRow.netAmount -ne 60000) {
     throw "Payment history refund totals are incorrect"
 }
-Write-Host "[OK] self-approval is blocked; second Admin approval is idempotent"
+Write-Host "[OK] main Admin approval is explicit, audited and idempotent"
 
 $parentRefunds = As-Array (Invoke-Json GET "/payment-refunds" $null $parentToken)
 if (-not ($parentRefunds | Where-Object { $_.id -eq $refund.id })) {

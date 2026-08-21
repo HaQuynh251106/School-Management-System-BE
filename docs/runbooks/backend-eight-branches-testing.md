@@ -147,7 +147,7 @@ Luồng UAT:
 4. Admin xác nhận thu, biên nhận PDF được sinh trên MinIO.
 5. Thu hồi biên nhận bắt buộc lý do; cấp lại tăng revision và giữ `previousFileId`.
 6. Tạo refund bằng Admin 1, phê duyệt bằng Admin 2.
-7. Refund vượt số đã thu hoặc tự duyệt phải bị chặn.
+7. Refund vượt số đã thu hoặc thiếu xác nhận/chứng từ hợp lệ phải bị chặn.
 8. Đối soát kiểm tra tổng thu, hoàn tiền và doanh thu ròng.
 
 Vì sao hoạt động: payment callback có khóa và idempotency; receipt/refund giữ
@@ -207,4 +207,3 @@ cd C:\SchoolManagementSystem\BE
 ```
 
 Đạt khi Maven in `BUILD SUCCESS`, `Failures: 0`, `Errors: 0`.
-
