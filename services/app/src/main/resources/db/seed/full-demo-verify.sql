@@ -232,6 +232,13 @@ BEGIN
     WHERE id='fd-excuse-approved' AND status='APPROVED';
     IF actual<>1 THEN RAISE EXCEPTION 'Full Demo: approved attendance excuse is missing'; END IF;
 
+    SELECT count(*) INTO actual FROM attendance_excuse_requests
+    WHERE id='fd-excuse-pending' AND status='PENDING'
+      AND student_id='fd-student-002' AND requested_by='fd-parent-001';
+    IF actual<>1 THEN
+        RAISE EXCEPTION 'Full Demo: parent pending attendance excuse is missing';
+    END IF;
+
     SELECT count(*) INTO actual FROM grades WHERE id LIKE 'fd-grade-%';
     IF actual<700 THEN RAISE EXCEPTION 'Full Demo: grade coverage is incomplete'; END IF;
 
@@ -312,6 +319,14 @@ BEGIN
     SELECT count(DISTINCT status) INTO actual FROM payments
     WHERE id LIKE 'fd-payment-%' AND status IN ('PENDING','SUCCESS','FAILED');
     IF actual<>3 THEN RAISE EXCEPTION 'Full Demo: payment state coverage is incomplete'; END IF;
+
+    SELECT count(*) INTO actual FROM payment_refunds
+    WHERE id='fd-refund-requested' AND payment_id='fd-payment-success'
+      AND invoice_id='fd-invoice-003' AND student_id='fd-student-003'
+      AND amount=300000 AND payment_amount=1200000
+      AND refunded_amount_before=0 AND refund_type='PARTIAL'
+      AND status='REQUESTED' AND requested_by='fd-admin-001';
+    IF actual<>1 THEN RAISE EXCEPTION 'Full Demo: review-ready payment refund is missing'; END IF;
 
     SELECT count(*) INTO actual FROM payment_receipts WHERE id LIKE 'fd-receipt-%';
     IF actual<2 THEN RAISE EXCEPTION 'Full Demo: payment receipts are incomplete'; END IF;

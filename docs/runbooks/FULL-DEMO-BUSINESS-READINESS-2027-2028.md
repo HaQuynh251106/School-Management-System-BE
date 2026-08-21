@@ -72,6 +72,7 @@ API readiness cho K10, K11 và K12 đều trả `ready=true`. Script chạy th�
 | Chức năng | Dữ liệu có sẵn |
 |---|---|
 | Điểm danh | PRESENT, LATE, ABSENT_EXCUSED, ABSENT_UNEXCUSED; có đơn xin phép đã duyệt |
+| Xin xác nhận đi muộn/nghỉ | `demo.ph.001` có một đơn `PENDING` cho HS270002; giáo viên có thêm đơn `APPROVED` để lọc lịch sử |
 | Điểm | 732 điểm thành phần/tổng hợp; nhiều assessment index; có optimistic version |
 | Sửa điểm | 8.4 → 9.2, có lý do và `grade_change_logs` |
 | Bài tập | Một bản nháp, một bài đã phát hành, hạn nộp thật |
@@ -97,6 +98,7 @@ API readiness cho K10, K11 và K12 đều trả `ready=true`. Script chạy th�
 | Trạng thái thanh toán | PENDING, SUCCESS, FAILED |
 | Đối soát | Một phiên tiền mặt `BALANCED`, không chênh lệch |
 | Biên nhận | Hai biên nhận đã phát hành; PDF thật chỉ có khi MinIO chạy |
+| Hoàn tiền | `HT-DEMO-001` đang `REQUESTED`, do Admin 01 tạo; đăng nhập Admin 02 để duyệt đúng nguyên tắc hai người |
 | Phụ huynh hai con | Hóa đơn được lọc theo từng studentId, không trộn dữ liệu |
 
 Seed không giả callback cổng thanh toán. Giao dịch thành công mẫu là tiền mặt/đã đối soát theo state machine hiện có.
@@ -108,6 +110,7 @@ Seed không giả callback cổng thanh toán. Giao dịch thành công mẫu l�
 - Học sinh này có đủ điểm của cả hai học kỳ, chuyên cần, hạnh kiểm và bản tổng kết DRAFT.
 - API preview trả trạng thái có thể chốt; Admin có thể đi qua chuỗi **xem trước → chốt → công bố → chọn lớp đích → chuyển lớp**.
 - Chính sách xét lên lớp tồn tại cho cả năm nguồn và năm hiện hành.
+- Chuỗi mutation đã được chạy trên bản sao database cách ly: `FINALIZE → PUBLISH → PREVIEW PROMOTION → EXECUTE` đều thành công. Khi hoàn tác phải đúng thứ tự bảo toàn dữ liệu: **thu hồi công bố kết quả → hoàn tác chuyển lớp → mở lại kết quả lớp**.
 
 ## 3. Lệnh chạy
 
@@ -138,3 +141,4 @@ Nếu database từng được Hibernate tự tạo toàn bộ bảng nhưng l�
 6. Student/Parent chỉ nhìn thấy dữ liệu đúng phạm vi.
 7. Import Excel lần đầu tạo ba học sinh/hai phụ huynh; lần hai cập nhật, không tạo trùng.
 8. Có dữ liệu thật cho điểm danh, điểm, bài tập, thi, tài chính, notification, chat và tổng kết.
+9. Parent có đơn xin nghỉ/đi muộn để gửi–theo dõi; Admin có yêu cầu hoàn tiền chờ duyệt bằng tài khoản Admin thứ hai.

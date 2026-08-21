@@ -17,6 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
@@ -167,5 +168,34 @@ class UserServiceSecurityTest {
 
         assertEquals(400, error.getStatus().value());
         verify(relations, never()).save(any());
+    }
+
+    @Test
+    void replacesSeveralChildrenAtomicallyAndDeduplicatesTheRequest() {
+        User parent = User.builder().id("parent-1").username("parent.one")
+                .fullName("Phụ huynh Một").role("PARENT").status("ACTIVE").build();
+        User studentOne = User.builder().id("student-1").username("student.one")
+                .fullName("Học sinh Một").role("STUDENT").status("ACTIVE").build();
+        User studentTwo = User.builder().id("student-2").username("student.two")
+                .fullName("Học sinh Hai").role("STUDENT").status("ACTIVE").build();
+        ParentStudent existing = ParentStudent.builder().id("ps-1")
+                .parentId("parent-1").studentId("student-1").primaryContact(false).build();
+        when(users.findById("parent-1")).thenReturn(Optional.of(parent));
+        when(users.findById("student-1")).thenReturn(Optional.of(studentOne));
+        when(users.findById("student-2")).thenReturn(Optional.of(studentTwo));
+        when(relations.findByParentId("parent-1")).thenReturn(List.of(existing));
+        when(relations.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(rbac.permissionsFor("parent-1")).thenReturn(Set.of());
+
+        UserDto result = service.replaceChildren(
+                "parent-1", List.of("student-1", "student-2", "student-2"), true);
+
+        ArgumentCaptor<ParentStudent> saved = ArgumentCaptor.forClass(ParentStudent.class);
+        verify(relations, times(2)).save(saved.capture());
+        assertEquals(Set.of("student-1", "student-2"), saved.getAllValues().stream()
+                .map(ParentStudent::getStudentId).collect(java.util.stream.Collectors.toSet()));
+        assertTrue(saved.getAllValues().stream().allMatch(ParentStudent::isPrimaryContact));
+        verify(relations, never()).delete(any());
+        assertEquals("parent-1", result.id());
     }
 }

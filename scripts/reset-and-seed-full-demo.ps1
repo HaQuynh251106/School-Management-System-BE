@@ -284,6 +284,20 @@ function Run-ApiSmoke {
             $null $admin.accessToken
         Assert-True ($yearReview.canFinalize -and $yearReview.metrics.totalStudents -eq 1) `
             "Lớp nguồn 2026-2027 sẵn sàng chốt, công bố và chuyển lớp"
+        $promotionPreview = Invoke-Api POST "/student-promotions/preview" @{
+            sourceAcademicYearId = "fd-ay-2026"
+            targetAcademicYearId = "fd-ay-2027"
+            sourceClassId = "fd-class-2026-11a1"
+            placements = @(@{
+                studentId = "fd-student-060"
+                targetClassId = "fd-class-12a2"
+            })
+        } $admin.accessToken
+        Assert-True ($promotionPreview.metrics.totalStudents -eq 1 `
+            -and $promotionPreview.metrics.blocked -eq 1 `
+            -and @($promotionPreview.blockers).Count -eq 1 `
+            -and $promotionPreview.blockers[0] -eq "1 học sinh đang bị chặn") `
+            "Chuyển lớp chỉ còn chờ thao tác chốt kết quả, không thiếu lớp đích hoặc sức chứa"
 
         $teacherAssignments = @(Invoke-Api GET "/me/teaching-assignments" $null $teacher.accessToken)
         Assert-MinCount $teacherAssignments 1 "Giáo viên có phân công"
@@ -303,6 +317,8 @@ function Run-ApiSmoke {
             "Giáo viên có bài nộp đúng hạn, muộn và đã chấm"
         Assert-MinCount (Invoke-Api GET "/attendance?classId=fd-class-10a1" $null $teacher.accessToken) 1 `
             "Giáo viên có dữ liệu điểm danh lớp phụ trách"
+        Assert-MinCount (Invoke-Api GET "/attendance/excuse-requests?status=APPROVED" $null $teacher.accessToken) 1 `
+            "Giáo viên thấy đơn xin nghỉ đã duyệt của lớp phụ trách"
         Assert-MinCount (Invoke-Api GET "/grades?classId=fd-class-10a1&subjectId=fd-sub-math&semesterId=fd-sem-2027-1" $null $teacher.accessToken) 1 `
             "Giáo viên có sổ điểm đúng lớp và môn được phân công"
         Assert-MinCount (Invoke-Api GET "/grades/fd-grade-001-math-final/change-logs" $null $teacher.accessToken) 1 `
@@ -317,6 +333,10 @@ function Run-ApiSmoke {
             throw "Học sinh nhìn thấy bài tập nháp"
         }
         Assert-MinCount (Invoke-Api GET "/academic/training-plans/published/me" $null $student.accessToken) 1 "Kế hoạch giáo dục đã công bố cho học sinh"
+        Assert-MinCount (Invoke-Api GET "/clubs" $null $student.accessToken) 2 `
+            "Học sinh thấy ngoại khóa miễn phí và có phí"
+        Assert-MinCount (Invoke-Api GET "/me/club-registrations" $null $student.accessToken) 1 `
+            "Học sinh có đăng ký ngoại khóa mẫu"
 
         $children = @(Invoke-Api GET "/me/children" $null $parent.accessToken)
         if ($children.Count -ne 2) { throw "Phụ huynh đại diện phải có đúng 2 con, thực tế $($children.Count)" }
@@ -324,6 +344,8 @@ function Run-ApiSmoke {
         Assert-MinCount (Invoke-Api GET "/students/fd-student-001/timetable?semesterId=fd-sem-2027-1" $null $parent.accessToken) 1 "TKB con của phụ huynh"
         Assert-MinCount (Invoke-Api GET "/students/fd-student-001/grades?semesterId=fd-sem-2027-1" $null $parent.accessToken) 1 "Điểm con của phụ huynh"
         Assert-MinCount (Invoke-Api GET "/students/fd-student-001/attendance" $null $parent.accessToken) 1 "Điểm danh con của phụ huynh"
+        Assert-MinCount (Invoke-Api GET "/attendance/excuse-requests?studentId=fd-student-001" $null $parent.accessToken) 1 `
+            "Phụ huynh thấy đơn xin nghỉ đúng con"
         Assert-MinCount (Invoke-Api GET "/me/children/fd-student-001/assignments" $null $parent.accessToken) 1 "Bài tập con của phụ huynh"
         $parentPlan = Invoke-Api GET `
             "/academic/training-plans/published/me?studentId=fd-student-001" `
@@ -351,6 +373,8 @@ function Run-ApiSmoke {
         Assert-MinCount (Invoke-Api GET "/exam-periods/me/schedule" $null $student.accessToken) 1 "Lịch thi học sinh"
         Assert-MinCount (Invoke-Api GET "/finance/reconciliations" $null $admin.accessToken) 1 `
             "Admin có phiên đối soát cân bằng để kiểm tra"
+        Assert-MinCount (Invoke-Api GET "/payment-refunds" $null $admin.accessToken) 1 `
+            "Admin có lịch sử yêu cầu hoàn tiền để kiểm tra state machine"
 
         Write-Host "[PASS] API smoke Full Demo hoàn tất." -ForegroundColor Green
     } finally {

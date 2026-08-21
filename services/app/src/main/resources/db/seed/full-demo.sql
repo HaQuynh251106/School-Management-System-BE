@@ -1036,6 +1036,16 @@ VALUES ('fd-excuse-approved','fd-attendance-003','Nghỉ khám bệnh có xác n
 ON CONFLICT (id) DO UPDATE SET status='APPROVED',review_note=excluded.review_note,
     reviewed_at=excluded.reviewed_at,reviewed_by=excluded.reviewed_by;
 
+INSERT INTO attendance_excuse_requests (
+    id,attendance_record_id,reason,requested_at,requested_by,requester_role,
+    review_note,reviewed_at,reviewed_by,status,student_id
+)
+VALUES ('fd-excuse-pending','fd-attendance-002','Con đi khám răng đầu giờ, gia đình xin xác nhận đi muộn.',
+        now()-interval '2 days','fd-parent-001','PARENT',null,null,null,
+        'PENDING','fd-student-002')
+ON CONFLICT (id) DO UPDATE SET reason=excluded.reason,status='PENDING',
+    review_note=null,reviewed_at=null,reviewed_by=null;
+
 INSERT INTO grade_configurations (
     id, subject_id, semester_id, category_code, category_name,
     required_count, weight, active, updated_by, updated_at
@@ -1378,6 +1388,27 @@ VALUES
   null,null,'SSE HD-DEMO-004',false)
 ON CONFLICT (id) DO UPDATE SET amount=excluded.amount,status=excluded.status,
     note=excluded.note,updated_at=excluded.updated_at,paid_at=excluded.paid_at;
+
+-- Yêu cầu hoàn tiền mẫu ở trạng thái chờ để Admin 02 có thể duyệt bằng
+-- đúng state machine. Không tự giảm số tiền đã thu và không giả callback.
+INSERT INTO payment_refunds (
+    id,refund_number,payment_id,invoice_id,invoice_code,student_id,student_code,
+    student_name,parent_id,amount,refund_type,payment_amount,
+    refunded_amount_before,reason,status,requested_by,requested_at,updated_at
+)
+VALUES (
+    'fd-refund-requested','HT-DEMO-001','fd-payment-success','fd-invoice-003',
+    'HD-DEMO-003','fd-student-003','HS270003','Học sinh Demo 003',
+    'fd-parent-002',300000,'PARTIAL',1200000,0,
+    'Hoàn lại phần thu thừa để kiểm tra luồng duyệt hai người.',
+    'REQUESTED','fd-admin-001',now()-interval '2 days',now()-interval '2 days'
+)
+ON CONFLICT (id) DO UPDATE SET amount=excluded.amount,refund_type='PARTIAL',
+    payment_amount=excluded.payment_amount,refunded_amount_before=0,
+    status='REQUESTED',approved_by=null,approved_at=null,rejected_by=null,
+    rejected_at=null,rejection_reason=null,cancelled_by=null,cancelled_at=null,
+    cancellation_reason=null,refund_method=null,refund_reference=null,
+    completed_at=null,updated_at=excluded.updated_at;
 
 INSERT INTO payment_receipts (
     id,amount,generation_attempts,invoice_code,invoice_id,issued_at,issued_by,

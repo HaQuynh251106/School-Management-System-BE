@@ -75,7 +75,7 @@ public class DashboardService {
     private List<DashboardShortcut> shortcuts(CurrentUser me) {
         List<DashboardShortcut> rows = new ArrayList<>();
         if (me.isAdmin()) {
-            List<SchoolClass> classes = structure.listClasses(null, null);
+            List<SchoolClass> classes = currentAcademicYearClasses();
             Set<String> assignedClassIds = teachingAssignments.findAll().stream()
                     .filter(item -> "ACTIVE".equals(item.getStatus()))
                     .map(TeacherClassSubject::getClassId)
@@ -132,7 +132,7 @@ public class DashboardService {
         List<User> activeUserRows = allUsers.stream()
                 .filter(user -> "ACTIVE".equals(user.getStatus()))
                 .toList();
-        List<SchoolClass> allClasses = structure.listClasses(null, null);
+        List<SchoolClass> allClasses = currentAcademicYearClasses();
         List<AttendanceRecord> records = attendance.list(null, null, null, null);
         List<Grade> allGrades = grades.allGrades();
         List<TimetableSlot> slots = timetable.allSlots();
@@ -145,7 +145,10 @@ public class DashboardService {
 
         List<DashboardMetric> metrics = List.of(
                 metric("users", "Tài khoản hoạt động", activeUsers, "NUMBER", "Tất cả vai trò", "blue"),
-                metric("classes", "Lớp đang mở", allClasses.size(), "NUMBER", "Khối 10, 11 và 12", "green"),
+                metric("classes", "Lớp năm học hiện tại", allClasses.size(), "NUMBER",
+                        allClasses.stream().filter(this::isActiveClass).count() + " đang hoạt động · "
+                                + allClasses.stream().filter(item -> !isActiveClass(item)).count()
+                                + " dự kiến", "green"),
                 metric("attendance", "Chuyên cần hôm nay", todayRate, "PERCENT", today.isEmpty() ? "Chưa điểm danh hôm nay" : "Từ sổ điểm danh", "orange"),
                 metric("invoices", "Hóa đơn cần theo dõi", pendingInvoices, "NUMBER", "Chưa thanh toán đủ", "violet")
         );
@@ -245,6 +248,20 @@ public class DashboardService {
                 chart("Điểm trung bình theo lớp", "Chỉ các môn giáo viên đang được phân công", "BAR", "/10", 10, classScores),
                 chart("Khối lượng công việc", "Tổng hợp từ bài tập, điểm và thời khóa biểu", "COLUMN", "", max(work), work)
         ));
+    }
+
+    private List<SchoolClass> currentAcademicYearClasses() {
+        String activeYearId = structure.listYears().stream()
+                .filter(year -> "ACTIVE".equals(year.getStatus()))
+                .map(com.sse.app.academic.structure.AcademicYear::getId)
+                .findFirst().orElse(null);
+        return activeYearId == null
+                ? structure.listClasses(null, null)
+                : structure.listClasses(activeYearId, null);
+    }
+
+    private boolean isActiveClass(SchoolClass schoolClass) {
+        return schoolClass.getStatus() == null || "ACTIVE".equals(schoolClass.getStatus());
     }
 
     private DashboardResponse student(String studentId) {

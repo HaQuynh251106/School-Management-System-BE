@@ -4,6 +4,7 @@ import com.sse.app.academic.planning.AcademicPlanningDtos.ExamScheduleRequest;
 import com.sse.app.academic.planning.AcademicPlanningDtos.CurriculumItemRequest;
 import com.sse.app.academic.planning.AcademicPlanningDtos.NewVersionRequest;
 import com.sse.app.academic.planning.AcademicPlanningDtos.PlanRequest;
+import com.sse.app.academic.planning.AcademicPlanningDtos.PlanUpdateRequest;
 import com.sse.app.academic.planning.AcademicPlanningDtos.PlanStageRequest;
 import com.sse.app.academic.structure.AcademicYear;
 import com.sse.app.academic.structure.Room;
@@ -95,6 +96,20 @@ class AcademicPlanningServiceTest {
         assertThrows(ApiException.class, () -> service.createPlan(
                 new PlanRequest(null, "ay-1", "K10",
                         "Trùng kế hoạch", 2)));
+    }
+
+    @Test
+    void draftPlanKeepsTheExplicitlySelectedEducationProgram() {
+        draft.setProgramId("program-2018");
+        when(plans.findById("plan-1")).thenReturn(Optional.of(draft));
+        when(plans.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        AcademicTrainingPlan updated = service.updatePlan("plan-1",
+                new PlanUpdateRequest("Kế hoạch khối 10", 2,
+                        "program-2026", "Áp dụng chương trình mới"));
+
+        assertEquals("program-2026", updated.getProgramId());
+        assertEquals("Áp dụng chương trình mới", updated.getDescription());
     }
 
     @Test
