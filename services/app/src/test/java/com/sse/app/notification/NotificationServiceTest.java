@@ -198,6 +198,32 @@ class NotificationServiceTest {
     }
 
     @Test
+    void publishedEducationPlanNotifiesStudentAndLinkedParent() {
+        stubDeliverySaves();
+        UserDto student = new UserDto(
+                "student-1", "hs001", "Nguyen Van An", "STUDENT", "ACTIVE",
+                null, null, null, "HS001", "10A1", "class-10a1",
+                null, null, List.of());
+        when(users.list("STUDENT", null, "class-10a1")).thenReturn(List.of(student));
+        when(users.parentIdsOf("student-1")).thenReturn(List.of("parent-1"));
+
+        service.handleDomainEvent(DomainEvent.of(
+                "academic.education_plan.published", "admin-1",
+                "education_plan", "plan-1",
+                Map.of("classIds", List.of("class-10a1"),
+                        "message", "Nhà trường đã công bố kế hoạch giáo dục mới.")));
+
+        ArgumentCaptor<Notification> captor = ArgumentCaptor.forClass(Notification.class);
+        verify(notifications, org.mockito.Mockito.times(2)).save(captor.capture());
+        assertEquals(List.of("student-1", "parent-1"), captor.getAllValues()
+                .stream().map(Notification::getRecipientId).toList());
+        assertTrue(captor.getAllValues().stream()
+                .allMatch(item -> "ACADEMIC_PLAN".equals(item.getType())
+                        && "EDUCATION_PLAN".equals(item.getRefType())
+                        && "plan-1".equals(item.getRefId())));
+    }
+
+    @Test
     void updatedExamScheduleEmailsStudentsAndParentsOnceAndNotifiesTeacherInApp() {
         stubDeliverySaves();
         when(users.parentIdsOf("student-1")).thenReturn(List.of("parent-1"));

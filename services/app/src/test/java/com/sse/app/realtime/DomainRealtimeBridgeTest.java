@@ -13,6 +13,8 @@ class DomainRealtimeBridgeTest {
                 .isEqualTo("EXAM_UPDATED");
         assertThat(DomainRealtimeBridge.eventTypeFor("academic.timetable.published"))
                 .isEqualTo("TIMETABLE_PUBLISHED");
+        assertThat(DomainRealtimeBridge.eventTypeFor("academic.education_plan.published"))
+                .isEqualTo("ACADEMIC_PLAN_UPDATED");
         assertThat(DomainRealtimeBridge.eventTypeFor("academic.submission.graded"))
                 .isEqualTo("ASSIGNMENT_UPDATED");
         assertThat(DomainRealtimeBridge.eventTypeFor("finance.payment.confirmed"))
