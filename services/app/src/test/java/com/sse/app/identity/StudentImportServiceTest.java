@@ -63,7 +63,7 @@ class StudentImportServiceTest {
         assertEquals(1, result.totalRows());
         assertEquals(1, result.createdStudents());
         assertEquals(0, result.failedRows());
-        assertEquals("10A1", result.rows().getFirst().classCode());
+        assertEquals("10A1", result.rows().get(0).classCode());
         verify(enrollments).assignStudentCurrentClass(
                 anyString(), eq("class-10a1"), isNull());
     }
