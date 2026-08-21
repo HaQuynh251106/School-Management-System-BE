@@ -1,7 +1,10 @@
 package com.sse.app.identity;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.Size;
+
+import java.util.List;
 
 /** Gom các request DTO của phân hệ identity. */
 public final class IdentityDtos {
@@ -83,6 +86,14 @@ public final class IdentityDtos {
     public record RestoreUserRequest(
             String status,
             @NotBlank @Size(min = 5, max = 500) String reason) {}
+
+    public record LinkChildRequest(
+            @NotBlank String studentId,
+            Boolean primaryContact) {}
+
+    public record ReplaceChildrenRequest(
+            @NotEmpty List<@NotBlank String> studentIds,
+            Boolean primaryContact) {}
 
     public record PasswordResetResult(
             boolean ok,

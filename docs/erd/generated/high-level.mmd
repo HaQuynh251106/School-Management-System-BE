@@ -1,0 +1,52 @@
+erDiagram
+    direction LR
+    users ||--o{ parentstudent : links
+    users ||--o{ teacherclasssubjects : teaches
+    users ||--o{ grades : receives
+    academicyears ||--|{ semesters : contains
+    academicyears ||--o{ classes : contains
+    rooms ||--o{ classes : hosts
+    classes ||--o{ studentclassenrollments : enrolls
+    classes ||--o{ teacherclasssubjects : assigned
+    subjects ||--o{ teacherclasssubjects : assigned
+    educationprograms ||--o{ educationprogramsubjects : configures
+    educationprograms ||--o{ academictrainingplans : sources
+    academictrainingplans ||--o{ academictrainingplansubjects : contains
+    academictrainingplans ||--o{ academicassessmentplans : defines
+    academicassessmentplans ||--o{ academicassessmentplanteachers : owners
+    timetableschedules ||--o{ timetabledraftslots : previews
+    timetableschedules ||--o{ timetableslots : publishes
+    assignments ||--o{ assignmentsubmissions : receives
+    feeperiods ||--o{ invoices : generates
+    invoices ||--o{ invoiceitems : contains
+    invoices ||--o{ payments : paid_by
+    users ||--o{ notifications : receives
+    users ||--o{ chatmessages : sends
+
+    users["users"] { string id PK string role string user_code }
+    parentstudent["parent_student"] { string id PK string parent_id FK string student_id FK }
+    academicyears["academic_years"] { string id PK string code string status }
+    semesters["semesters"] { string id PK string academic_year_id FK string code }
+    classes["classes"] { string id PK string academic_year_id FK string home_room_id FK }
+    rooms["rooms"] { string id PK string code number capacity }
+    subjects["subjects"] { string id PK string code string required_room_type }
+    studentclassenrollments["student_class_enrollments"] { string id PK string student_id FK string class_id FK }
+    teacherclasssubjects["teacher_class_subjects"] { string id PK string teacher_id FK string class_id FK }
+    educationprograms["education_programs"] { string id PK string code string status }
+    educationprogramsubjects["education_program_subjects"] { string id PK string program_id FK string subject_id FK }
+    academictrainingplans["academic_training_plans"] { string id PK string program_id FK string status }
+    academictrainingplansubjects["academic_training_plan_subjects"] { string id PK string plan_id FK string subject_id FK }
+    academicassessmentplans["academic_assessment_plans"] { string id PK string plan_id FK string subject_id FK }
+    academicassessmentplanteachers["academic_assessment_plan_teachers"] { string id PK string assessment_plan_id FK string teacher_id FK }
+    timetableschedules["timetable_schedules"] { string id PK string semester_id FK string status }
+    timetabledraftslots["timetable_draft_slots"] { string id PK string schedule_id FK string assignment_id FK }
+    timetableslots["timetable_slots"] { string id PK string class_id FK string teacher_id FK }
+    grades["grades"] { string id PK string student_id FK string subject_id FK }
+    assignments["assignments"] { string id PK string class_id FK string teacher_id FK }
+    assignmentsubmissions["assignment_submissions"] { string id PK string assignment_id FK string student_id FK }
+    feeperiods["fee_periods"] { string id PK string academic_year_id FK string status }
+    invoices["invoices"] { string id PK string fee_period_id FK string student_id }
+    invoiceitems["invoice_items"] { string id PK string invoice_id FK number amount }
+    payments["payments"] { string id PK string invoice_id FK number amount }
+    notifications["notifications"] { string id PK string recipient_id string status }
+    chatmessages["chat_messages"] { string id PK string sender_id FK string recipient_id FK }

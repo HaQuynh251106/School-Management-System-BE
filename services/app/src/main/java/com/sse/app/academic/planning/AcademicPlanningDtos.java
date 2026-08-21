@@ -94,6 +94,7 @@ public final class AcademicPlanningDtos {
             @Min(1) @Max(30) int weekNumber,
             @Min(15) @Max(300) int durationMinutes,
             String teacherId,
+            List<String> teacherIds,
             String notes) {}
 
     public record WorkflowRequest(@NotBlank String comment) {}

@@ -16,11 +16,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
 import java.util.Optional;
 import java.util.Map;
+import java.util.Set;
 import org.mockito.ArgumentCaptor;
 
 @ExtendWith(MockitoExtension.class)
@@ -130,5 +132,40 @@ class UserServiceSecurityTest {
         assertTrue(String.valueOf(payload.getValue().get("resetUrl"))
                 .startsWith("http://127.0.0.1:5173/?token="));
         assertEquals(30, payload.getValue().get("expiresInMinutes"));
+    }
+
+    @Test
+    void adminCanLinkMultipleChildrenWithoutCreatingDuplicateRelation() {
+        User parent = User.builder().id("parent-1").username("parent.one")
+                .fullName("Phụ huynh Một").role("PARENT").status("ACTIVE").build();
+        User student = User.builder().id("student-1").username("student.one")
+                .fullName("Học sinh Một").role("STUDENT").status("ACTIVE").build();
+        when(users.findById("parent-1")).thenReturn(Optional.of(parent));
+        when(users.findById("student-1")).thenReturn(Optional.of(student));
+        when(relations.findByParentId("parent-1")).thenReturn(List.of());
+        when(relations.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(rbac.permissionsFor("parent-1")).thenReturn(Set.of());
+
+        service.linkChild("parent-1", "student-1", true);
+
+        ArgumentCaptor<ParentStudent> relation = ArgumentCaptor.forClass(ParentStudent.class);
+        verify(relations).save(relation.capture());
+        assertEquals("parent-1", relation.getValue().getParentId());
+        assertEquals("student-1", relation.getValue().getStudentId());
+        assertTrue(relation.getValue().isPrimaryContact());
+    }
+
+    @Test
+    void linkChildRejectsNonStudentTarget() {
+        User parent = User.builder().id("parent-1").role("PARENT").status("ACTIVE").build();
+        User teacher = User.builder().id("teacher-1").role("TEACHER").status("ACTIVE").build();
+        when(users.findById("parent-1")).thenReturn(Optional.of(parent));
+        when(users.findById("teacher-1")).thenReturn(Optional.of(teacher));
+
+        ApiException error = assertThrows(ApiException.class,
+                () -> service.linkChild("parent-1", "teacher-1", true));
+
+        assertEquals(400, error.getStatus().value());
+        verify(relations, never()).save(any());
     }
 }

@@ -1,0 +1,91 @@
+erDiagram
+    direction LR
+    assignmentsubmissions ||--o{ assignmentsubmissionversions : references
+    assignments ||--o{ assignmentsubmissions : references
+    attendancerecords ||--o{ attendanceexcuserequests : references
+    grades ||--o{ gradechangelogs : references
+    assignments ||--o{ submissionresubmissionrequests : references
+    assignmentsubmissions ||--o{ submissionresubmissionrequests : references
+    assignmentsubmissionversions["assignment_submission_versions"] {
+        string id PK
+        string attachment_file_id FK
+        string submission_id FK
+        string submitted_by FK
+        string attachment_content_type
+        string attachment_name
+        number attachment_size_bytes
+    }
+    assignmentsubmissions["assignment_submissions"] {
+        string id PK
+        string assignment_id FK
+        string graded_by FK
+        string student_id FK
+        string attachment_file_id FK
+        string attachment_name
+        string content
+        string feedback
+    }
+    assignments["assignments"] {
+        string id PK
+        string class_id FK
+        string subject_id FK
+        string teacher_id FK
+        string attachment_file_id FK
+        bool allow_late
+        string attachment_name
+        datetime created_at
+    }
+    attendanceexcuserequests["attendance_excuse_requests"] {
+        string id PK
+        string attendance_record_id FK
+        string requested_by FK
+        string reviewed_by FK
+        string student_id FK
+        string reason
+        datetime requested_at
+        string requester_role
+    }
+    attendancerecords["attendance_records"] {
+        string id PK
+        string class_id FK
+        string slot_id FK
+        string student_id FK
+        date date
+        string note
+        number period_no
+    }
+    gradechangelogs["grade_change_logs"] {
+        string id PK
+        string grade_id FK
+        datetime changed_at
+        string changed_by
+        string new_note
+    }
+    gradeconfigurations["grade_configurations"] {
+        string id PK
+        string subject_id FK
+        string semester_id FK
+        string updated_by FK
+        string category_code
+        string category_name
+        number required_count
+    }
+    grades["grades"] {
+        string id PK
+        string semester_id FK
+        string student_id FK
+        string subject_id FK
+        string category
+        string category_name
+        string note
+    }
+    submissionresubmissionrequests["submission_resubmission_requests"] {
+        string id PK
+        string assignment_id FK
+        string requested_by FK
+        string student_id FK
+        string submission_id FK
+        datetime allowed_until
+        string reason
+        datetime requested_at
+    }

@@ -1797,6 +1797,15 @@ public class AutomaticTimetableService {
                 Math.max(1, schoolClass.getStudentCount()), 1, maxDaily, false);
         AutoTimeslot timeslot = timeslotByKey.get(day + "-" + period);
         AutoRoom room = roomById.get(schoolClass.getHomeRoomId());
+        if (timeslot == null) {
+            throw ApiException.badRequest("Khung tiết đã chọn không bao phủ "
+                    + subjectName + " cố định của lớp " + schoolClass.getCode()
+                    + " (" + day + ", tiết " + period + ")");
+        }
+        if (room == null) {
+            throw ApiException.badRequest("Lớp " + schoolClass.getCode()
+                    + " chưa có phòng học cố định đang hoạt động");
+        }
         activity.setTimeslotRange(List.of(timeslot));
         activity.setRoomRange(List.of(room));
         activity.setActivity(true);

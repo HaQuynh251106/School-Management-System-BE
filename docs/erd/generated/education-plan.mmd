@@ -1,0 +1,115 @@
+erDiagram
+    direction LR
+    academicassessmentplans ||--o{ academicassessmentplanteachers : references
+    academictrainingplans ||--o{ academicassessmentplans : references
+    academiccurriculumitems ||--o{ academiccurriculumdistributions : references
+    academictrainingplansubjects ||--o{ academiccurriculumdistributions : references
+    academiccurriculumitems ||--o{ academiccurriculumitems : references
+    academictrainingplansubjects ||--o{ academiccurriculumitems : references
+    academictrainingplans ||--o{ academicexamschedules : references
+    academictrainingplans ||--o{ academicplanapprovalhistory : references
+    academictrainingplansubjects ||--o{ academictrainingplanspecialweeks : references
+    academictrainingplansubjects ||--o{ academictrainingplanstages : references
+    academictrainingplans ||--o{ academictrainingplansubjects : references
+    academictrainingplans ||--o{ academictrainingplans : references
+    educationprograms ||--o{ academictrainingplans : references
+    educationprograms ||--o{ educationprogramsubjects : references
+    academicassessmentplanteachers["academic_assessment_plan_teachers"] {
+        string id PK
+        string assessment_plan_id FK
+        string teacher_id FK
+        bool primary_teacher
+        datetime created_at
+    }
+    academicassessmentplans["academic_assessment_plans"] {
+        string id PK
+        string plan_id FK
+        string semester_id FK
+        string class_id FK
+        string subject_id FK
+        string teacher_id FK
+        string assessment_type
+        number week_number
+    }
+    academiccurriculumdistributions["academic_curriculum_distributions"] {
+        string id PK
+        string plan_subject_id FK
+        string curriculum_item_id FK
+        number week_number
+        string content_type
+        string title
+    }
+    academiccurriculumitems["academic_curriculum_items"] {
+        string id PK
+        string plan_subject_id FK
+        string parent_id FK
+        string item_type
+        string code
+        string title
+    }
+    academicexamschedules["academic_exam_schedules"] {
+        string id PK
+        string plan_id FK
+        string semester_id FK
+        string subject_id FK
+        string grade_level FK
+        string room_id FK
+        string proctor_teacher_id FK
+        string name
+    }
+    academicplanapprovalhistory["academic_plan_approval_history"] {
+        string id PK
+        string plan_id FK
+        string actor_id FK
+        string action
+        string from_status
+        string to_status
+    }
+    academictrainingplanspecialweeks["academic_training_plan_special_weeks"] {
+        string id PK
+        string plan_subject_id FK
+        string week_type
+        number week_number
+        string name
+    }
+    academictrainingplanstages["academic_training_plan_stages"] {
+        string id PK
+        string plan_subject_id FK
+        string code
+        string name
+        number sequence
+    }
+    academictrainingplansubjects["academic_training_plan_subjects"] {
+        string id PK
+        string plan_id FK
+        string semester_id FK
+        string subject_id FK
+        number weekly_periods
+        number total_periods
+        date start_date
+    }
+    academictrainingplans["academic_training_plans"] {
+        string id PK
+        string academic_year_id FK
+        string grade_level FK
+        string published_by FK
+        string based_on_plan_id FK
+        string locked_by FK
+        string program_id FK
+        string name
+    }
+    educationprogramsubjects["education_program_subjects"] {
+        string id PK
+        string program_id FK
+        string grade_level FK
+        string subject_id FK
+        string subject_type
+        number annual_periods
+        number semester1_periods
+    }
+    educationprograms["education_programs"] {
+        string id PK
+        string code
+        string name
+        number start_year
+    }

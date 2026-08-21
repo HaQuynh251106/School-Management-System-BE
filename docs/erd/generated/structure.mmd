@@ -1,0 +1,123 @@
+erDiagram
+    direction LR
+    classes ||--o{ classsubjectcombinations : references
+    subjectcombinations ||--o{ classsubjectcombinations : references
+    academicyears ||--o{ classes : references
+    gradelevels ||--o{ classes : references
+    rooms ||--o{ classes : references
+    academicyears ||--o{ schoolholidays : references
+    academicyears ||--o{ semesters : references
+    academicyears ||--o{ studentclassenrollments : references
+    classes ||--o{ studentclassenrollments : references
+    academicyears ||--o{ studentclassenrollments : references
+    classes ||--o{ studentclassenrollments : references
+    subjectcombinations ||--o{ subjectcombinationsubjects : references
+    subjects ||--o{ subjectcombinationsubjects : references
+    academicyears ||--o{ subjectcombinations : references
+    gradelevels ||--o{ subjectcombinations : references
+    classes ||--o{ teacherclasssubjects : references
+    semesters ||--o{ teacherclasssubjects : references
+    subjects ||--o{ teacherclasssubjects : references
+    academicyears ||--o{ teacherstaffingpolicies : references
+    subjects ||--o{ teachersubjectcapabilities : references
+    academicyears["academic_years"] {
+        string id PK
+        string code
+        date end_date
+        string name
+    }
+    classsubjectcombinations["class_subject_combinations"] {
+        string class_id FK
+        string combination_id FK
+        string assigned_by FK
+        datetime assigned_at
+    }
+    classes["classes"] {
+        string id PK
+        string academic_year_id FK
+        string grade_level FK
+        string homeroom_teacher_id FK
+        string home_room_id FK
+        string code
+        string name
+        number student_count
+    }
+    gradelevels["grade_levels"] {
+        string code
+        string name
+        number numeric_level
+    }
+    rooms["rooms"] {
+        string id PK
+        number capacity
+        string code
+        string name
+    }
+    schoolholidays["school_holidays"] {
+        string id PK
+        string academic_year_id FK
+        date date
+        string description
+        string name
+    }
+    semesters["semesters"] {
+        string id PK
+        string academic_year_id FK
+        string code
+        date end_date
+        string name
+    }
+    studentclassenrollments["student_class_enrollments"] {
+        string id PK
+        string academic_year_id FK
+        string class_id FK
+        string enrolled_by FK
+        string source_academic_year_id FK
+        string source_class_id FK
+        string source_summary_id FK
+        string student_id FK
+    }
+    subjectcombinationsubjects["subject_combination_subjects"] {
+        string id PK
+        string combination_id FK
+        string subject_id FK
+    }
+    subjectcombinations["subject_combinations"] {
+        string id PK
+        string academic_year_id FK
+        string grade_level FK
+        string code
+        string name
+        number expected_class_count
+    }
+    subjects["subjects"] {
+        string id PK
+        string code
+        string name
+        number coefficient
+    }
+    teacherclasssubjects["teacher_class_subjects"] {
+        string id PK
+        string class_id FK
+        string semester_id FK
+        string subject_id FK
+        string teacher_id FK
+        string class_code
+        datetime created_at
+        string status
+    }
+    teacherstaffingpolicies["teacher_staffing_policies"] {
+        string id PK
+        string academic_year_id FK
+        string school_type
+        number weekly_teaching_norm
+        number teaching_weeks
+    }
+    teachersubjectcapabilities["teacher_subject_capabilities"] {
+        string id PK
+        string teacher_id FK
+        string subject_id FK
+        bool primary_subject
+        bool active
+        datetime created_at
+    }

@@ -91,9 +91,11 @@ sse:
     refresh-ttl-seconds: 604800
   seed:
     # Business/demo records are never created implicitly. Enable only in an
-    # isolated demo environment together with SSE_SEED_DATASET=demo|scenario.
+    # isolated demo environment with SSE_SEED_DATASET=demo|scenario|full-demo.
     enabled: ${SSE_SEED_ENABLED:false}
     dataset: ${SSE_SEED_DATASET:baseline}
+    files: ${SSE_SEED_FILES:false}
+    exit-after-run: ${SSE_SEED_EXIT_AFTER_RUN:false}
   events:
     rabbitmq:
       enabled: ${SSE_EVENTS_RABBITMQ_ENABLED:true}
@@ -110,10 +112,19 @@ sse:
       enabled: ${SSE_NOTIFICATION_WORKER_ENABLED:true}
       concurrency: ${SSE_NOTIFICATION_WORKER_CONCURRENCY:4}
     provider-mode: ${SSE_NOTIFICATION_PROVIDER_MODE:mock}
+    email-provider: ${SSE_NOTIFICATION_EMAIL_PROVIDER:sendgrid}
     max-attempts: ${SSE_NOTIFICATION_MAX_ATTEMPTS:3}
     sendgrid:
       api-key: ${SSE_SENDGRID_API_KEY:}
       from-email: ${SSE_SENDGRID_FROM_EMAIL:no-reply@sse.local}
+    smtp:
+      host: ${SSE_SMTP_HOST:smtp.gmail.com}
+      port: ${SSE_SMTP_PORT:587}
+      username: ${SSE_SMTP_USERNAME:}
+      password: ${SSE_SMTP_PASSWORD:}
+      from-email: ${SSE_SMTP_FROM_EMAIL:${SSE_SMTP_USERNAME:}}
+      auth: ${SSE_SMTP_AUTH:true}
+      starttls: ${SSE_SMTP_STARTTLS:true}
     fcm:
       access-token: ${SSE_FCM_ACCESS_TOKEN:}
       project-id: ${SSE_FCM_PROJECT_ID:}

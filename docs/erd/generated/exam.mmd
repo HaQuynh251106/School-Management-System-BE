@@ -1,0 +1,74 @@
+erDiagram
+    direction LR
+    examscheduleversions ||--o{ examperiods : references
+    examsessions ||--o{ examroomassignments : references
+    examroomassignments ||--o{ examroomstudents : references
+    examsessions ||--o{ examroomstudents : references
+    examscheduleversions ||--o{ examscheduleversions : references
+    examperiods ||--o{ examscheduleversions : references
+    examscheduleversions ||--o{ examsessions : references
+    examperiods ||--o{ examteacherunavailability : references
+    examcategories["exam_categories"] {
+        string id PK
+        string code
+        string name
+        number weight
+    }
+    examperiods["exam_periods"] {
+        string id PK
+        string academic_year_id FK
+        string semester_id FK
+        string published_version_id FK
+        string created_by FK
+        string code
+        string name
+        string exam_type
+    }
+    examroomassignments["exam_room_assignments"] {
+        string id PK
+        string session_id FK
+        string room_id FK
+        string primary_proctor_id FK
+        string backup_proctor_id FK
+        number capacity_snapshot
+        datetime created_at
+        datetime updated_at
+    }
+    examroomstudents["exam_room_students"] {
+        string id PK
+        string session_id FK
+        string room_assignment_id FK
+        string student_id FK
+        string class_id FK
+        string student_code
+        string student_name
+        string class_code
+    }
+    examscheduleversions["exam_schedule_versions"] {
+        string id PK
+        string exam_period_id FK
+        string based_on_version_id FK
+        string created_by FK
+        number version_no
+        string status
+        string change_reason
+    }
+    examsessions["exam_sessions"] {
+        string id PK
+        string version_id FK
+        string subject_id FK
+        string source_assessment_plan_id FK
+        string source_training_plan_id FK
+        string grade_level
+        date exam_date
+        string start_time
+    }
+    examteacherunavailability["exam_teacher_unavailability"] {
+        string id PK
+        string exam_period_id FK
+        string teacher_id FK
+        string created_by FK
+        date unavailable_date
+        string start_time
+        string end_time
+    }

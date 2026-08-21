@@ -166,6 +166,38 @@ public class UserController {
         return device;
     }
 
+    @PostMapping("/{id}/children")
+    public UserDto linkChild(@PathVariable String id,
+                             @Valid @RequestBody LinkChildRequest request) {
+        CurrentUser actor = CurrentUserHolder.require();
+        CurrentUserHolder.requirePermission("IDENTITY_USER_UPDATE");
+        UserDto parent = users.linkChild(id, request.studentId(),
+                !Boolean.FALSE.equals(request.primaryContact()));
+        audit(actor, "PARENT_CHILD_LINK", id, "Student=" + request.studentId());
+        return parent;
+    }
+
+    @PutMapping("/{id}/children")
+    public UserDto replaceChildren(@PathVariable String id,
+                                   @Valid @RequestBody ReplaceChildrenRequest request) {
+        CurrentUser actor = CurrentUserHolder.require();
+        CurrentUserHolder.requirePermission("IDENTITY_USER_UPDATE");
+        UserDto parent = users.replaceChildren(id, request.studentIds(),
+                !Boolean.FALSE.equals(request.primaryContact()));
+        audit(actor, "PARENT_CHILD_REPLACE", id,
+                "Students=" + String.join(",", request.studentIds()));
+        return parent;
+    }
+
+    @DeleteMapping("/{id}/children/{studentId}")
+    public UserDto unlinkChild(@PathVariable String id, @PathVariable String studentId) {
+        CurrentUser actor = CurrentUserHolder.require();
+        CurrentUserHolder.requirePermission("IDENTITY_USER_UPDATE");
+        UserDto parent = users.unlinkChild(id, studentId);
+        audit(actor, "PARENT_CHILD_UNLINK", id, "Student=" + studentId);
+        return parent;
+    }
+
     private UserDto changeStatus(String id, String status) {
         CurrentUser actor = CurrentUserHolder.require();
         CurrentUserHolder.requirePermission("IDENTITY_USER_LOCK");

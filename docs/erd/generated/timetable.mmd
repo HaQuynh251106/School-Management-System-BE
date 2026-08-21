@@ -1,0 +1,55 @@
+erDiagram
+    direction LR
+    timetableschedules ||--o{ timetabledraftslots : references
+    timetableschedules ||--o{ timetablemakeupproposals : references
+    timetableschedules ||--o{ timetableslots : references
+    classlessonprogress["class_lesson_progress"] {
+        string id PK
+        string academic_year_id FK
+        string semester_id FK
+        string class_id FK
+        string subject_id FK
+        string curriculum_item_id FK
+        string teacher_id FK
+        date lesson_date
+    }
+    timetabledraftslots["timetable_draft_slots"] {
+        string id PK
+        string schedule_id FK
+        string assignment_id FK
+        string class_id FK
+        string subject_id FK
+        string teacher_id FK
+        string room_id FK
+        string semester_id FK
+    }
+    timetablemakeupproposals["timetable_makeup_proposals"] {
+        string id PK
+        string schedule_id FK
+        string class_id FK
+        string subject_id FK
+        string teacher_id FK
+        string reviewed_by FK
+        string room_code
+        date missed_date
+    }
+    timetableschedules["timetable_schedules"] {
+        string id PK
+        string academic_year_id FK
+        string semester_id FK
+        string scope_grade_level FK
+        string generated_by FK
+        string published_by FK
+        string name
+        string status
+    }
+    timetableslots["timetable_slots"] {
+        string id PK
+        string class_id FK
+        string semester_id FK
+        string subject_id FK
+        string teacher_id FK
+        string source_schedule_id FK
+        string day_of_week
+        string end_time
+    }

@@ -51,6 +51,7 @@ public class AcademicPlanCompletionService {
     private final AcademicTrainingPlanSpecialWeekRepository specialWeeks;
     private final AcademicCurriculumDistributionRepository distributions;
     private final AcademicAssessmentPlanRepository assessments;
+    private final AcademicAssessmentPlanTeacherRepository assessmentTeachers;
     private final AcademicPlanApprovalHistoryRepository approvalHistory;
     private final EducationProgramRepository programs;
     private final EducationProgramSubjectRepository programSubjects;
@@ -71,6 +72,7 @@ public class AcademicPlanCompletionService {
             AcademicTrainingPlanSpecialWeekRepository specialWeeks,
             AcademicCurriculumDistributionRepository distributions,
             AcademicAssessmentPlanRepository assessments,
+            AcademicAssessmentPlanTeacherRepository assessmentTeachers,
             AcademicPlanApprovalHistoryRepository approvalHistory,
             EducationProgramRepository programs,
             EducationProgramSubjectRepository programSubjects,
@@ -89,6 +91,7 @@ public class AcademicPlanCompletionService {
         this.specialWeeks = specialWeeks;
         this.distributions = distributions;
         this.assessments = assessments;
+        this.assessmentTeachers = assessmentTeachers;
         this.approvalHistory = approvalHistory;
         this.programs = programs;
         this.programSubjects = programSubjects;
@@ -403,11 +406,13 @@ public class AcademicPlanCompletionService {
 
     public List<AcademicAssessmentPlan> listAssessments(String planId) {
         getPlan(planId);
-        return assessments.findByPlanIdOrderBySemesterIdAscWeekNumberAscSubjectIdAsc(planId);
+        return assessments.findByPlanIdOrderBySemesterIdAscWeekNumberAscSubjectIdAsc(planId)
+                .stream().map(this::withTeacherIds).toList();
     }
 
     public AcademicAssessmentPlan getAssessment(String planId, String id) {
         return assessments.findById(id).filter(item -> planId.equals(item.getPlanId()))
+                .map(this::withTeacherIds)
                 .orElseThrow(() -> ApiException.notFound("Kế hoạch kiểm tra"));
     }
 
@@ -429,11 +434,24 @@ public class AcademicPlanCompletionService {
                 throw ApiException.badRequest("Lớp không thuộc phạm vi của kế hoạch");
             }
         }
-        if (request.teacherId() != null && !request.teacherId().isBlank()
-                && request.classId() != null && !request.classId().isBlank()
-                && teaching.list(request.teacherId(), request.classId(), request.subjectId(),
-                request.semesterId(), "ACTIVE").isEmpty()) {
-            throw ApiException.badRequest("Giáo viên chưa được phân công đúng lớp, môn và học kỳ");
+        List<String> responsibleTeacherIds = responsibleTeacherIds(request);
+        for (String teacherId : responsibleTeacherIds) {
+            User teacher = users.findById(teacherId)
+                    .orElseThrow(() -> ApiException.notFound("Giáo viên phụ trách"));
+            if (!"TEACHER".equals(teacher.getRole()) || !"ACTIVE".equals(teacher.getStatus())) {
+                throw ApiException.badRequest("Người phụ trách phải là giáo viên đang hoạt động");
+            }
+            if (capabilities.findByTeacherIdAndSubjectId(teacherId, request.subjectId())
+                    .filter(TeacherSubjectCapability::isActive).isEmpty()) {
+                throw ApiException.badRequest(teacher.getFullName()
+                        + " chưa được khai báo chuyên môn phù hợp với môn đã chọn");
+            }
+            if (request.classId() != null && !request.classId().isBlank()
+                    && teaching.list(teacherId, request.classId(), request.subjectId(),
+                    request.semesterId(), "ACTIVE").isEmpty()) {
+                throw ApiException.badRequest(teacher.getFullName()
+                        + " chưa được phân công đúng lớp, môn và học kỳ");
+            }
         }
         long weeks = ChronoUnit.WEEKS.between(semester.getStartDate(), semester.getEndDate()) + 1;
         if (request.weekNumber() > Math.min(30, weeks)) {
@@ -475,10 +493,22 @@ public class AcademicPlanCompletionService {
         row.setResultMethod(resultMethod);
         row.setWeekNumber(request.weekNumber());
         row.setDurationMinutes(request.durationMinutes());
-        row.setTeacherId(blankToNull(request.teacherId()));
+        row.setTeacherId(responsibleTeacherIds.isEmpty() ? null : responsibleTeacherIds.get(0));
         row.setNotes(blankToNull(request.notes()));
         row.setUpdatedAt(now);
         AcademicAssessmentPlan saved = assessments.save(row);
+        assessments.flush();
+        assessmentTeachers.deleteByAssessmentPlanId(saved.getId());
+        assessmentTeachers.flush();
+        for (int index = 0; index < responsibleTeacherIds.size(); index++) {
+            assessmentTeachers.save(AcademicAssessmentPlanTeacher.builder()
+                    .id(Ids.gen("assessment-teacher"))
+                    .assessmentPlanId(saved.getId())
+                    .teacherId(responsibleTeacherIds.get(index))
+                    .primaryTeacher(index == 0)
+                    .createdAt(now)
+                    .build());
+        }
         syncAssessmentWeek(planSubject, request.weekNumber(), type, now);
         if (id != null && (!request.semesterId().equals(previousSemesterId)
                 || !request.subjectId().equals(previousSubjectId)
@@ -486,7 +516,7 @@ public class AcademicPlanCompletionService {
             assessments.flush();
             cleanupAssessmentWeek(planId, previousSemesterId, previousSubjectId, previousWeekNumber);
         }
-        return saved;
+        return withTeacherIds(saved);
     }
 
     @Transactional
@@ -808,7 +838,7 @@ public class AcademicPlanCompletionService {
         }
         record(plan, "PUBLISH", "APPROVED", "PUBLISHED", actorId, "Công bố kế hoạch giáo dục");
         List<String> classIds = structure.listClasses(plan.getAcademicYearId(), plan.getGradeLevel())
-                .stream().map(SchoolClass::getId).toList();
+                .stream().filter(this::isActiveClass).map(SchoolClass::getId).toList();
         events.publish("academic.education_plan.published", actorId,
                 "education_plan", planId, Map.of(
                         "classIds", classIds,
@@ -848,7 +878,8 @@ public class AcademicPlanCompletionService {
                             .createdAt(now).updatedAt(now).build()));
         });
         assessments.findByPlanIdOrderBySemesterIdAscWeekNumberAscSubjectIdAsc(sourcePlanId)
-                .forEach(item -> assessments.save(AcademicAssessmentPlan.builder()
+                .forEach(item -> {
+                    AcademicAssessmentPlan copied = assessments.save(AcademicAssessmentPlan.builder()
                         .id(Ids.gen("assessment")).planId(targetPlanId)
                         .semesterId(item.getSemesterId()).classId(item.getClassId())
                         .subjectId(item.getSubjectId()).assessmentType(item.getAssessmentType())
@@ -857,7 +888,48 @@ public class AcademicPlanCompletionService {
                         .resultMethod(item.getResultMethod())
                         .weekNumber(item.getWeekNumber()).durationMinutes(item.getDurationMinutes())
                         .teacherId(item.getTeacherId()).notes(item.getNotes())
-                        .createdAt(now).updatedAt(now).build()));
+                        .createdAt(now).updatedAt(now).build());
+                    List<AcademicAssessmentPlanTeacher> sourceTeachers = assessmentTeachers
+                            .findByAssessmentPlanIdOrderByPrimaryTeacherDescTeacherIdAsc(item.getId());
+                    List<AcademicAssessmentPlanTeacher> resolvedTeachers = sourceTeachers;
+                    if (resolvedTeachers.isEmpty() && item.getTeacherId() != null) {
+                        resolvedTeachers = List.of(AcademicAssessmentPlanTeacher.builder()
+                                .teacherId(item.getTeacherId()).primaryTeacher(true).build());
+                    }
+                    resolvedTeachers.forEach(teacher -> assessmentTeachers.save(
+                            AcademicAssessmentPlanTeacher.builder()
+                                    .id(Ids.gen("assessment-teacher"))
+                                    .assessmentPlanId(copied.getId())
+                                    .teacherId(teacher.getTeacherId())
+                                    .primaryTeacher(teacher.isPrimaryTeacher())
+                                    .createdAt(now)
+                                    .build()));
+                });
+    }
+
+    private List<String> responsibleTeacherIds(AssessmentPlanRequest request) {
+        List<String> requested = request.teacherIds() == null
+                ? List.of() : request.teacherIds();
+        List<String> normalized = requested.stream()
+                .filter(id -> id != null && !id.isBlank())
+                .map(String::trim)
+                .distinct()
+                .toList();
+        if (!normalized.isEmpty()) return normalized;
+        return request.teacherId() == null || request.teacherId().isBlank()
+                ? List.of() : List.of(request.teacherId().trim());
+    }
+
+    private AcademicAssessmentPlan withTeacherIds(AcademicAssessmentPlan row) {
+        List<String> teacherIds = assessmentTeachers
+                .findByAssessmentPlanIdOrderByPrimaryTeacherDescTeacherIdAsc(row.getId())
+                .stream().map(AcademicAssessmentPlanTeacher::getTeacherId).toList();
+        if (teacherIds.isEmpty() && row.getTeacherId() != null
+                && !row.getTeacherId().isBlank()) {
+            teacherIds = List.of(row.getTeacherId());
+        }
+        row.setTeacherIds(teacherIds);
+        return row;
     }
 
     private String remapCurriculumIds(String sourceIds, Map<String, String> mappings) {
@@ -874,7 +946,8 @@ public class AcademicPlanCompletionService {
             List<EducationProgramSubject> configured,
             List<Semester> semesters,
             List<ValidationIssue> issues) {
-        List<SchoolClass> classes = structure.listClasses(plan.getAcademicYearId(), plan.getGradeLevel());
+        List<SchoolClass> classes = structure.listClasses(plan.getAcademicYearId(), plan.getGradeLevel())
+                .stream().filter(this::isActiveClass).toList();
         Map<String, EducationProgramSubject> configBySubject = configured.stream()
                 .collect(Collectors.toMap(EducationProgramSubject::getSubjectId, item -> item));
         boolean requiresCombination = configured.stream().anyMatch(config ->
@@ -944,6 +1017,11 @@ public class AcademicPlanCompletionService {
     private String requireProgramId(AcademicTrainingPlan plan) {
         return plan.getProgramId() == null || plan.getProgramId().isBlank()
                 ? "program-gdpt-2018" : plan.getProgramId();
+    }
+
+    private boolean isActiveClass(SchoolClass schoolClass) {
+        return schoolClass.getStatus() == null
+                || "ACTIVE".equalsIgnoreCase(schoolClass.getStatus());
     }
 
     private int periodsForSemester(List<AcademicTrainingPlanSubject> rows,

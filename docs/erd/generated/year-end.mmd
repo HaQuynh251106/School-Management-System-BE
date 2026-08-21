@@ -1,0 +1,60 @@
+erDiagram
+    direction LR
+    yearresultpublications ||--o{ yearresultpublicationhistory : references
+    academicpromotionpolicies["academic_promotion_policies"] {
+        string id PK
+        string academic_year_id FK
+        string updated_by FK
+        number maximum_subjects_below_minimum
+        number minimum_attendance_rate
+        string minimum_conduct_grade
+    }
+    academicresultlocks["academic_result_locks"] {
+        string id PK
+        string academic_year_id FK
+        string class_id FK
+        string locked_by FK
+        string semester_id FK
+        datetime locked_at
+        string reason
+    }
+    homeroomremarks["homeroom_remarks"] {
+        string id PK
+        string student_id FK
+        string class_id FK
+        string academic_year_id FK
+        string semester_id FK
+        string teacher_id FK
+        string body
+        string status
+    }
+    studentyearlysummaries["student_yearly_summaries"] {
+        string id PK
+        string academic_year_id FK
+        string class_id FK
+        string finalized_by FK
+        string reviewed_by FK
+        string student_id FK
+        string next_class_id FK
+        string progressed_by FK
+    }
+    yearresultpublicationhistory["year_result_publication_history"] {
+        string id PK
+        string academic_year_id FK
+        string actor_id FK
+        string class_id FK
+        string publication_id FK
+        string action
+        datetime occurred_at
+        number publication_version
+    }
+    yearresultpublications["year_result_publications"] {
+        string id PK
+        string academic_year_id FK
+        string class_id FK
+        string published_by FK
+        string withdrawn_by FK
+        datetime published_at
+        string status
+        number student_count
+    }

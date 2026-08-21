@@ -1,0 +1,136 @@
+erDiagram
+    direction LR
+    invoices ||--o{ bankstatemententries : references
+    payments ||--o{ bankstatemententries : references
+    feeperioditems ||--o{ feeperioditemtargets : references
+    feeperiods ||--o{ feeperioditems : references
+    feeperiods ||--o{ feeperiodtargets : references
+    feeperioditems ||--o{ invoiceitems : references
+    invoices ||--o{ invoiceitems : references
+    feeperiods ||--o{ invoices : references
+    payments ||--o{ paymentgatewaytransactions : references
+    invoices ||--o{ paymentproofs : references
+    payments ||--o{ paymentproofs : references
+    invoices ||--o{ paymentreceipts : references
+    payments ||--o{ paymentreceipts : references
+    paymentreconciliationruns ||--o{ paymentreconciliationissues : references
+    paymentreconciliationruns ||--o{ paymentreconciliationmethodsummaries : references
+    invoices ||--o{ paymentrefunds : references
+    payments ||--o{ paymentrefunds : references
+    invoices ||--o{ payments : references
+    bankstatemententries["bank_statement_entries"] {
+        string id PK
+        string matched_invoice_id FK
+        string matched_payment_id FK
+        number amount
+        string bank_code
+        string import_batch_id
+    }
+    feeperioditemtargets["fee_period_item_targets"] {
+        string id PK
+        string fee_period_item_id FK
+        string target_id
+        string target_type
+    }
+    feeperioditems["fee_period_items"] {
+        string id PK
+        string fee_period_id FK
+        number amount
+        string grade_level
+        string name
+    }
+    feeperiodtargets["fee_period_targets"] {
+        string id PK
+        string fee_period_id FK
+        string target_id
+        string target_type
+    }
+    feeperiods["fee_periods"] {
+        string id PK
+        string academic_year_id FK
+        string semester_id FK
+        string apply_to_grades
+        string code
+        datetime created_at
+    }
+    invoiceitems["invoice_items"] {
+        string id PK
+        string invoice_id FK
+        string fee_period_item_id FK
+        number amount
+        string name
+        string source_target_type
+    }
+    invoices["invoices"] {
+        string id PK
+        string fee_period_id FK
+        string parent_id FK
+        string student_id FK
+        string code
+        date due_date
+        datetime issued_at
+    }
+    paymentgatewaytransactions["payment_gateway_transactions"] {
+        string id PK
+        string payment_id FK
+        number callback_count
+        datetime created_at
+        string error_code
+    }
+    paymentproofs["payment_proofs"] {
+        string id PK
+        string file_id FK
+        string invoice_id FK
+        string parent_id FK
+        string payment_id FK
+        string student_id FK
+        number amount
+        string content_type
+    }
+    paymentreceipts["payment_receipts"] {
+        string id PK
+        string file_id FK
+        string invoice_id FK
+        string parent_id FK
+        string payment_id FK
+        string student_id FK
+        string previous_file_id FK
+        number amount
+    }
+    paymentreconciliationissues["payment_reconciliation_issues"] {
+        string id PK
+        string run_id FK
+        number actual_amount
+        datetime created_at
+        string entity_id
+    }
+    paymentreconciliationmethodsummaries["payment_reconciliation_method_summaries"] {
+        string id PK
+        string run_id FK
+        number gross_amount
+        string method
+        number net_amount
+    }
+    paymentreconciliationruns["payment_reconciliation_runs"] {
+        string id PK
+        number discrepancy_count
+        number gross_amount
+        number net_amount
+    }
+    paymentrefunds["payment_refunds"] {
+        string id PK
+        string invoice_id FK
+        string parent_id FK
+        string payment_id FK
+        string student_id FK
+        number amount
+        datetime approved_at
+        string approved_by
+    }
+    payments["payments"] {
+        string id PK
+        string invoice_id FK
+        number amount
+        datetime created_at
+        string method
+    }

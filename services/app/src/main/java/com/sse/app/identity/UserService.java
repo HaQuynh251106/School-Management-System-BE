@@ -240,6 +240,76 @@ public class UserService {
                 .map(ParentStudent::getParentId).toList();
     }
 
+    @Transactional
+    public UserDto linkChild(String parentId, String studentId, boolean primaryContact) {
+        User parent = requireActiveRole(parentId, "PARENT", "Phụ huynh");
+        User student = requireActiveRole(studentId, "STUDENT", "Học sinh");
+        ParentStudent relation = relations.findByParentId(parentId).stream()
+                .filter(item -> studentId.equals(item.getStudentId()))
+                .findFirst().orElseGet(() -> ParentStudent.builder()
+                        .id(Ids.gen("ps")).parentId(parentId).studentId(studentId).build());
+        relation.setPrimaryContact(primaryContact);
+        relations.save(relation);
+        publishChildrenChanged(parent, List.of(student.getId()));
+        return toDto(parent);
+    }
+
+    @Transactional
+    public UserDto replaceChildren(String parentId, List<String> studentIds,
+                                   boolean primaryContact) {
+        User parent = requireActiveRole(parentId, "PARENT", "Phụ huynh");
+        List<String> normalizedIds = studentIds == null ? List.of() : studentIds.stream()
+                .filter(Objects::nonNull).map(String::trim).filter(id -> !id.isBlank())
+                .distinct().toList();
+        if (normalizedIds.isEmpty()) {
+            throw ApiException.badRequest("Chọn ít nhất một học sinh để liên kết");
+        }
+        normalizedIds.forEach(id -> requireActiveRole(id, "STUDENT", "Học sinh"));
+        Map<String, ParentStudent> existing = relations.findByParentId(parentId).stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        ParentStudent::getStudentId, item -> item, (left, right) -> left));
+        existing.values().stream()
+                .filter(item -> !normalizedIds.contains(item.getStudentId()))
+                .forEach(relations::delete);
+        normalizedIds.forEach(studentId -> {
+            ParentStudent relation = existing.get(studentId);
+            if (relation == null) {
+                relation = ParentStudent.builder().id(Ids.gen("ps"))
+                        .parentId(parentId).studentId(studentId).build();
+            }
+            relation.setPrimaryContact(primaryContact);
+            relations.save(relation);
+        });
+        publishChildrenChanged(parent, normalizedIds);
+        return toDto(parent);
+    }
+
+    @Transactional
+    public UserDto unlinkChild(String parentId, String studentId) {
+        User parent = requireActiveRole(parentId, "PARENT", "Phụ huynh");
+        relations.findByParentId(parentId).stream()
+                .filter(item -> studentId.equals(item.getStudentId()))
+                .forEach(relations::delete);
+        publishChildrenChanged(parent, List.of(studentId));
+        return toDto(parent);
+    }
+
+    private User requireActiveRole(String userId, String role, String label) {
+        User user = getById(userId);
+        if (!role.equals(user.getRole()) || "DELETED".equals(user.getStatus())) {
+            throw ApiException.badRequest(label + " không hợp lệ hoặc đã bị xóa");
+        }
+        return user;
+    }
+
+    private void publishChildrenChanged(User parent, List<String> studentIds) {
+        events.publish("identity.parent_children.updated", parent.getId(),
+                "user", parent.getId(), Map.of(
+                        "parentId", parent.getId(),
+                        "studentIds", studentIds,
+                        "message", "Danh sách học sinh liên kết đã được cập nhật"));
+    }
+
     public List<String> userIdsByRole(String role) {
         return users.findByRole(role).stream().map(User::getId).toList();
     }

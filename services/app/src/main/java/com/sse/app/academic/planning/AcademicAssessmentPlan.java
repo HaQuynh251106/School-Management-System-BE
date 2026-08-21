@@ -3,6 +3,7 @@ package com.sse.app.academic.planning;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -10,6 +11,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import java.time.Instant;
+import java.util.List;
 
 @Entity
 @Table(name = "academic_assessment_plans")
@@ -28,6 +30,7 @@ public class AcademicAssessmentPlan {
     private int weekNumber;
     private int durationMinutes;
     private String teacherId;
+    @Transient private List<String> teacherIds;
     private String notes;
     private Instant createdAt;
     private Instant updatedAt;

@@ -52,6 +52,7 @@ class NotificationChannelDispatcherTest {
     void missingSendGridCredentialRetriesExactlyThreeTimes() {
         mockPersistence();
         ReflectionTestUtils.setField(dispatcher, "providerMode", "real");
+        ReflectionTestUtils.setField(dispatcher, "emailProvider", "sendgrid");
         ReflectionTestUtils.setField(dispatcher, "sendGridApiKey", "");
 
         Notification row = dispatcher.dispatch("student-1", "GRADE", "EMAIL",
@@ -63,8 +64,30 @@ class NotificationChannelDispatcherTest {
     }
 
     @Test
+    void missingSmtpCredentialRetriesAndLogsSmtpProvider() {
+        mockPersistence();
+        ReflectionTestUtils.setField(dispatcher, "providerMode", "real");
+        ReflectionTestUtils.setField(dispatcher, "emailProvider", "smtp");
+        ReflectionTestUtils.setField(dispatcher, "smtpHost", "smtp.gmail.com");
+        ReflectionTestUtils.setField(dispatcher, "smtpPort", 587);
+        ReflectionTestUtils.setField(dispatcher, "smtpUsername", "sender@example.com");
+        ReflectionTestUtils.setField(dispatcher, "smtpPassword", "");
+        ReflectionTestUtils.setField(dispatcher, "smtpFromEmail", "sender@example.com");
+
+        Notification row = dispatcher.dispatch("student-1", "PASSWORD_RESET", "EMAIL",
+                "Đặt lại mật khẩu", "body", "PASSWORD_RESET", "token-1", "/reset", "AUTH");
+
+        assertEquals("FAILED", row.getStatus());
+        assertEquals(3, row.getAttemptCount());
+        ArgumentCaptor<NotificationDeliveryLog> captor = ArgumentCaptor.forClass(NotificationDeliveryLog.class);
+        verify(logs, times(3)).save(captor.capture());
+        assertEquals("SMTP", captor.getAllValues().get(0).getProvider());
+    }
+
+    @Test
     void providerStatusDoesNotExposeCredentials() {
         ReflectionTestUtils.setField(dispatcher, "providerMode", "real");
+        ReflectionTestUtils.setField(dispatcher, "emailProvider", "sendgrid");
         ReflectionTestUtils.setField(dispatcher, "sendGridApiKey", "secret-key");
         ReflectionTestUtils.setField(dispatcher, "sendGridFromEmail", "verified@example.com");
         ReflectionTestUtils.setField(dispatcher, "fcmProjectId", "school-project");
@@ -79,6 +102,24 @@ class NotificationChannelDispatcherTest {
         assertEquals(true, status.fcmConfigured());
         assertEquals("SERVICE_ACCOUNT", status.fcmCredentialSource());
         assertEquals("school-project", status.fcmProjectId());
+    }
+
+    @Test
+    void providerStatusReportsSmtpConfiguredWithoutExposingPassword() {
+        ReflectionTestUtils.setField(dispatcher, "providerMode", "real");
+        ReflectionTestUtils.setField(dispatcher, "emailProvider", "smtp");
+        ReflectionTestUtils.setField(dispatcher, "smtpHost", "smtp.gmail.com");
+        ReflectionTestUtils.setField(dispatcher, "smtpPort", 587);
+        ReflectionTestUtils.setField(dispatcher, "smtpUsername", "sender@example.com");
+        ReflectionTestUtils.setField(dispatcher, "smtpPassword", "app-secret");
+        ReflectionTestUtils.setField(dispatcher, "smtpFromEmail", "sender@example.com");
+        when(fcmTokens.isConfigured()).thenReturn(false);
+        when(fcmTokens.source()).thenReturn("NONE");
+
+        var status = dispatcher.providerStatus();
+
+        assertEquals(true, status.sendGridConfigured());
+        assertEquals("sender@example.com", status.sendGridFromEmail());
     }
 
     private void mockPersistence() {

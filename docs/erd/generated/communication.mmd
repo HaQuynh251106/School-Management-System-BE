@@ -1,0 +1,67 @@
+erDiagram
+    direction LR
+    clubs ||--o{ clubregistrations : references
+    notifications ||--o{ notificationdeliverylogs : references
+    announcements["announcements"] {
+        string id PK
+        string audience
+        string body
+        datetime created_at
+    }
+    chatmessages["chat_messages"] {
+        string id PK
+        string recipient_id FK
+        string sender_id FK
+        string body
+        datetime created_at
+        bool read_flag
+    }
+    clubregistrations["club_registrations"] {
+        string id PK
+        string club_id FK
+        string registered_by FK
+        string student_id FK
+        string fee_period_id FK
+        string invoice_id FK
+        string club_name
+        datetime registered_at
+    }
+    clubs["clubs"] {
+        string id PK
+        number capacity
+        datetime created_at
+        string description
+    }
+    notificationdeliverylogs["notification_delivery_logs"] {
+        string id PK
+        string notification_id FK
+        number attempt_no
+        datetime attempted_at
+        string error_message
+    }
+    notificationtemplates["notification_templates"] {
+        string id PK
+        bool active
+        string body_template
+        string channel
+    }
+    notifications["notifications"] {
+        string id PK
+        string recipient_id FK
+        string body
+        datetime created_at
+        bool read
+    }
+    storedfiles["stored_files"] {
+        string id PK
+        datetime completed_at
+        string content_type
+        datetime created_at
+    }
+    usernotificationpreferences["user_notification_preferences"] {
+        string id PK
+        string user_id FK
+        string channel
+        bool enabled
+        string notification_type
+    }

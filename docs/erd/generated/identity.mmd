@@ -1,0 +1,89 @@
+erDiagram
+    direction LR
+    users ||--o{ loginhistory : references
+    users ||--o{ parentstudent : references
+    users ||--o{ parentstudent : references
+    users ||--o{ passwordresettokens : references
+    userdevices ||--o{ refreshtokens : references
+    refreshtokens ||--o{ refreshtokens : references
+    users ||--o{ refreshtokens : references
+    permissions ||--o{ rolepermissions : references
+    roles ||--o{ rolepermissions : references
+    users ||--o{ userdevices : references
+    roles ||--o{ userroles : references
+    users ||--o{ userroles : references
+    auditlogs["audit_logs"] {
+        string id PK
+        string action
+        string actor_id
+        string actor_name
+    }
+    loginhistory["login_history"] {
+        string id PK
+        string user_id FK
+        datetime created_at
+        string failure_reason
+        string ip_address
+    }
+    parentstudent["parent_student"] {
+        string id PK
+        string parent_id FK
+        string student_id FK
+        bool primary_contact
+    }
+    passwordresettokens["password_reset_tokens"] {
+        string id PK
+        string user_id FK
+        datetime expires_at
+        string token_hash
+        datetime used_at
+    }
+    permissions["permissions"] {
+        string id PK
+        string code
+        string module
+        string name
+    }
+    refreshtokens["refresh_tokens"] {
+        string id PK
+        string user_id FK
+        string device_id FK
+        string replaced_by_token_id FK
+        datetime created_at
+        datetime expires_at
+        string ip_address
+    }
+    rolepermissions["role_permissions"] {
+        string id PK
+        string role_id FK
+        string permission_id FK
+        datetime granted_at
+        string granted_by
+    }
+    roles["roles"] {
+        string id PK
+        string code
+        string name
+        string description
+    }
+    userdevices["user_devices"] {
+        string id PK
+        string user_id FK
+        bool active
+        datetime created_at
+        string device_name
+    }
+    userroles["user_roles"] {
+        string id PK
+        string user_id FK
+        string role_id FK
+        datetime assigned_at
+        string assigned_by
+    }
+    users["users"] {
+        string id PK
+        string class_id FK
+        string avatar_url
+        string class_name
+        datetime created_at
+    }
