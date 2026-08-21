@@ -4,6 +4,7 @@ import com.sse.app.academic.structure.SchoolClass;
 import com.sse.app.academic.structure.StructureService;
 import com.sse.app.common.ApiException;
 import com.sse.app.common.Ids;
+import com.sse.app.report.AcademicEnrollmentService;
 import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -36,15 +37,18 @@ public class StudentImportService {
     private final StructureService structure;
     private final PasswordEncoder encoder;
     private final RbacService rbac;
+    private final AcademicEnrollmentService enrollments;
 
     public StudentImportService(UserRepository users, ParentStudentRepository relations,
                                 StructureService structure, PasswordEncoder encoder,
-                                RbacService rbac) {
+                                RbacService rbac,
+                                AcademicEnrollmentService enrollments) {
         this.users = users;
         this.relations = relations;
         this.structure = structure;
         this.encoder = encoder;
         this.rbac = rbac;
+        this.enrollments = enrollments;
     }
 
     @Transactional
@@ -147,6 +151,8 @@ public class StudentImportService {
         student.setUpdatedAt(Instant.now());
         student = users.save(student);
         if (createdStudent) rbac.assignPrimaryRole(student.getId(), "STUDENT", null);
+        enrollments.assignStudentCurrentClass(
+                student.getId(), schoolClass.getId(), null);
 
         ParentUpsert parentUpsert = upsertParent(data);
         boolean linked = ensureSingleParentRelation(parentUpsert.parent.getId(), student.getId());

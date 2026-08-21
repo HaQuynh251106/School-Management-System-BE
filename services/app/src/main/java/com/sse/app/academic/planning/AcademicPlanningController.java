@@ -15,6 +15,7 @@ import com.sse.app.academic.planning.AcademicPlanningDtos.CurriculumDistribution
 import com.sse.app.academic.planning.AcademicPlanningDtos.WorkflowRequest;
 import com.sse.app.audit.AuditService;
 import com.sse.app.identity.UserService;
+import com.sse.app.report.AcademicEnrollmentService;
 import com.sse.app.security.CurrentUser;
 import com.sse.app.security.CurrentUserHolder;
 import jakarta.validation.Valid;
@@ -43,6 +44,7 @@ public class AcademicPlanningController {
     private final EducationPlanningCatalogService catalog;
     private final AuditService audit;
     private final UserService users;
+    private final AcademicEnrollmentService enrollments;
 
     public AcademicPlanningController(
             AcademicPlanningService planning,
@@ -50,13 +52,15 @@ public class AcademicPlanningController {
             AcademicPlanReportService reports,
             EducationPlanningCatalogService catalog,
             AuditService audit,
-            UserService users) {
+            UserService users,
+            AcademicEnrollmentService enrollments) {
         this.planning = planning;
         this.completion = completion;
         this.reports = reports;
         this.catalog = catalog;
         this.audit = audit;
         this.users = users;
+        this.enrollments = enrollments;
     }
 
     @GetMapping
@@ -214,11 +218,13 @@ public class AcademicPlanningController {
             throw com.sse.app.common.ApiException.forbidden("Chuc nang danh cho hoc sinh va phu huynh");
         }
         com.sse.app.identity.User student = users.getById(targetStudentId);
-        if (student.getClassId() == null || student.getClassId().isBlank()) {
+        String currentClassId = enrollments.activeClassId(targetStudentId)
+                .orElse(student.getClassId());
+        if (currentClassId == null || currentClassId.isBlank()) {
             throw com.sse.app.common.ApiException.conflict("Hoc sinh chua duoc xep lop");
         }
         com.sse.app.academic.structure.SchoolClass schoolClass =
-                planning.schoolClass(student.getClassId());
+                planning.schoolClass(currentClassId);
         AcademicTrainingPlan plan = planning.listPlans(
                         schoolClass.getAcademicYearId(), schoolClass.getGradeLevel()).stream()
                 .filter(item -> java.util.Set.of("PUBLISHED", "LOCKED").contains(item.getStatus()))
