@@ -1,5 +1,6 @@
 package com.sse.app.academic.timetable;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -25,4 +26,14 @@ public class TimetableSlot {
     private String endTime;     // "07:45"
     private String semesterId;
     private String sourceScheduleId;
+
+    /**
+     * API-contract field consumed by the generated Web/Mobile clients.
+     * Effective slots originating from a published schedule are read-only;
+     * manually created legacy slots remain editable.
+     */
+    @JsonProperty("locked")
+    public boolean isLocked() {
+        return sourceScheduleId != null && !sourceScheduleId.isBlank();
+    }
 }
