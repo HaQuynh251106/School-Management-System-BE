@@ -25,7 +25,7 @@ import java.util.Set;
 @ConditionalOnProperty(name = "sse.seed.enabled", havingValue = "true", matchIfMissing = false)
 public class CanonicalDatasetSeeder {
     private static final Set<String> ALLOWED_DATASETS = Set.of(
-            "baseline", "demo", "scenario", "full-demo");
+            "baseline", "demo", "scenario", "full-demo", "full-demo-mobile");
 
     @Bean
     @Order(20)
@@ -47,6 +47,11 @@ public class CanonicalDatasetSeeder {
             if ("full-demo".equals(dataset)) {
                 executePostgresBatch(dataSource, "db/seed/full-demo-reset.sql");
                 executePostgresBatch(dataSource, "db/seed/full-demo.sql");
+                executePostgresBatch(dataSource, "db/seed/full-demo-mobile.sql");
+            } else if ("full-demo-mobile".equals(dataset)) {
+                // Additive production/demo repair: enrich only the representative
+                // Mobile accounts and never reset an existing Full Demo database.
+                executePostgresBatch(dataSource, "db/seed/full-demo-mobile.sql");
             } else {
                 execute(dataSource, "db/seed/demo.sql");
             }

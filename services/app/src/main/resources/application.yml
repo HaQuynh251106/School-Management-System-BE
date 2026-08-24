@@ -91,7 +91,9 @@ sse:
     refresh-ttl-seconds: 604800
   seed:
     # Business/demo records are never created implicitly. Enable only in an
-    # isolated demo environment with SSE_SEED_DATASET=demo|scenario|full-demo.
+    # isolated demo environment with
+    # SSE_SEED_DATASET=demo|scenario|full-demo|full-demo-mobile.
+    # full-demo-mobile is additive and requires an existing Full Demo base.
     enabled: ${SSE_SEED_ENABLED:false}
     dataset: ${SSE_SEED_DATASET:baseline}
     files: ${SSE_SEED_FILES:false}
